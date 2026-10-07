@@ -39,3 +39,13 @@ class CryptoService:
 
     def decrypt(self, token: str) -> str:
         return self.cipher.decrypt(token.encode()).decode()
+
+    def can_decrypt(self, token: str | None) -> bool:
+        """지금 키로 풀리는지. 다른 키(예: 예전 .env 의 FERNET_KEY)로 저장된 비밀번호면 False"""
+        if not token:
+            return False
+        try:
+            self.decrypt(token)
+            return True
+        except Exception:
+            return False

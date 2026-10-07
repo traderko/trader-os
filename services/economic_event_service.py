@@ -62,6 +62,8 @@ class EconomicEventService:
 
         # 👉 거래 잠금(아시아장 집중 구간)용으로 DB에 저장
         if rows:
+            if self.loop.is_closed():   # 서버가 꺼지는 중
+                return
             future = asyncio.run_coroutine_threadsafe(self._save(rows), self.loop)
             future.result(timeout=30)
 
@@ -130,6 +132,8 @@ class EconomicEventService:
             })
 
         if rows:
+            if self.loop.is_closed():   # 서버가 꺼지는 중
+                return
             future = asyncio.run_coroutine_threadsafe(self._save(rows), self.loop)
             future.result(timeout=30)
 

@@ -406,6 +406,8 @@ def _account_out(acc: Account, info: dict | None = None) -> dict:
         "is_default": acc.is_default,
         "lock_enabled": acc.lock_enabled,
         "has_password": bool(acc.password_encrypted),
+        # 지금 암호화 키로 풀리는지 - 키가 바뀌었으면(예: .env FERNET_KEY 삭제) 비밀번호를 다시 넣어야 함
+        "password_ok": CryptoService().can_decrypt(acc.password_encrypted),
         "mt5_login": mt5_login_state(acc.account_number, info),
     }
 

@@ -130,7 +130,7 @@ def find_metaeditor(terminal_dir: str | None = None) -> str | None:
 
 
 def _include_root(data_dir: str | None, terminal_dir: str | None) -> str | None:
-    """표준 라이브러리(Include\Trade\Trade.mqh)가 있는 MQL5 폴더"""
+    """표준 라이브러리(Include/Trade/Trade.mqh)가 있는 MQL5 폴더"""
     for base in (data_dir, terminal_dir):
         if base and os.path.isfile(os.path.join(base, "MQL5", "Include", "Trade", "Trade.mqh")):
             return os.path.join(base, "MQL5")

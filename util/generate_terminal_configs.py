@@ -116,7 +116,14 @@ Period={GenerateTerminalConfig.DEFAULT_PERIOD}
             if not acc.password_encrypted:
                 print(f"  ⚠ account_number={acc.account_number}: password_encrypted가 비어있음 - 스킵")
                 continue
-            password = crypto.decrypt(acc.password_encrypted)
+            try:
+                password = crypto.decrypt(acc.password_encrypted)
+            except Exception:
+                # 다른 암호화 키로 저장된 비밀번호 (예: .env 의 FERNET_KEY 를 지웠거나, data 폴더만 다른 PC에서 복사)
+                # → 이 계좌만 건너뛰고 서버는 계속 켬. 관리 화면에서 비밀번호를 다시 넣으면 해결
+                print(f"  ⚠ account_number={acc.account_number}: 저장된 비밀번호를 풀 수 없습니다 (암호화 키가 다름). "
+                      f"관리 화면 계좌 탭에서 '비밀번호 변경'으로 다시 입력하세요. - 스킵")
+                continue
 
             terminal_dir = os.path.join(GenerateTerminalConfig.TERMINAL_BASE_DIR, acc.account_number)
             presets_dir = os.path.join(terminal_dir, "MQL5", "presets")

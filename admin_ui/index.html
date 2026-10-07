@@ -950,6 +950,7 @@ async function loadAccounts() {
           ${a.is_default ? '<span class="badge warn">기본</span>' : ''}
           ${w[1] ? `<span class="badge ${w[0]}">${w[1]}</span>` : ''}
           ${a.lock_enabled && a.mt5_login === 'needed' ? '<span class="badge bad">MT5 로그인 필요</span>' : ''}
+          ${a.has_password && a.password_ok === false ? '<span class="badge bad">비밀번호 다시 입력 필요</span><br><small style="color:var(--bad)">저장된 비밀번호를 지금 암호화 키로 풀 수 없습니다 (.env 의 FERNET_KEY 가 바뀌었거나 data 폴더를 다른 곳에서 복사함). <b>비밀번호 변경</b>으로 다시 입력하세요.</small>' : ''}
           ${eaBadge({ ...s, lock_enabled: a.lock_enabled })}
           ${a.lock_enabled && a.mt5_login === 'needed' ? `<br><small style="color:var(--warn)">MT5 창에서 파일 → 거래 계좌 로그인 → 서버 검색(${esc(a.server || '')}) 후 한 번 로그인하세요. "비밀번호 저장"에 체크하면 다음부터 자동입니다.</small>` : ''}
           ${a.lock_enabled && s.ea && s.ea.state === 'none' && s.worker === 'running' && a.mt5_login !== 'needed' ? `<br><small style="color:var(--warn)">${EA_HELP}</small>` : ''}
