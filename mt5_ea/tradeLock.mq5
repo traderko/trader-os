@@ -185,8 +185,76 @@ string EscapeJson(string s)
 }
 
 //==================================================================
+// 중복 차트 정리
+//   MT5를 다시 띄울 때마다 시작 설정([StartUp])이 이 EA가 붙은 차트를 새로 연다.
+//   시작 설정으로 붙인 EA는 프로필에 저장되지 않아서, 지난번 차트는 "EA 없는 같은 종목·주기 차트"로
+//   남아 있다가 다시 열린다 → 재시작할 때마다 차트가 하나씩 쌓임.
+//   서버도 MT5를 띄우기 전에 프로필 파일을 정리하지만, 사용자가 MT5를 직접 다시 켜는 등
+//   서버를 거치지 않는 경우도 있어서 EA가 시작할 때 한 번 더 정리한다.
+//   닫는 차트: 이 EA가 붙은 다른 차트(지표 없는 것) / 이 차트와 같은 종목·주기이면서 EA·지표·그림이 없는 차트
+//   (MT5가 자동으로 그리는 체결 표시 "autotrade ..." 는 그림으로 치지 않음. 지표나 선을 그려 둔 차트는 건드리지 않음)
+bool g_closeSelf = false;   // 이 EA가 이미 다른(꾸민) 차트에 붙어 있으면 이 차트를 닫음 (OnTimer에서)
+
+bool HasIndicators(long id)
+{
+   int wins = (int)ChartGetInteger(id, CHART_WINDOWS_TOTAL);
+   for(int w = 0; w < wins; w++)
+      if(ChartIndicatorsTotal(id, w) > 0)
+         return true;
+   return false;
+}
+
+bool HasUserObjects(long id)
+{
+   int n = ObjectsTotal(id, -1, -1);
+   for(int i = 0; i < n; i++)
+   {
+      string nm = ObjectName(id, i, -1, -1);
+      if(StringFind(nm, "autotrade") != 0)
+         return true;
+   }
+   return false;
+}
+
+void CloseDuplicateCharts()
+{
+   long   me   = ChartID();
+   string mine = MQLInfoString(MQL_PROGRAM_NAME);
+   long   ids[];
+   int    cnt = 0;
+   for(long id = ChartFirst(); id >= 0; id = ChartNext(id))
+   {
+      ArrayResize(ids, cnt + 1);
+      ids[cnt++] = id;
+   }
+   int closed = 0;
+   for(int i = 0; i < cnt; i++)
+   {
+      long id = ids[i];
+      if(id == me)
+         continue;
+      string ea = ChartGetString(id, CHART_EXPERT_NAME);
+      if(ea == mine)
+      {
+         if(HasIndicators(id))
+            g_closeSelf = true;          // 사용자가 꾸민 차트에 이미 붙어 있음 → 그쪽을 살림
+         else if(ChartClose(id))
+            closed++;
+      }
+      else if(ea == "" && ChartSymbol(id) == _Symbol && ChartPeriod(id) == _Period
+              && !HasIndicators(id) && !HasUserObjects(id))
+      {
+         if(ChartClose(id))
+            closed++;
+      }
+   }
+   if(closed > 0)
+      Print("TradeLock: 중복 차트 ", closed, "개를 닫았습니다.");
+}
+
 int OnInit()
 {
+   CloseDuplicateCharts();
    EventSetTimer(1);
    trade.SetDeviationInPoints(30);
    // 이 EA는 락 강제청산만 수행하므로, 모든 청산 딜에 항상 이 매직넘버가 붙음.
@@ -216,6 +284,13 @@ void OnDeinit(const int reason)
 //==================================================================
 void OnTimer()
 {
+   if(g_closeSelf)
+   {
+      Print("TradeLock: 이미 다른 차트에서 실행 중이라 이 차트를 닫습니다.");
+      g_closeSelf = false;
+      ChartClose(ChartID());
+      return;
+   }
    static int counter = 0;
    counter++;
    if(counter >= InpPollSeconds)
