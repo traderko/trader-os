@@ -1,9 +1,8 @@
 # db/session.py
 #
-# DB 주소는 .env 의 DATABASE_URL 로 정한다.
-#   - PostgreSQL (지금 개발 PC·라이브 서버):
-#       DATABASE_URL=postgresql+asyncpg://사용자:비밀번호@localhost/trading
-#   - 비어 있으면 SQLite 파일(data/traderos.db)을 쓴다 → 배포판(일반 사용자)은 DB를 따로 설치할 필요 없음.
+# DB는 SQLite 파일 하나 (data/traderos.db) - 따로 설치할 것 없음.
+#   예전 PostgreSQL 데이터는 tools/pg_to_sqlite.py 로 한 번 옮기면 된다.
+#   (.env 에 DATABASE_URL 을 넣으면 그 주소를 쓰지만, 이제는 지원하지 않는 방식)
 
 import os
 
@@ -22,7 +21,7 @@ DATABASE_URL = os.getenv("DATABASE_URL", "").strip()
 if not DATABASE_URL:
     os.makedirs(DATA_DIR, exist_ok=True)
     DATABASE_URL = "sqlite+aiosqlite:///" + SQLITE_PATH.replace("\\", "/")
-    print(f"[db] DATABASE_URL이 없어 SQLite를 사용합니다: {SQLITE_PATH}")
+    print(f"[db] {SQLITE_PATH}")
 
 IS_SQLITE = DATABASE_URL.startswith("sqlite")
 DB_ECHO = os.getenv("DB_ECHO", "0") == "1"   # SQL 로그가 필요할 때만 .env에 DB_ECHO=1

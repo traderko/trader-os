@@ -351,6 +351,13 @@ async def restart_terminal_runtime(account_id: int) -> None:
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
+    # DB 구조를 최신으로 (처음 설치면 만들고, 업데이트면 새 마이그레이션 적용 - db/migrate.py)
+    from db import migrate as db_migrate
+    try:
+        await asyncio.to_thread(db_migrate.run)
+    except Exception as e:
+        print(f"[db] ⚠️ DB 구조 업데이트(마이그레이션) 실패 - 서버를 멈춥니다: {e}")
+        raise
     await init_db.init_db()
 
     # 확인 문구 기본값 (종류별로 처음 한 번만 - 이미 있는 문구는 건드리지 않음)

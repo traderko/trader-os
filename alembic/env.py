@@ -12,7 +12,8 @@ config = context.config
 
 # Interpret the config file for Python logging.
 # This line sets up loggers basically.
-if config.config_file_name is not None:
+# (서버가 켜질 때 db/migrate.py 가 부를 때는 서버 로그 설정을 건드리지 않음)
+if config.config_file_name is not None and not config.attributes.get("skip_logging"):
     fileConfig(config.config_file_name)
 
 # add your model's MetaData object here
@@ -25,13 +26,11 @@ from db.models import trade, trade_lock, trade_lock_phrase, trade_note, trade_im
 
 target_metadata = Base.metadata
 
-# 앱과 같은 DB를 쓰도록 .env 의 DATABASE_URL 이 있으면 그걸 우선 사용 (비동기 드라이버 → 동기 드라이버로 바꿈)
-import os
-from dotenv import load_dotenv
-load_dotenv()
-_env_url = os.getenv("DATABASE_URL", "").strip()
-if _env_url:
-    _sync_url = _env_url.replace("+asyncpg", "").replace("+aiosqlite", "")
+# 앱과 같은 DB를 쓴다 (db/session.py: .env 의 DATABASE_URL, 없으면 data/traderos.db SQLite).
+# alembic.ini 의 sqlalchemy.url 은 쓰지 않음. db/migrate.py 가 부를 때는 주소를 직접 넘기므로 그대로 둠.
+if not config.attributes.get("skip_logging"):
+    from db.session import DATABASE_URL as _APP_URL
+    _sync_url = _APP_URL.replace("+asyncpg", "").replace("+aiosqlite", "")
     config.set_main_option("sqlalchemy.url", _sync_url.replace("%", "%%"))
 _IS_SQLITE = config.get_main_option("sqlalchemy.url").startswith("sqlite")
 

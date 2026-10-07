@@ -20,9 +20,6 @@ numpy
 pyautogui
 pywinauto
 
-# 선택: PostgreSQL을 쓸 때만 (.env 에 DATABASE_URL=postgresql+asyncpg://...)
-# asyncpg
-# psycopg2-binary
 
 # 선택: 안드로이드 앱 푸시(Firebase)를 쓸 때만 (secrets\ 에 키 파일)
 # firebase-admin
