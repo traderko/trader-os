@@ -1,0 +1,26 @@
+# 태그(v0.1.0 같은)를 올리면 배포용 zip을 만들어 GitHub Release 에 붙인다.
+#   git tag v0.1.0 && git push origin v0.1.0
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Make zip
+        run: |
+          git archive --format=zip --prefix=TraderOS/ -o "TraderOS-${GITHUB_REF_NAME}.zip" HEAD
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: TraderOS-${{ github.ref_name }}.zip
+          generate_release_notes: true

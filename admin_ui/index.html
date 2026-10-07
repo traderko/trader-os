@@ -1,0 +1,1040 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>TraderOS 관리</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16'%3E%3Crect width='16' height='16' rx='4' fill='%232563eb'/%3E%3Cpath d='M5 7V5.5a3 3 0 0 1 6 0V7' stroke='white' stroke-width='1.6' fill='none'/%3E%3Crect x='4' y='7' width='8' height='6' rx='1.2' fill='white'/%3E%3C/svg%3E">
+<script>
+  try { const t = localStorage.getItem('traderos.theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch {}
+</script>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --line: #e3e6eb; --text: #1b1f27; --muted: #6b7280;
+    --accent: #2563eb; --accent-weak: #e8efff;
+    --ok: #16a34a; --ok-weak: #e7f6ec; --warn: #d97706; --warn-weak: #fdf3e2;
+    --bad: #dc2626; --bad-weak: #fdeaea; --code: #f0f2f5;
+  }
+  /* 다크 테마: 시스템 설정을 따르거나(자동), 상단 버튼으로 직접 고정 */
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12151b; --panel: #1a1e26; --line: #2a2f3a; --text: #e6e8ec; --muted: #9aa1ad;
+      --accent: #6b9bff; --accent-weak: #1d2a44;
+      --ok: #3fbf6b; --ok-weak: #15291d; --warn: #f0a63a; --warn-weak: #30250f;
+      --bad: #f06060; --bad-weak: #341a1a; --code: #0f1217;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12151b; --panel: #1a1e26; --line: #2a2f3a; --text: #e6e8ec; --muted: #9aa1ad;
+    --accent: #6b9bff; --accent-weak: #1d2a44;
+    --ok: #3fbf6b; --ok-weak: #15291d; --warn: #f0a63a; --warn-weak: #30250f;
+    --bad: #f06060; --bad-weak: #341a1a; --code: #0f1217;
+    color-scheme: dark;
+  }
+  :root[data-theme="light"] { color-scheme: light; }
+  .theme { display: inline-flex; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+  .theme button {
+    border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px;
+    padding: 5px 9px; cursor: pointer;
+  }
+  .theme button.on { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--text);
+    font: 14px/1.5 "Malgun Gothic", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif;
+  }
+  header {
+    position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line);
+    padding: 12px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  }
+  header h1 { font-size: 17px; margin: 0; letter-spacing: -0.2px; }
+  .srv { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
+  .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+  nav { display: flex; gap: 4px; margin-left: auto; flex-wrap: wrap; }
+  nav button {
+    border: 0; background: transparent; color: var(--muted); padding: 7px 12px; border-radius: 8px;
+    font: inherit; cursor: pointer;
+  }
+  nav button.on { background: var(--accent-weak); color: var(--accent); font-weight: 600; }
+  main { max-width: 1040px; margin: 0 auto; padding: 20px 16px 60px; }
+  section { display: none; } section.on { display: block; }
+  .modes { display: grid; gap: 8px; margin-bottom: 14px; }
+  .mode { display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; align-items: start; border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; cursor: pointer; }
+  .mode input { grid-row: 1 / span 2; margin-top: 3px; accent-color: var(--accent); }
+  .mode small { color: var(--muted); font-size: 12.5px; }
+  .mode:has(input:checked) { border-color: var(--accent); background: var(--accent-weak); }
+  .guide { border-top: 1px solid var(--line); padding-top: 12px; margin-top: 4px; }
+  .guide h3 { font-size: 14px; margin: 0 0 8px; }
+  /* 앱 탭: 플러터 웹 앱을 화면 가득 */
+  body.full main { max-width: none; padding: 0; }
+  #webapp .bar { display: flex; align-items: center; gap: 10px; padding: 8px 16px; border-bottom: 1px solid var(--line);
+    background: var(--panel); font-size: 13px; color: var(--muted); }
+  #webapp .bar a { color: var(--accent); text-decoration: none; font-weight: 600; }
+  #webappFrame { display: block; width: 100%; height: calc(100vh - var(--hdr, 58px) - 38px); border: 0; background: #000; }
+  h2 { font-size: 15px; margin: 0 0 12px; }
+  .hint { color: var(--muted); font-size: 13px; margin: -6px 0 14px; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 18px; margin-bottom: 16px; }
+  .grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); }
+
+  /* 계좌 카드 */
+  .acc-head { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; flex-wrap: wrap; }
+  .acc-num { font-size: 16px; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .badge { font-size: 11px; padding: 2px 7px; border-radius: 999px; background: var(--code); color: var(--muted); white-space: nowrap; display: inline-block; }
+  .badge.ok { background: var(--ok-weak); color: var(--ok); }
+  .badge.bad { background: var(--bad-weak); color: var(--bad); }
+  .badge.warn { background: var(--warn-weak); color: var(--warn); }
+  .lockbox { border-radius: 10px; padding: 10px 12px; margin: 8px 0 12px; }
+  .lockbox.locked { background: var(--bad-weak); }
+  .lockbox.open { background: var(--ok-weak); }
+  .lockbox > b { display: block; }
+  .lockbox small { color: var(--muted); }
+  .lockbox .unlock-btn { margin-top: 8px; }
+  .unlock { margin-top: 10px; }
+  .unlock .target { background: var(--panel); border: 1px dashed var(--line); border-radius: 8px; padding: 8px 10px;
+    margin-bottom: 8px; user-select: none; -webkit-user-select: none; line-height: 1.45; }
+  .unlock .row2 { display: flex; gap: 6px; }
+  .unlock input { flex: 1; min-width: 0; font: inherit; color: var(--text); background: var(--bg);
+    border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; }
+  .unlock .msg { font-size: 12.5px; margin-top: 6px; }
+  .kv { display: grid; grid-template-columns: auto 1fr; gap: 3px 14px; font-variant-numeric: tabular-nums; }
+  .kv dt { color: var(--muted); } .kv dd { margin: 0; text-align: right; }
+
+  /* 폼 */
+  .row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
+  .row:first-of-type { border-top: 0; }
+  .row label.name { flex: 1 1 240px; }
+  .row label.name small { display: block; color: var(--muted); }
+  input[type=number], input[type=text], input[type=password], select {
+    font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 7px 10px;
+  }
+  input[type=number] { width: 90px; text-align: right; }
+  input.wide { flex: 1 1 280px; min-width: 0; }
+  .unit { color: var(--muted); min-width: 32px; white-space: nowrap; }
+  .days { display: flex; gap: 6px; flex-wrap: wrap; }
+  .days label { border: 1px solid var(--line); border-radius: 8px; padding: 4px 9px; cursor: pointer; user-select: none; }
+  .days input { display: none; }
+  .days label:has(input:checked) { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+  .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+  button.btn {
+    font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text);
+    border-radius: 8px; padding: 7px 14px; cursor: pointer;
+  }
+  button.btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
+  button.btn.danger { color: var(--bad); }
+  button.btn:disabled { opacity: .5; cursor: default; }
+  .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
+
+  /* 문구 */
+  .phrase { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
+  .phrase:first-child { border-top: 0; }
+  .phrase span { flex: 1; word-break: keep-all; }
+  .add { display: flex; gap: 8px; margin-top: 12px; flex-wrap: wrap; }
+
+  ol.steps { margin: 0 0 4px; padding-left: 20px; } ol.steps li { margin: 3px 0; }
+  code { background: var(--code); padding: 1px 5px; border-radius: 4px; font-size: 12.5px; }
+  pre.log {
+    background: var(--code); border-radius: 10px; padding: 12px; margin: 0; height: 60vh; overflow: auto;
+    font: 12px/1.45 Consolas, "D2Coding", monospace; white-space: pre-wrap; word-break: break-all;
+  }
+  .empty { color: var(--muted); padding: 20px 0; text-align: center; }
+  .warnbar { background: var(--warn-weak); color: var(--warn); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; }
+
+  /* 집중 구간 카드 */
+  .sess { border: 1px solid var(--line); border-radius: 10px; padding: 12px 14px; margin-bottom: 10px; }
+  .sess.off { opacity: .55; }
+  .sess-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .sess-head input[type=text] { font-weight: 600; flex: 1 1 140px; min-width: 0; }
+  .sess .row { padding: 8px 0; }
+  .sess .row:first-of-type { border-top: 1px solid var(--line); }
+  .sess small.when { color: var(--muted); display: block; }
+  .sess .warn { color: var(--warn); font-size: 12.5px; }
+  #toast {
+    position: fixed; left: 50%; bottom: 24px; transform: translateX(-50%) translateY(20px);
+    background: var(--text); color: var(--bg); padding: 10px 16px; border-radius: 10px;
+    opacity: 0; transition: .2s; pointer-events: none; max-width: calc(100% - 32px);
+  }
+  #toast.show { opacity: 1; transform: translateX(-50%); }
+  #toast.err { background: var(--bad); color: #fff; }
+</style>
+</head>
+<body>
+<header>
+  <h1>TraderOS 관리</h1>
+  <div class="srv"><span class="dot" id="srvDot"></span><span id="srvText">연결 중…</span></div>
+  <nav id="tabs">
+    <button data-tab="dash" class="on">대시보드</button>
+    <button data-tab="acctab">계좌</button>
+    <button data-tab="rules">잠금 규칙</button>
+    <button data-tab="phrases">확인 문구</button>
+    <button data-tab="telegram">텔레그램</button>
+    <button data-tab="access">접속</button>
+    <button data-tab="logs">로그</button>
+    <button data-tab="webapp" id="webappTab" hidden>📱 앱</button>
+  </nav>
+  <div class="theme" id="theme" title="화면 테마">
+    <button data-theme="auto">자동</button><button data-theme="light">라이트</button><button data-theme="dark">다크</button>
+  </div>
+</header>
+
+<main>
+  <!-- 대시보드 -->
+  <section id="dash" class="on">
+    <div id="dashWarn"></div>
+    <div class="grid" id="accounts"><div class="empty">불러오는 중…</div></div>
+  </section>
+
+  <!-- 계좌 -->
+  <section id="acctab">
+    <div class="panel">
+      <h2>등록된 계좌</h2>
+      <p class="hint">잠금을 켠 계좌는 서버가 MT5를 띄우고 거래 잠금을 감시합니다. 잠금을 꺼도 MT5 창은 닫지 않습니다.</p>
+      <div id="accList"><div class="empty">불러오는 중…</div></div>
+    </div>
+    <div class="panel">
+      <h2>계좌 추가</h2>
+      <div class="row"><label class="name">계좌번호<small>MT5 로그인 번호 (숫자)</small></label>
+        <input type="text" class="wide" id="accNumber" inputmode="numeric" placeholder="예: 12345678"></div>
+      <div class="row"><label class="name">비밀번호<small>거래용 비밀번호. 암호화해서 이 PC에만 저장합니다.</small></label>
+        <input type="password" class="wide" id="accPassword" autocomplete="new-password"></div>
+      <div class="row"><label class="name">서버<small>MT5 로그인 창(파일 → 거래 계좌 로그인)에 나오는 서버 이름 그대로</small></label>
+        <input type="text" class="wide" id="accServer" list="serverList" placeholder="예: InfinoxLimited-MT5Live">
+        <datalist id="serverList"></datalist></div>
+      <div class="row"><label class="name">MT5 실행<small>켜면 이 계좌의 MT5와 워커를 띄워 거래 잠금·실시간 포지션·새 거래 기록을 합니다.
+          끄면 MT5를 띄우지 않는 <b>조회 전용</b> 계좌가 되어, 이미 저장된 거래내역·손익·통계만 봅니다 (PC 메모리 절약).</small></label>
+        <label class="switch"><input type="checkbox" id="accLock" checked> 켜기</label></div>
+      <div class="row"><label class="name">기본 계좌로 지정<small>앱에서 계좌를 따로 고르지 않을 때 쓰는 계좌. 첫 계좌는 자동으로 기본이 됩니다.</small></label>
+        <label class="switch"><input type="checkbox" id="accDefault"> 기본</label></div>
+      <ol class="steps" style="margin-top:12px">
+        <li>추가하면 서버가 이 계좌의 MT5를 띄웁니다 (MT5 실행을 끄고 추가하면 조회 전용이라 띄우지 않음). 처음에는 MT5를 복사하느라 1~2분 걸릴 수 있습니다.</li>
+        <li><b>이 PC에서 처음 쓰는 브로커 서버라면</b> MT5가 서버를 몰라서 자동 로그인이 안 됩니다.
+          MT5 창에서 <b>파일 → 거래 계좌 로그인</b>을 열고, 서버 칸에 브로커 이름(예: Infinox)을 입력해 서버를 찾은 뒤
+          계좌번호·비밀번호로 한 번 로그인하세요. <b>"비밀번호 저장"</b>에 체크하면 다음부터는 자동입니다.
+          같은 서버의 계좌를 더 추가할 때는 이 과정이 필요 없습니다.</li>
+        <li><b>tradeLock</b> EA는 서버가 자동으로 차트에 붙입니다. 차트 왼쪽 위에 <code>[TradeLock] 서버 통신 실패</code>가 보이면
+          MT5의 도구 → 옵션 → 전문가 조언자에서 "WebRequest 허용"에 체크하고 <code>http://127.0.0.1:8000</code>을 추가하세요.</li>
+        <li>대시보드에서 "워커 실행 중"과 잔고가 보이면 연결된 것입니다.</li>
+      </ol>
+      <div class="actions"><button class="btn primary" id="accAdd">계좌 추가</button></div>
+    </div>
+  </section>
+
+  <!-- 잠금 규칙 -->
+  <section id="rules">
+    <div class="panel">
+      <h2>연속 손절 잠금</h2>
+      <p class="hint">손절이 연달아 나오면 거래를 잠급니다.</p>
+      <div class="row"><label class="name">연속 손절 몇 번이면 잠글까요</label>
+        <input type="number" data-k="consec_loss_threshold" min="1" max="20"><span class="unit">회</span></div>
+      <div class="row"><label class="name">최근 몇 시간 안의 거래만 셀까요</label>
+        <input type="number" data-k="consec_loss_lookback_hours" min="1" max="168"><span class="unit">시간</span></div>
+      <div class="row"><label class="name">문구 입력 후 풀려 있는 시간</label>
+        <input type="number" data-k="consec_loss_unlock_minutes" min="1" max="1440"><span class="unit">분</span></div>
+    </div>
+
+    <div class="panel">
+      <h2>정기 재확인</h2>
+      <p class="hint">시간이 지날 때마다 확인 문구를 다시 입력해야 거래할 수 있습니다. 시간대별로 간격을 다르게 정할 수 있고,
+        규칙끼리 시간대가 겹치면 안 됩니다. 시간은 <b>한국 시간</b> 기준입니다.</p>
+      <div id="checkins"></div>
+      <div class="add" style="margin-bottom:14px">
+        <select id="ckPreset">
+          <option value="night">새벽 (00:00~07:00, 30분마다)</option>
+          <option value="late">심야 (23:00~03:00, 30분마다)</option>
+          <option value="lunch">점심 (12:00~13:30, 1시간봉)</option>
+          <option value="custom">직접 설정</option>
+        </select>
+        <button class="btn" id="ckAdd">+ 규칙 추가</button>
+      </div>
+      <div class="row"><label class="name">그 밖의 시간<small>위 규칙에 해당하지 않는 시간의 재확인 간격</small></label>
+        <span id="ckDefault"></span></div>
+    </div>
+
+    <div class="panel">
+      <h2>집중 구간</h2>
+      <p class="hint">정한 요일(또는 미국 주요 지표 발표일)의 이 시간에는 <b>전용 문구</b>를 입력해야 거래할 수 있습니다.
+        시간은 <b>서머타임 기준 한국 시간</b>으로 고르면 되고, 서머타임이 끝나면 자동으로 1시간 늦춰집니다.</p>
+      <div id="sessions"></div>
+      <div class="add">
+        <select id="sessPreset">
+          <option value="asia">아시아장 (07:00~16:00)</option>
+          <option value="europe">유로장 (16:00~01:00)</option>
+          <option value="us">미장 (22:30~05:00)</option>
+          <option value="custom">직접 설정</option>
+        </select>
+        <button class="btn" id="sessAdd">+ 구간 추가</button>
+      </div>
+    </div>
+
+    <div class="panel">
+      <h2>수동 잠금</h2>
+      <div class="row"><label class="name">스스로 잠글 수 있는 최대 시간</label>
+        <input type="number" data-k="manual_lock_max_minutes" min="1" max="10080"><span class="unit">분</span></div>
+    </div>
+
+    <div class="actions">
+      <button class="btn" id="rulesReset">되돌리기</button>
+      <button class="btn primary" id="rulesSave">저장</button>
+    </div>
+  </section>
+
+  <!-- 확인 문구 -->
+  <section id="phrases">
+    <div id="phraseWarn"></div>
+    <div class="panel">
+      <h2>정기 재확인 문구</h2>
+      <p class="hint">정해진 시간마다 다시 잠길 때 입력하는 문구입니다. 무작위로 하나씩 보여 줍니다.</p>
+      <div id="listCheckin"></div>
+      <div class="add">
+        <input type="text" class="wide" id="addCheckin" placeholder="새 문구 입력 (쉼표·특수기호 없이 쓰면 입력 실수가 줄어듭니다)">
+        <button class="btn primary" data-add="checkin">추가</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>연속 손절 문구</h2>
+      <p class="hint">손절이 연달아 나와 잠겼을 때 입력하는 문구입니다. 하나도 없으면 정기 재확인 문구로 풀립니다.</p>
+      <div id="listConsec"></div>
+      <div class="add">
+        <input type="text" class="wide" id="addConsec" placeholder="예: 손절가를 넓히거나 물을 타지 않고 정한 손절을 그대로 지키겠습니다">
+        <button class="btn primary" data-add="consec_loss">추가</button>
+      </div>
+    </div>
+    <div class="panel">
+      <h2>집중 구간 문구</h2>
+      <p class="hint">집중 구간에서는 <b>공통 문구</b>나 <b>그 구간 전용 문구</b>만 받습니다. 정기 재확인 문구로는 풀리지 않습니다.</p>
+      <div id="listSession"></div>
+      <div class="add">
+        <select id="addSessionType"></select>
+        <input type="text" class="wide" id="addSession" placeholder="예: 주간 고가나 저가를 넘어도 되돌림을 확인한 뒤에만 진입하겠습니다">
+        <button class="btn primary" data-add="session">추가</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 텔레그램 -->
+  <section id="telegram">
+    <div class="panel">
+      <h2>텔레그램 알림</h2>
+      <p class="hint">잠금·해제·지표·체결 알림과 <b>실시간 현황</b>(대화방 맨 위에 고정되는 포지션·손익·잠금 상태)을 텔레그램으로 받습니다.</p>
+      <ol class="steps">
+        <li>텔레그램에서 <b>@BotFather</b>에게 <code>/newbot</code>을 보내 봇을 만들고, 받은 <b>토큰</b>을 아래에 붙여넣고 <b>저장</b>합니다.</li>
+        <li>방금 만든 봇과의 대화방에서 <code>/start</code>를 보냅니다. 봇이 chat id를 답장해 줍니다.</li>
+        <li>아래 <b>chat id 찾기</b>를 누르거나 답장받은 숫자를 chat id 칸에 넣고 저장합니다.</li>
+        <li><b>테스트 전송</b>으로 확인합니다. 잠시 뒤 대화방 맨 위에 실시간 현황이 고정됩니다.</li>
+      </ol>
+      <p class="hint">봇이 답장하지 않으면 예전 방식으로 찾으세요: 토큰을 저장하고 봇에게 아무 메시지나 보낸 뒤
+        <a href="api/telegram/updates" target="_blank" rel="noopener">getUpdates 열기 ↗</a>를 누르고,
+        나온 글에서 <code>"chat":{"id":<i>숫자</i></code> 의 숫자를 chat id 칸에 넣습니다.
+        (주소: <code>https://api.telegram.org/bot<i>토큰</i>/getUpdates</code>)</p>
+      <div class="row"><label class="name">봇 토큰<small id="tgTokenNow"></small></label>
+        <input type="password" class="wide" id="tgToken" placeholder="123456789:AA..." autocomplete="off"></div>
+      <div class="row"><label class="name">chat id</label>
+        <input type="text" class="wide" id="tgChat" placeholder="987654321">
+        <button class="btn" id="tgFind" type="button">chat id 찾기</button></div>
+      <div class="row"><label class="name">실시간 현황<small>고정 메시지를 몇 초마다 고쳐 씀 (알림은 울리지 않음)</small></label>
+        <label class="switch"><input type="checkbox" id="tgLive"> 켜기</label>
+        <input type="number" id="tgLiveSec" min="5" max="300" style="width:80px"><span class="unit">초마다</span></div>
+      <div class="row"><label class="name">현황 위치<small>맨 아래 유지: 다른 알림이 오면 현황을 지우고 맨 아래에 다시 보냄 (안 읽은 숫자가 하나씩 오름)</small></label>
+        <select id="tgLivePos"><option value="top">맨 위 고정 (기존)</option><option value="bottom">맨 아래 유지</option></select></div>
+      <div class="actions">
+        <button class="btn danger" id="tgClear">토큰 지우기</button>
+        <button class="btn" id="tgTest">테스트 전송</button>
+        <button class="btn primary" id="tgSave">저장</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 바깥 접속 -->
+  <section id="access">
+    <div class="panel">
+      <h2>폰·다른 PC에서 접속</h2>
+      <p class="hint">웹 화면(<code>/app/</code>)과 API를 바깥에서 어떻게 열지 정합니다. 이 PC 안의 MT5 EA·관리 화면은 어느 방식이든 그대로 동작합니다.</p>
+      <div class="modes" id="acModes">
+        <label class="mode"><input type="radio" name="acMode" value="tailscale">
+          <b>내 PC (Tailscale)</b><small>집 PC에서 돌릴 때. Tailscale로 연결된 내 기기만 들어올 수 있습니다. 로그인 없음.</small></label>
+        <label class="mode"><input type="radio" name="acMode" value="public">
+          <b>공개 서버 (도메인·고정 IP)</b><small>Vultr 같은 서버에서 돌릴 때. 누구나 주소로 닿으므로 <b>비밀번호 로그인</b>과 HTTPS가 필요합니다.</small></label>
+        <label class="mode"><input type="radio" name="acMode" value="open">
+          <b>제한 없음 (예전 방식)</b><small>주소를 아는 누구나 포지션 조회·SL/TP 변경·잠금 해제를 할 수 있습니다. 권장하지 않습니다.</small></label>
+      </div>
+      <div id="acTailscale" class="guide" hidden>
+        <h3>Tailscale 설정</h3>
+        <ol class="steps">
+          <li>이 PC와 폰에 <b>Tailscale</b> 앱을 설치하고 같은 계정으로 로그인합니다. (tailscale.com/download)</li>
+          <li>서버를 바깥 접속을 받도록 실행합니다: <code>uvicorn main:app --host 0.0.0.0 --port 8000</code></li>
+          <li>Windows 방화벽이 물어보면 <b>허용</b>을 누릅니다.</li>
+          <li>폰 브라우저에서 <code id="acTsUrl">http://(Tailscale 주소):8000/app/</code> 을 엽니다. 홈 화면에 추가하면 앱처럼 쓸 수 있습니다.</li>
+        </ol>
+        <p class="hint" id="acTsNow"></p>
+      </div>
+      <div id="acPublic" class="guide" hidden>
+        <h3>공개 서버 설정</h3>
+        <div class="row"><label class="name">비밀번호<small id="acPwNow"></small></label>
+          <input type="password" class="wide" id="acPw" placeholder="8자 이상" autocomplete="new-password"></div>
+        <div class="row"><label class="name">로그인 유지</label>
+          <input type="number" id="acDays" min="1" max="365" style="width:80px"><span class="unit">일</span></div>
+        <ol class="steps">
+          <li>도메인을 서버 IP에 연결합니다 (DNS A 레코드).</li>
+          <li>HTTPS 리버스 프록시를 둡니다. 가장 간단한 <b>Caddy</b> 예 (인증서 자동 발급):
+            <pre class="log" style="height:auto;min-height:0;max-height:none;margin:6px 0">내도메인.com {
+    reverse_proxy 127.0.0.1:8000
+}</pre>
+            nginx를 쓰면 <code>proxy_set_header X-Forwarded-For $remote_addr;</code> 와 <code>X-Forwarded-Proto $scheme;</code> 를 꼭 넘기세요.</li>
+          <li>서버는 <code>--host 127.0.0.1</code> 로 띄워 프록시를 거쳐서만 들어오게 합니다.</li>
+          <li>폰에서 <code>https://내도메인.com/app/</code> 을 열고 비밀번호로 로그인합니다.</li>
+        </ol>
+      </div>
+      <div class="actions">
+        <button class="btn" id="acLogoutAll" title="로그인해 둔 모든 기기를 로그아웃">모든 기기 로그아웃</button>
+        <button class="btn primary" id="acSave">저장</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 앱 (플러터 웹 빌드) -->
+  <section id="webapp">
+    <div class="bar">
+      <span>앱과 같은 화면입니다. 폰에서는 Tailscale 주소로 <code id="webappUrl"></code> 을 열면 됩니다.</span>
+      <a id="webappOpen" href="#" target="_blank" rel="noopener" style="margin-left:auto">새 창으로 열기 ↗</a>
+    </div>
+    <iframe id="webappFrame" title="TraderOS 앱"></iframe>
+  </section>
+
+  <!-- 로그 -->
+  <section id="logs">
+    <div class="panel">
+      <div class="add" style="margin:0 0 12px">
+        <select id="logFile"></select>
+        <button class="btn" id="logReload">새로고침</button>
+        <label class="switch"><input type="checkbox" id="logAuto"> 5초마다 자동</label>
+      </div>
+      <pre class="log" id="logText">로그 파일을 고르세요.</pre>
+    </div>
+  </section>
+</main>
+
+<div id="toast"></div>
+
+<script>
+const API = 'api/';
+const REASON = {
+  restricted_window: '정기 재확인', session_window: '아시아장 집중 구간',
+  consec_loss: '연속 손절', manual: '수동 잠금',
+};
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const money = (v, cur) => v == null ? '-' : v.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) + (cur ? ' ' + cur : '');
+const pct = (v) => v == null || v === 0 ? '-' : v.toLocaleString('en-US', { maximumFractionDigits: 0 }) + '%';
+const hm = (sec) => { sec = Math.max(0, sec | 0); const h = sec / 3600 | 0, m = (sec % 3600) / 60 | 0; return h ? `${h}시간 ${m}분` : `${m}분 ${sec % 60}초`; };
+
+let toastT = 0;
+function toast(msg, err = false) {
+  const t = $('toast'); t.textContent = msg; t.className = 'show' + (err ? ' err' : '');
+  clearTimeout(toastT); toastT = setTimeout(() => t.className = '', err ? 4500 : 2200);
+}
+
+async function api(path, opt = {}) {
+  const res = await fetch(API + path, {
+    ...opt, headers: opt.body ? { 'Content-Type': 'application/json' } : undefined,
+  });
+  const text = await res.text();
+  let data = null; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (!res.ok) throw new Error((data && data.detail) || text || res.status);
+  return data;
+}
+
+// ── 탭 ──
+$('tabs').onclick = (e) => {
+  const b = e.target.closest('button[data-tab]'); if (!b) return;
+  document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('on', x === b));
+  document.querySelectorAll('main section').forEach((s) => s.classList.toggle('on', s.id === b.dataset.tab));
+  if (b.dataset.tab === 'logs') loadLogList();
+  if (b.dataset.tab === 'phrases') loadPhrases();
+  if (b.dataset.tab === 'acctab') loadAccounts();
+  if (b.dataset.tab === 'access') loadAccess();
+  document.body.classList.toggle('full', b.dataset.tab === 'webapp');
+  if (b.dataset.tab === 'webapp') openWebApp();
+};
+
+// ── 앱 탭 (플러터 웹) ──
+let webAppUrl = null;
+function setWebApp(info) {
+  webAppUrl = info ? `${location.protocol}//${location.hostname}:${info.port}${info.path}` : null;
+  $('webappTab').hidden = !webAppUrl;
+  if (webAppUrl) {
+    $('webappOpen').href = webAppUrl;
+    $('webappUrl').textContent = `http://<Tailscale IP>:${info.port}${info.path}`;
+  }
+}
+function openWebApp() {
+  if (!webAppUrl) return;
+  document.documentElement.style.setProperty('--hdr', document.querySelector('header').offsetHeight + 'px');
+  const f = $('webappFrame');
+  if (!f.src) f.src = webAppUrl;   // 처음 열 때만 불러옴 (탭을 오가도 앱 상태 유지)
+}
+
+// 관리 화면이 열려 있다고 서버에 알림 - 서버를 재시작해도 브라우저 탭을 또 열지 않게
+setInterval(() => fetch(API + 'ping').catch(() => {}), 4000);
+fetch(API + 'ping').catch(() => {});
+
+// ── 대시보드 ──
+let settings = null;
+async function loadStatus() {
+  try {
+    const s = await api('status');
+    $('srvDot').className = 'dot ok';
+    $('srvText').textContent = `서버 실행 중 · ${hm(s.uptime_sec)}째`;
+    renderAccounts(s);
+    setWebApp(s.web_app);
+  } catch (e) {
+    $('srvDot').className = 'dot bad';
+    $('srvText').textContent = '서버에 연결할 수 없음';
+  }
+}
+
+const EA_HELP = 'MT5에서 <b>도구 → 옵션 → 전문가 조언자</b> → "다음 URL에 WebRequest 허용"에 체크하고 <code>http://127.0.0.1:8000</code> 을 추가하세요. 차트에 tradeLock EA가 붙어 있는지도 확인하세요.';
+function eaBadge(a) {
+  if (!a.lock_enabled || !a.ea) return '';
+  const e = a.ea;
+  if (e.state === 'ok') return '<span class="badge ok" title="EA가 서버에 잠금 상태를 묻고 있습니다 (WebRequest 허용됨)">EA 연결됨</span>';
+  if (e.state === 'waiting') return '<span class="badge warn">EA 확인 중…</span>';
+  return `<span class="badge bad" title="${e.ago_sec == null ? '서버 시작 후 EA 요청이 한 번도 없습니다' : Math.round(e.ago_sec / 60) + '분째 EA 요청 없음'}">EA 연결 안 됨</span>`;
+}
+
+function renderAccounts(s) {
+  const warn = [];
+  if (!s.telegram_enabled) warn.push('텔레그램 알림이 꺼져 있습니다. <b>텔레그램</b> 탭에서 설정할 수 있습니다.');
+  const needLogin = s.accounts.filter((a) => a.mt5_login === 'needed').map((a) => esc(a.account_number));
+  if (needLogin.length) warn.push(`MT5에 아직 로그인하지 못한 계좌가 있습니다: <b>${needLogin.join(', ')}</b>. <b>계좌</b> 탭의 안내대로 한 번 로그인해 주세요.`);
+  const noEa = s.accounts.filter((a) => a.ea && a.ea.state === 'none' && a.worker === 'running').map((a) => esc(a.account_number));
+  if (noEa.length) warn.push(`잠금 EA가 서버에 연결되지 않은 계좌가 있습니다: <b>${noEa.join(', ')}</b>. 이 상태에서는 잠금이 MT5에 적용되지 않습니다. ${EA_HELP}`);
+  $('dashWarn').innerHTML = warn.map((w) => `<div class="warnbar">${w}</div>`).join('');
+
+  if (!s.accounts.length) { $('accounts').innerHTML = '<div class="empty">등록된 계좌가 없습니다.</div>'; return; }
+  $('accounts').innerHTML = s.accounts.map((a) => {
+    const w = { running: ['ok', '워커 실행 중'], starting: ['warn', '켜는 중…'], stopped: ['bad', '워커 멈춤'], off: ['', '조회 전용 · MT5 안 띄움'] }[a.worker];
+    const L = a.lock || {};
+    let lock = '';
+    if (L.error) lock = `<div class="lockbox locked"><b>잠금 상태 확인 실패</b><small>${esc(L.error)}</small></div>`;
+    else if (a.lock_enabled) {
+      const why = L.reason === 'session_window' && L.session && L.session.names
+        ? L.session.names.join('·') + ' 집중 구간' : (REASON[L.reason] || L.reason || '');
+      const causes = L.session && L.session.causes ? ` (${L.session.causes.map(esc).join(', ')})` : '';
+      lock = L.locked
+        ? `<div class="lockbox locked"><b>🔒 잠김 · ${esc(why)}${causes}</b><small>${L.reason === 'manual' ? `남은 시간 ${hm(L.remaining_sec)}` : (L.phrase_type === 'session' ? '전용 문구를 입력해야 풀립니다' : '확인 문구를 입력해야 풀립니다')}</small>
+            ${L.reason === 'manual' ? '' : `<div><button class="btn unlock-btn" data-unlock="${a.id}">잠금 풀기</button></div>`}
+            <div class="unlock" id="unlock-${a.id}" hidden></div></div>`
+        : `<div class="lockbox open"><b>🔓 거래 가능</b><small>${esc(why)} · ${hm(L.remaining_sec)} 뒤 다시 잠김</small></div>`;
+    }
+    const m = a.mt5;
+    const mt5 = m ? `<dl class="kv">
+        <dt>잔고</dt><dd>${money(m.balance, m.currency)}</dd>
+        <dt>평가금</dt><dd>${money(m.equity, m.currency)}</dd>
+        <dt>사용 증거금</dt><dd>${money(m.margin, m.currency)}</dd>
+        <dt>여유 증거금</dt><dd>${money(m.margin_free, m.currency)}</dd>
+        <dt>증거금 비율</dt><dd>${pct(m.margin_level)}</dd>
+      </dl>` : `<div class="hint" style="margin:0">${a.worker === 'running' ? 'MT5 정보를 가져오지 못했습니다.' : 'MT5 정보 없음'}</div>`;
+    return `<div class="panel">
+      <div class="acc-head">
+        <span class="acc-num">${esc(a.account_number)}</span>
+        ${a.broker ? `<span class="badge">${esc(a.broker)}</span>` : ''}
+        ${a.is_default ? '<span class="badge warn">기본</span>' : ''}
+        <span class="badge ${w[0]}">${w[1]}</span>
+        ${eaBadge(a)}
+      </div>${lock}${mt5}</div>`;
+  }).join('');
+}
+
+// ── 잠금 규칙 ──
+// ── 정기 재확인 규칙 목록 ──
+// 시간은 한국 시간 기준 분(0~1410). 끝이 시작보다 작으면 자정을 넘김.
+let ckDraft = [], ckDefault = { mode: 'bars', every: 2 };
+const BAR_HOURS = [1, 2, 3, 4, 6, 8, 12];
+const CK_PRESETS = {
+  night: { name: '새벽', start_min: 0,    end_min: 420, mode: 'minutes', every: 30 },
+  late:  { name: '심야', start_min: 1380, end_min: 180, mode: 'minutes', every: 30 },
+  lunch: { name: '점심', start_min: 720,  end_min: 810, mode: 'bars',    every: 1 },
+  custom:{ name: '새 규칙', start_min: 600, end_min: 660, mode: 'minutes', every: 30 },
+};
+function kstOptions(sel) {
+  let o = '';
+  for (let m = 0; m < 1440; m += 30) o += `<option value="${m}" ${m === sel ? 'selected' : ''}>${hhmm(m)}</option>`;
+  return o;
+}
+function intervalControls(x, attr) {
+  // attr: 규칙 카드면 data-f, '그 밖의 시간'이면 data-d
+  const everyCtl = x.mode === 'bars'
+    ? `<select ${attr}="every">${BAR_HOURS.map((h) => `<option value="${h}" ${h === x.every ? 'selected' : ''}>${h}시간봉 마감마다</option>`).join('')}</select>`
+    : `<input type="number" ${attr}="every" min="5" max="240" value="${x.every}"><span class="unit">분마다</span>`;
+  return `<select ${attr}="mode"><option value="minutes" ${x.mode === 'minutes' ? 'selected' : ''}>일정 간격</option>
+    <option value="bars" ${x.mode === 'bars' ? 'selected' : ''}>MT5 봉 마감</option></select>${everyCtl}`;
+}
+const rngs = (a, b) => a < b ? [[a, b]] : [[a, 1440], [0, b]];
+const overlaps = (x, y) => rngs(x.start_min, x.end_min).some(([s1, e1]) => rngs(y.start_min, y.end_min).some(([s2, e2]) => s1 < e2 && s2 < e1));
+function renderCheckins() {
+  $('checkins').innerHTML = ckDraft.length ? ckDraft.map((x, i) => {
+    const clash = x.enabled && ckDraft.some((y, j) => j !== i && y.enabled && overlaps(x, y));
+    return `<div class="sess ${x.enabled ? '' : 'off'}" data-ci="${i}">
+      <div class="sess-head">
+        <input type="text" data-f="name" value="${esc(x.name)}" maxlength="20">
+        <label class="switch"><input type="checkbox" data-f="enabled" ${x.enabled ? 'checked' : ''}> 사용</label>
+        <button class="btn danger" data-cdel="${i}">삭제</button>
+      </div>
+      <div class="row"><label class="name">시간대${x.end_min < x.start_min && x.end_min !== 0 ? ' <small class="when">자정을 넘깁니다</small>' : ''}
+          ${x.start_min === x.end_min ? '<span class="warn">시작과 끝이 같습니다.</span>' : ''}
+          ${clash ? '<span class="warn">다른 규칙과 시간대가 겹칩니다.</span>' : ''}</label>
+        <select data-f="start_min">${kstOptions(x.start_min)}</select><span>~</span>
+        <select data-f="end_min">${kstOptions(x.end_min)}</select></div>
+      <div class="row"><label class="name">재확인 간격${x.mode === 'bars' ? '<small>브로커 시간 기준 봉이라 서머타임이 자동 반영됩니다.</small>' : '<small>구간 시작 시각부터 나눕니다.</small>'}</label>
+        ${intervalControls(x, 'data-f')}</div>
+    </div>`;
+  }).join('') : '<div class="empty">규칙이 없습니다. 하루 종일 아래 "그 밖의 시간" 간격을 따릅니다.</div>';
+  $('ckDefault').innerHTML = intervalControls(ckDefault, 'data-d');
+}
+function readIntervalChange(obj, el, key) {
+  if (key === 'mode') {
+    if (obj.mode !== el.value) obj.every = el.value === 'bars' ? 2 : 30;   // 방식이 바뀌면 기본값으로
+    obj.mode = el.value;
+  } else obj[key] = Number(el.value);
+}
+$('checkins').addEventListener('change', (e) => {
+  const card = e.target.closest('[data-ci]'); if (!card) return;
+  const x = ckDraft[Number(card.dataset.ci)], el = e.target, f = el.dataset.f; if (!f) return;
+  if (f === 'mode' || f === 'every') readIntervalChange(x, el, f);
+  else x[f] = el.type === 'checkbox' ? el.checked : (f === 'name' ? el.value : Number(el.value));
+  renderCheckins();
+});
+$('checkins').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-cdel]'); if (!b) return;
+  const x = ckDraft[Number(b.dataset.cdel)];
+  if (!confirm(`'${x.name}' 규칙을 삭제할까요? 저장을 눌러야 반영됩니다.`)) return;
+  ckDraft.splice(Number(b.dataset.cdel), 1); renderCheckins();
+});
+$('ckDefault').addEventListener('change', (e) => {
+  const k = e.target.dataset.d; if (!k) return;
+  readIntervalChange(ckDefault, e.target, k); renderCheckins();
+});
+$('ckAdd').onclick = () => {
+  const key = $('ckPreset').value, p = CK_PRESETS[key];
+  let id = key === 'custom' ? 'c' + Date.now().toString(36) : key, n = 2;
+  while (ckDraft.some((x) => x.id === id)) id = `${key}${n++}`;
+  ckDraft.push({ id, enabled: true, ...p });
+  renderCheckins(); toast('추가했습니다. 저장을 눌러야 반영됩니다.');
+};
+
+function fillRules() {
+  const L = settings.lock;
+  document.querySelectorAll('#rules [data-k]').forEach((el) => {
+    if (el.type === 'checkbox') el.checked = !!L[el.dataset.k]; else el.value = L[el.dataset.k];
+  });
+  ckDraft = JSON.parse(JSON.stringify(L.checkin_rules || []));
+  ckDefault = { ...(L.checkin_default || { mode: 'bars', every: 2 }) };
+  renderCheckins();
+  sessDraft = JSON.parse(JSON.stringify(L.sessions || []));
+  renderSessions();
+}
+
+// ── 집중 구간 목록 ──
+// 시간은 브로커 서버시간 기준 분(0~1440)으로 저장. 화면에는 서머타임 기준 KST(= 브로커 + 6시간)로 보여줌.
+let sessDraft = [];
+const PRESETS = {
+  asia:   { name: '아시아장', start_min: 60,  end_min: 600 },
+  europe: { name: '유로장',   start_min: 600, end_min: 1140 },
+  us:     { name: '미장',     start_min: 990, end_min: 1380 },
+  custom: { name: '새 구간',  start_min: 600, end_min: 720 },
+};
+const hhmm = (m) => `${String(Math.floor(m / 60) % 24).padStart(2, '0')}:${String(m % 60).padStart(2, '0')}`;
+const kstLabel = (bm, add) => { const k = bm + add * 60; return hhmm(k % 1440) + (k >= 1440 ? ' (다음날)' : ''); };
+function timeOptions(sel, isEnd) {
+  const opts = [];
+  for (let m = isEnd ? 30 : 0; m <= (isEnd ? 1440 : 1410); m += 30)
+    opts.push(`<option value="${m}" ${m === sel ? 'selected' : ''}>${kstLabel(m, 6)}</option>`);
+  return opts.join('');
+}
+function renderSessions() {
+  const names = settings.weekday_names;
+  $('sessions').innerHTML = sessDraft.length ? sessDraft.map((x, i) => {
+    const noTrigger = !x.weekdays.length && !x.event_days;
+    const bad = x.start_min >= x.end_min;
+    return `<div class="sess ${x.enabled ? '' : 'off'}" data-i="${i}">
+      <div class="sess-head">
+        <input type="text" data-f="name" value="${esc(x.name)}" maxlength="20">
+        <label class="switch"><input type="checkbox" data-f="enabled" ${x.enabled ? 'checked' : ''}> 사용</label>
+        <button class="btn danger" data-sdel="${i}">삭제</button>
+      </div>
+      <div class="row"><label class="name">시간 (서머타임 기준 한국 시간)
+          <small class="when">서머타임이 아닐 때: ${kstLabel(x.start_min, 7)} ~ ${kstLabel(x.end_min, 7)}</small>
+          ${bad ? '<span class="warn">끝 시각이 시작보다 늦어야 합니다.</span>' : ''}</label>
+        <select data-f="start_min">${timeOptions(x.start_min, false)}</select><span>~</span>
+        <select data-f="end_min">${timeOptions(x.end_min, true)}</select></div>
+      <div class="row"><label class="name">요일</label><div class="days">${names.map((n, d) =>
+        `<label><input type="checkbox" data-day="${d}" ${x.weekdays.includes(d) ? 'checked' : ''}>${n.slice(0, 1)}</label>`).join('')}</div></div>
+      <div class="row"><label class="name">미국 고영향 지표 발표일도 포함<small>실업수당, 고용지표, CPI, FOMC 등</small>
+          ${noTrigger ? '<span class="warn">요일이나 지표일을 하나 이상 골라야 잠깁니다.</span>' : ''}</label>
+        <label class="switch"><input type="checkbox" data-f="event_days" ${x.event_days ? 'checked' : ''}> 포함</label></div>
+      <div class="row"><label class="name">전용 문구 입력 후 풀려 있는 시간</label>
+        <input type="number" data-f="unlock_minutes" min="5" max="540" value="${x.unlock_minutes}"><span class="unit">분</span></div>
+    </div>`;
+  }).join('') : '<div class="empty">집중 구간이 없습니다. 아래에서 추가하세요.</div>';
+}
+$('sessions').addEventListener('change', (e) => {
+  const card = e.target.closest('.sess'); if (!card) return;
+  const x = sessDraft[Number(card.dataset.i)], el = e.target;
+  if (el.dataset.day !== undefined) {
+    const d = Number(el.dataset.day);
+    x.weekdays = el.checked ? [...new Set([...x.weekdays, d])].sort() : x.weekdays.filter((v) => v !== d);
+  } else if (el.dataset.f) {
+    const f = el.dataset.f;
+    x[f] = el.type === 'checkbox' ? el.checked : (f === 'name' ? el.value : Number(el.value));
+  }
+  renderSessions();
+});
+$('sessions').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-sdel]'); if (!b) return;
+  const x = sessDraft[Number(b.dataset.sdel)];
+  if (!confirm(`'${x.name}' 구간을 삭제할까요? 저장을 눌러야 반영됩니다.`)) return;
+  sessDraft.splice(Number(b.dataset.sdel), 1); renderSessions();
+});
+$('sessAdd').onclick = () => {
+  const key = $('sessPreset').value, p = PRESETS[key];
+  let id = key === 'custom' ? 's' + Date.now().toString(36) : key, n = 2;
+  while (sessDraft.some((x) => x.id === id)) id = `${key}${n++}`;
+  sessDraft.push({ id, name: p.name, enabled: true, start_min: p.start_min, end_min: p.end_min,
+    weekdays: [3, 4], event_days: true, unlock_minutes: 30 });
+  renderSessions(); toast('추가했습니다. 저장을 눌러야 반영됩니다.');
+};
+
+async function loadSettings() {
+  settings = await api('settings');
+  fillRules(); fillTelegram();
+}
+
+$('rulesReset').onclick = fillRules;
+$('rulesSave').onclick = async () => {
+  const lock = {};
+  for (const el of document.querySelectorAll('#rules [data-k]')) {
+    if (el.type === 'checkbox') lock[el.dataset.k] = el.checked;
+    else {
+      const v = Number(el.value);
+      if (!Number.isInteger(v)) { toast('숫자를 정수로 입력하세요.', true); el.focus(); return; }
+      lock[el.dataset.k] = v;
+    }
+  }
+  for (const x of sessDraft) {
+    if (!x.name.trim()) { toast('집중 구간 이름을 입력하세요.', true); return; }
+    if (x.start_min >= x.end_min) { toast(`'${x.name}' 구간의 끝 시각이 시작보다 늦어야 합니다.`, true); return; }
+  }
+  lock.sessions = sessDraft;
+  for (const x of ckDraft) {
+    if (!x.name.trim()) { toast('재확인 규칙 이름을 입력하세요.', true); return; }
+    if (x.start_min === x.end_min) { toast(`'${x.name}' 규칙의 시작과 끝이 같습니다.`, true); return; }
+  }
+  lock.checkin_rules = ckDraft;
+  lock.checkin_default = ckDefault;
+  try {
+    settings = await api('settings', { method: 'PUT', body: JSON.stringify({ lock }) });
+    fillRules(); toast('저장했습니다. 바로 적용됩니다.'); loadStatus();
+  } catch (e) { toast(e.message, true); }
+};
+
+// ── 확인 문구 ──
+async function loadPhrases() {
+  try {
+    const list = await api('phrases');
+    const row = (p) => `<div class="phrase"><span>${esc(p.phrase)}</span><button class="btn danger" data-del="${p.id}">삭제</button></div>`;
+    const sessions = (settings && settings.lock.sessions) || [];
+    const isSess = (t) => t === 'session' || t.startsWith('session:');
+    const ck = list.filter((p) => p.phrase_type === 'checkin');
+    const cl = list.filter((p) => p.phrase_type === 'consec_loss');
+    const shared = list.filter((p) => p.phrase_type === 'session');
+    $('listCheckin').innerHTML = ck.length ? ck.map(row).join('') : '<div class="empty">문구가 없습니다.</div>';
+    $('listConsec').innerHTML = cl.length ? cl.map(row).join('') : '<div class="empty">문구가 없습니다. 연속 손절로 잠기면 정기 재확인 문구로 풀립니다.</div>';
+
+    // 집중 구간 문구: 공통 + 구간별로 묶어서 표시
+    const groups = [{ title: '모든 구간 공통', items: shared }].concat(sessions.map((x) => ({
+      title: `${x.name} 전용`, items: list.filter((p) => p.phrase_type === 'session:' + x.id) })));
+    const orphan = list.filter((p) => p.phrase_type.startsWith('session:') && !sessions.some((x) => 'session:' + x.id === p.phrase_type));
+    if (orphan.length) groups.push({ title: '삭제된 구간의 문구', items: orphan });
+    $('listSession').innerHTML = groups.map((g) => `<h3 style="font-size:13px;margin:12px 0 2px;color:var(--muted)">${esc(g.title)}</h3>` +
+      (g.items.length ? g.items.map(row).join('') : '<div class="empty" style="padding:8px 0;text-align:left">없음</div>')).join('');
+    const sel = $('addSessionType'), cur = sel.value;
+    sel.innerHTML = '<option value="session">모든 구간 공통</option>' + sessions.map((x) => `<option value="session:${esc(x.id)}">${esc(x.name)} 전용</option>`).join('');
+    if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
+
+    const w = [];
+    if (!ck.length) w.push('정기 재확인 문구가 하나도 없으면 잠겼을 때 풀 수 없습니다.');
+    for (const x of sessions.filter((x) => x.enabled)) {
+      if (!shared.length && !list.some((p) => p.phrase_type === 'session:' + x.id))
+        w.push(`'${esc(x.name)}' 집중 구간에 쓸 문구가 없습니다. 이대로면 그 구간에 잠금을 풀 수 없습니다.`);
+    }
+    $('phraseWarn').innerHTML = w.map((x) => `<div class="warnbar">${x}</div>`).join('');
+  } catch (e) { toast(e.message, true); }
+}
+
+$('phrases').onclick = async (e) => {
+  const del = e.target.closest('[data-del]'), add = e.target.closest('[data-add]');
+  if (del) {
+    if (!confirm('이 문구를 삭제할까요?')) return;
+    try { await api('phrases/' + del.dataset.del, { method: 'DELETE' }); loadPhrases(); } catch (err) { toast(err.message, true); }
+  }
+  if (add) {
+    const kind = add.dataset.add;
+    const type = kind === 'session' ? $('addSessionType').value : kind;
+    const input = $({ session: 'addSession', consec_loss: 'addConsec', checkin: 'addCheckin' }[kind]);
+    const phrase = input.value.trim(); if (!phrase) { input.focus(); return; }
+    try {
+      await api('phrases', { method: 'POST', body: JSON.stringify({ phrase, phrase_type: type }) });
+      input.value = ''; toast('추가했습니다.'); loadPhrases();
+    } catch (err) { toast(err.message, true); }
+  }
+};
+['addCheckin', 'addConsec', 'addSession'].forEach((id) => $(id).addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' && !e.isComposing) $(id).parentElement.querySelector('[data-add]').click();
+}));
+
+// ── 텔레그램 ──
+function fillTelegram() {
+  const t = settings.telegram;
+  $('tgToken').value = '';
+  $('tgChat').value = t.chat_id || '';
+  $('tgLive').checked = t.live_enabled !== false;
+  $('tgLiveSec').value = t.live_interval_sec || 10;
+  $('tgLivePos').value = t.live_position === 'bottom' ? 'bottom' : 'top';
+  $('tgTokenNow').textContent = t.has_bot_token ? `저장됨: ${t.bot_token_masked} (바꿀 때만 새로 입력)`
+    : t.env_fallback ? '.env 파일의 토큰을 쓰는 중' : '아직 없음';
+}
+async function saveTelegram(extra = {}) {
+  const telegram = { chat_id: $('tgChat').value.trim(), live_enabled: $('tgLive').checked,
+    live_interval_sec: Number($('tgLiveSec').value) || 10, live_position: $('tgLivePos').value, ...extra };
+  const tok = $('tgToken').value.trim(); if (tok) telegram.bot_token = tok;
+  settings = await api('settings', { method: 'PUT', body: JSON.stringify({ telegram }) });
+  fillTelegram();
+}
+$('tgSave').onclick = async () => { try { await saveTelegram(); toast('저장했습니다.'); loadStatus(); } catch (e) { toast(e.message, true); } };
+$('tgClear').onclick = async () => {
+  if (!confirm('저장된 봇 토큰을 지울까요?')) return;
+  try { await saveTelegram({ clear_bot_token: true }); toast('토큰을 지웠습니다.'); loadStatus(); } catch (e) { toast(e.message, true); }
+};
+$('tgFind').onclick = async () => {
+  try {
+    const { chats: list, status: st } = await api('telegram/chats');
+    if (!st.has_token) return toast('봇 토큰이 저장돼 있지 않습니다. 토큰을 넣고 [저장]을 먼저 누르세요.', true);
+    if (!list.length && st.error) return toast('봇 연결 문제: ' + st.error, true);
+    if (!list.length) return toast(`아직 봇${st.bot ? ' ' + st.bot : ''}에게 온 메시지가 없습니다. 그 봇에게 /start 를 보내고 몇 초 뒤 다시 누르세요.`, true);
+    $('tgChat').value = list[0].chat_id;
+    toast(`찾았습니다: ${list[0].name || ''} (${list[0].chat_id}). 저장을 누르세요.`);
+  } catch (e) { toast(e.message, true); }
+};
+$('tgTest').onclick = async (e) => {
+  const b = e.target; b.disabled = true;
+  try {
+    if ($('tgToken').value.trim() || $('tgChat').value.trim() !== (settings.telegram.chat_id || '')) await saveTelegram();
+    await api('telegram/test', { method: 'POST' }); toast('보냈습니다. 텔레그램을 확인하세요.');
+  } catch (err) { toast(err.message, true); } finally { b.disabled = false; }
+};
+
+// ── 바깥 접속 ──
+let access = null;
+const acMode = () => (document.querySelector('input[name="acMode"]:checked') || {}).value;
+function showAcGuide() {
+  const m = acMode();
+  $('acTailscale').hidden = m !== 'tailscale';
+  $('acPublic').hidden = m !== 'public';
+}
+async function loadAccess() {
+  try { access = await api('access'); } catch (e) { return toast(e.message, true); }
+  document.querySelectorAll('input[name="acMode"]').forEach((r) => r.checked = r.value === access.mode);
+  $('acDays').value = access.session_days;
+  $('acPw').value = '';
+  $('acPwNow').textContent = access.has_password ? '정해 둠 (바꿀 때만 새로 입력)' : '아직 없음';
+  const ip = access.tailscale_ips[0];
+  $('acTsUrl').textContent = `http://${ip || '(Tailscale 주소)'}:${access.port}/app/`;
+  $('acTsNow').textContent = ip ? `이 PC의 Tailscale 주소: ${access.tailscale_ips.join(', ')}`
+    : '이 PC에서 Tailscale 주소를 찾지 못했습니다. Tailscale을 설치·로그인했는지 확인하세요.';
+  showAcGuide();
+}
+$('acModes').addEventListener('change', showAcGuide);
+$('acSave').onclick = async () => {
+  const body = { mode: acMode(), session_days: Number($('acDays').value) || 30 };
+  const pw = $('acPw').value;
+  if (pw) body.password = pw;
+  if (body.mode === 'public' && !access.has_password && !pw) return toast('공개 서버 방식은 비밀번호를 먼저 정하세요.', true);
+  if (body.mode === 'tailscale' && !access.tailscale_ips.length &&
+      !confirm('이 PC에서 Tailscale 주소를 찾지 못했습니다. 그래도 Tailscale 방식으로 바꿀까요? (바깥 접속이 모두 막힙니다)')) return;
+  try {
+    // 비밀번호부터 저장해야 공개 방식으로 바꿀 수 있음
+    if (body.password) access = await api('access', { method: 'PUT', body: JSON.stringify({ password: body.password }) });
+    delete body.password;
+    access = await api('access', { method: 'PUT', body: JSON.stringify(body) });
+    toast('저장했습니다.' + (pw ? ' 비밀번호가 바뀌어 모든 기기가 로그아웃됐습니다.' : ''));
+    loadAccess();
+  } catch (e) { toast(e.message, true); }
+};
+$('acLogoutAll').onclick = async () => {
+  if (!confirm('로그인해 둔 모든 기기(폰·다른 PC)를 로그아웃할까요?')) return;
+  try { await api('access', { method: 'PUT', body: JSON.stringify({ logout_all: true }) }); toast('모든 기기를 로그아웃했습니다.'); }
+  catch (e) { toast(e.message, true); }
+};
+
+// ── 로그 ──
+async function loadLogList() {
+  try {
+    const files = await api('logs'); const sel = $('logFile'), cur = sel.value;
+    sel.innerHTML = files.length ? files.map((f) => `<option value="${esc(f.name)}">${esc(f.name)} (${(f.size / 1024).toFixed(0)}KB)</option>`).join('')
+      : '<option value="">로그 없음</option>';
+    if (cur && files.some((f) => f.name === cur)) sel.value = cur;
+    loadLog();
+  } catch (e) { toast(e.message, true); }
+}
+async function loadLog() {
+  const name = $('logFile').value; if (!name) return;
+  try {
+    const r = await api('logs/' + encodeURIComponent(name) + '?lines=400'), pre = $('logText');
+    const atBottom = pre.scrollTop + pre.clientHeight >= pre.scrollHeight - 30;
+    pre.textContent = r.lines.join('\n') || '(비어 있음)';
+    if (atBottom) pre.scrollTop = pre.scrollHeight;
+  } catch (e) { $('logText').textContent = e.message; }
+}
+$('logFile').onchange = () => { loadLog(); setTimeout(() => $('logText').scrollTop = 1e9, 50); };
+$('logReload').onclick = loadLog;
+setInterval(() => { if ($('logAuto').checked && $('logs').classList.contains('on')) loadLog(); }, 5000);
+
+// ── 계좌 ──
+const WORKER_TXT = { running: ['ok', '워커 실행 중'], starting: ['warn', '켜는 중…'], stopped: ['bad', '워커 멈춤'], off: ['', '조회 전용 · MT5 안 띄움'] };
+async function loadAccounts() {
+  try {
+    const [accs, st, brokers] = await Promise.all([api('accounts'), api('status'), api('brokers')]);
+    $('serverList').innerHTML = brokers.map((b) => `<option value="${esc(b.server)}">${esc(b.name)}</option>`).join('');
+    const byId = Object.fromEntries(st.accounts.map((a) => [a.id, a]));
+    $('accList').innerHTML = accs.length ? accs.map((a) => {
+      const s = byId[a.id] || {}, w = WORKER_TXT[s.worker] || ['', ''];
+      return `<div class="phrase" data-acc="${a.id}" style="flex-wrap:wrap">
+        <span style="flex:1 1 220px">
+          <b class="acc-num" style="font-size:15px">${esc(a.account_number)}</b>
+          <span class="badge">${esc(a.server || a.broker || '서버 없음')}</span>
+          ${a.is_default ? '<span class="badge warn">기본</span>' : ''}
+          ${w[1] ? `<span class="badge ${w[0]}">${w[1]}</span>` : ''}
+          ${a.lock_enabled && a.mt5_login === 'needed' ? '<span class="badge bad">MT5 로그인 필요</span>' : ''}
+          ${eaBadge({ ...s, lock_enabled: a.lock_enabled })}
+          ${a.lock_enabled && a.mt5_login === 'needed' ? `<br><small style="color:var(--warn)">MT5 창에서 파일 → 거래 계좌 로그인 → 서버 검색(${esc(a.server || '')}) 후 한 번 로그인하세요. "비밀번호 저장"에 체크하면 다음부터 자동입니다.</small>` : ''}
+          ${a.lock_enabled && s.ea && s.ea.state === 'none' && s.worker === 'running' && a.mt5_login !== 'needed' ? `<br><small style="color:var(--warn)">${EA_HELP}</small>` : ''}
+          ${s.start_error ? `<br><small style="color:var(--bad)">실행 오류: ${esc(s.start_error)}</small>` : ''}
+        </span>
+        <label class="switch"><input type="checkbox" data-acc-lock ${a.lock_enabled ? 'checked' : ''}> MT5 실행</label>
+        ${a.is_default ? '' : '<button class="btn" data-acc-default>기본으로</button>'}
+        <button class="btn" data-acc-pw>비밀번호 변경</button>
+        <button class="btn danger" data-acc-del>삭제</button>
+      </div>`;
+    }).join('') : '<div class="empty">등록된 계좌가 없습니다. 아래에서 추가하세요.</div>';
+    if (accs.some((a) => (byId[a.id] || {}).worker === 'starting')) setTimeout(() => { if ($('acctab').classList.contains('on')) loadAccounts(); }, 3000);
+  } catch (e) { toast(e.message, true); }
+}
+$('accList').addEventListener('click', async (e) => {
+  const row = e.target.closest('[data-acc]'); if (!row) return;
+  const id = row.dataset.acc, num = row.querySelector('.acc-num').textContent;
+  try {
+    if (e.target.closest('[data-acc-default]')) {
+      await api('accounts/' + id, { method: 'PATCH', body: JSON.stringify({ is_default: true }) }); toast(`${num}을(를) 기본 계좌로 바꿨습니다.`);
+    } else if (e.target.closest('[data-acc-pw]')) {
+      const pw = prompt(`${num} 계좌의 새 비밀번호`); if (!pw) return;
+      await api('accounts/' + id, { method: 'PATCH', body: JSON.stringify({ password: pw }) });
+      toast('바꿨습니다. MT5에 다시 로그인할 때(서버 재시작 등) 적용됩니다.');
+    } else if (e.target.closest('[data-acc-del]')) {
+      if (!confirm(`${num} 계좌를 삭제할까요? 잠금 감시가 멈추고 목록에서 사라집니다.`)) return;
+      await api('accounts/' + id, { method: 'DELETE' }); toast('삭제했습니다.');
+    } else return;
+    loadAccounts(); loadStatus();
+  } catch (err) { toast(err.message, true); }
+});
+$('accList').addEventListener('change', async (e) => {
+  if (!e.target.matches('[data-acc-lock]')) return;
+  const row = e.target.closest('[data-acc]'), on = e.target.checked;
+  if (!on && !confirm('이 계좌를 조회 전용으로 바꿀까요?\n\n워커가 멈추고 다음 서버 시작부터 MT5를 띄우지 않습니다.\n거래 잠금·강제청산·실시간 포지션·새 거래 기록이 멈추고, 이미 저장된 거래내역·손익·통계는 계속 볼 수 있습니다.')) { e.target.checked = true; return; }
+  try {
+    await api('accounts/' + row.dataset.acc, { method: 'PATCH', body: JSON.stringify({ lock_enabled: on }) });
+    toast(on ? 'MT5와 워커를 켜는 중입니다.' : '조회 전용으로 바꿨습니다. 지금 떠 있는 MT5 창은 닫지 않으니, 필요 없으면 직접 닫으세요.'); loadAccounts(); loadStatus();
+  } catch (err) { e.target.checked = !on; toast(err.message, true); }
+});
+$('accAdd').onclick = async (e) => {
+  const body = {
+    account_number: $('accNumber').value.trim(), password: $('accPassword').value,
+    server: $('accServer').value.trim(), lock_enabled: $('accLock').checked, is_default: $('accDefault').checked,
+  };
+  if (!body.account_number || !body.password || !body.server) { toast('계좌번호, 비밀번호, 서버를 모두 입력하세요.', true); return; }
+  e.target.disabled = true;
+  try {
+    await api('accounts', { method: 'POST', body: JSON.stringify(body) });
+    $('accNumber').value = ''; $('accPassword').value = ''; $('accDefault').checked = false;
+    toast(body.lock_enabled ? '추가했습니다. MT5와 워커를 켜는 중입니다.' : '추가했습니다.');
+    loadAccounts(); loadStatus();
+  } catch (err) { toast(err.message, true); } finally { e.target.disabled = false; }
+};
+
+// ── 테마 ──
+function applyTheme(t) {
+  if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t;
+  else delete document.documentElement.dataset.theme;
+  document.querySelectorAll('#theme button').forEach((b) => b.classList.toggle('on', b.dataset.theme === (t || 'auto')));
+}
+$('theme').onclick = (e) => {
+  const b = e.target.closest('button[data-theme]'); if (!b) return;
+  const t = b.dataset.theme === 'auto' ? null : b.dataset.theme;
+  try { t ? localStorage.setItem('traderos.theme', t) : localStorage.removeItem('traderos.theme'); } catch {}
+  applyTheme(t);
+};
+applyTheme(document.documentElement.dataset.theme || null);
+
+// ── 시작 ──
+loadSettings().catch((e) => toast('설정을 불러오지 못했습니다: ' + e.message, true));
+loadStatus();
+// 잠금 풀기 입력 중에는 대시보드를 새로 그리지 않음 (입력하던 글자가 사라지지 않게)
+const unlocking = () => [...document.querySelectorAll('.unlock:not([hidden])')].length > 0;
+setInterval(() => { if (!document.hidden && $('dash').classList.contains('on') && !unlocking()) loadStatus(); }, 5000);
+
+$('accounts').addEventListener('click', async (e) => {
+  const open = e.target.closest('[data-unlock]');
+  if (open) {
+    const id = open.dataset.unlock, box = $('unlock-' + id);
+    if (!box.hidden) { box.hidden = true; box.innerHTML = ''; return; }
+    try {
+      const r = await api(`accounts/${id}/unlock-phrase`);
+      if (!r.locked) { toast('이미 풀려 있습니다.'); loadStatus(); return; }
+      box.hidden = false;
+      box.innerHTML = r.phrase
+        ? `<small>아래 문구를 <b>직접</b> 입력하세요. (붙여넣기는 막혀 있습니다)</small>
+           <div class="target">${esc(r.phrase)}</div>
+           <div class="row2"><input type="text" autocomplete="off" spellcheck="false" placeholder="문구 입력">
+             <button class="btn primary" data-unlock-go="${id}">확인</button>
+             <button class="btn" data-unlock-cancel="${id}">취소</button></div>
+           <div class="msg"></div>`
+        : `<small>${esc(r.message)}</small> <button class="btn" data-unlock-cancel="${id}">닫기</button>`;
+      const inp = box.querySelector('input');
+      if (inp) {
+        inp.addEventListener('paste', (ev) => { ev.preventDefault(); box.querySelector('.msg').textContent = '붙여넣기 대신 직접 입력하세요.'; });
+        inp.addEventListener('drop', (ev) => ev.preventDefault());
+        inp.addEventListener('keydown', (ev) => { if (ev.key === 'Enter' && !ev.isComposing) box.querySelector('[data-unlock-go]').click(); });
+        inp.focus();
+      }
+    } catch (err) { toast(err.message, true); }
+    return;
+  }
+  const cancel = e.target.closest('[data-unlock-cancel]');
+  if (cancel) { const box = $('unlock-' + cancel.dataset.unlockCancel); box.hidden = true; box.innerHTML = ''; return; }
+  const go = e.target.closest('[data-unlock-go]');
+  if (go) {
+    const id = go.dataset.unlockGo, box = $('unlock-' + id), inp = box.querySelector('input'), msg = box.querySelector('.msg');
+    if (!inp.value.trim()) { inp.focus(); return; }
+    go.disabled = true;
+    try {
+      const r = await api(`accounts/${id}/unlock`, { method: 'POST', body: JSON.stringify({ phrase: inp.value }) });
+      box.hidden = true; box.innerHTML = '';
+      toast(r.status === 'unlocked' ? `잠금을 풀었습니다. ${(r.unlocked_until || '').slice(11, 16)}까지 거래할 수 있습니다.` : '이미 풀려 있습니다.');
+      loadStatus();
+    } catch (err) { msg.style.color = 'var(--bad)'; msg.textContent = err.message; go.disabled = false; inp.select(); }
+  }
+});
+</script>
+</body>
+</html>

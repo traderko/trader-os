@@ -1,0 +1,28 @@
+# TraderOS (Windows 전용 - MetaTrader5 패키지가 Windows에서만 동작)
+fastapi
+uvicorn
+starlette
+python-multipart
+SQLAlchemy
+aiosqlite
+greenlet
+alembic
+python-dotenv
+cryptography
+apscheduler
+httpx
+requests
+psutil
+pywin32
+MetaTrader5
+pandas
+numpy
+pyautogui
+pywinauto
+
+# 선택: PostgreSQL을 쓸 때만 (.env 에 DATABASE_URL=postgresql+asyncpg://...)
+# asyncpg
+# psycopg2-binary
+
+# 선택: 안드로이드 앱 푸시(Firebase)를 쓸 때만 (secrets\ 에 키 파일)
+# firebase-admin

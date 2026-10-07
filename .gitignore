@@ -1,0 +1,13 @@
+# 비밀 정보
+.env
+secrets/
+
+# 실행하면 생기는 것 (설정·DB·암호화 키·로그·사진)
+data/
+uploads/
+logs/
+*.log
+__pycache__/
+*.pyc
+venv/
+.venv/
