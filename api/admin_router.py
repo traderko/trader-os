@@ -62,6 +62,7 @@ RUNTIME: dict = {
     "log_dir": os.path.join(BASE_DIR, "logs"),
     "start_account": None,   # async (account_id) -> None : 터미널·워커 실행
     "stop_account": None,    # async (account_id) -> None : 워커 종료
+    "restart_terminal": None,  # async (account_id) -> None : MT5 껐다 켜기 + 워커 다시 실행
     "starting": set(),       # 지금 켜는 중인 account_id
     "start_errors": {},      # account_id -> 마지막 실행 오류
     "terminal_dir_for": None,  # (계좌번호) -> MT5 설치 폴더 (예: C:\\mt5\\12345678)
@@ -428,9 +429,10 @@ async def _make_default(db: AsyncSession, acc: Account) -> None:
 _bg_tasks: set = set()
 
 
-def _run_in_background(account_id: int, start: bool) -> None:
-    """터미널 실행·MT5 설치본 복사는 오래 걸릴 수 있어서 응답을 먼저 보내고 뒤에서 처리."""
-    fn = RUNTIME.get("start_account" if start else "stop_account")
+def _run_in_background(account_id: int, start: bool, action: str | None = None) -> None:
+    """터미널 실행·MT5 설치본 복사는 오래 걸릴 수 있어서 응답을 먼저 보내고 뒤에서 처리.
+    action: 'restart_terminal' 이면 MT5 재시작 (start=True 처럼 '켜는 중'으로 표시)"""
+    fn = RUNTIME.get(action or ("start_account" if start else "stop_account"))
     if fn is None:
         return  # 관리 화면만 따로 띄운 경우(테스트 등)
 
@@ -443,7 +445,7 @@ def _run_in_background(account_id: int, start: bool) -> None:
             await fn(account_id)
         except Exception as e:
             RUNTIME["start_errors"][account_id] = str(e)
-            print(f"[admin] account_id={account_id} {'실행' if start else '중지'} 실패: {e}")
+            print(f"[admin] account_id={account_id} {'MT5 재시작' if action else ('실행' if start else '중지')} 실패: {e}")
         finally:
             RUNTIME["starting"].discard(account_id)
 
@@ -541,6 +543,20 @@ async def edit_account(account_id: int, body: AccountPatch, db: AsyncSession = D
     if turned_off:
         _run_in_background(account_id, start=False)
     return _account_out(await _get_account(db, account_id))
+
+
+@router.post("/api/accounts/{account_id}/restart-mt5")
+async def restart_mt5(account_id: int, db: AsyncSession = Depends(get_db)):
+    """MT5를 정상 종료 후 다시 띄우고 워커도 다시 실행 (서버 재시작 없이)"""
+    acc = await _get_account(db, account_id)
+    if not acc.lock_enabled:
+        raise HTTPException(400, "MT5 실행이 꺼진 계좌입니다. 먼저 MT5 실행을 켜세요.")
+    if account_id in RUNTIME["starting"]:
+        raise HTTPException(409, "이미 켜는 중입니다. 잠시 기다려 주세요.")
+    if RUNTIME.get("restart_terminal") is None:
+        raise HTTPException(503, "이 서버에서는 MT5 재시작을 쓸 수 없습니다.")
+    _run_in_background(account_id, start=True, action="restart_terminal")
+    return {"ok": True}
 
 
 @router.delete("/api/accounts/{account_id}")

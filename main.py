@@ -304,6 +304,51 @@ async def stop_account_runtime(account_id: int) -> None:
             proc.kill()
 
 
+def _restart_terminal_blocking(account_id: int, cfg: dict):
+    """떠 있는 MT5를 정상 종료(창 닫기)한 뒤 EA를 다시 깔고 새로 띄운다. (블로킹 - 스레드에서 호출)
+    포지션은 브로커 서버에 있으므로 터미널을 껐다 켜도 그대로다."""
+    running = ea_installer.find_running(cfg["terminal_path"])
+    if running is not None:
+        print(f"[runtime] account={account_id} MT5 종료 중 (pid={running.pid})")
+        if not ea_installer.close_terminal(running):
+            raise RuntimeError("MT5가 꺼지지 않습니다. 작업 관리자에서 terminal64.exe 를 직접 끈 뒤 다시 해 보세요.")
+        time.sleep(2)   # 종료 직후 바로 띄우면 이전 프로세스가 파일을 잡고 있을 수 있음
+    return _launch_terminal_with_ea(account_id, cfg)
+
+
+async def restart_terminal_runtime(account_id: int) -> None:
+    """관리 화면 [MT5 재시작] - 워커 멈춤 → MT5 껐다 켜기(EA 다시 설치) → 워커 다시 실행.
+    MT5가 멈췄거나, 실수로 껐거나, EA가 차트에서 빠졌을 때 서버를 재시작하지 않고 복구."""
+    async with _runtime_lock:
+        await GenerateTerminalConfig.main()   # config.ini 를 최신 설정으로 (시작 차트 종목 등)
+        cfg = (await _load_accounts()).get(account_id)
+        if cfg is None:
+            raise RuntimeError("MT5 실행이 꺼진 계좌입니다. 계좌 탭에서 MT5 실행을 먼저 켜세요.")
+
+        # 워커가 MT5에 붙어 있으므로 먼저 멈춤 (watchdog이 그 사이 다시 띄우지 않게 목록에서 뺌)
+        _account_configs.pop(account_id, None)
+        proc = _worker_procs.pop(account_id, None)
+        if proc is not None and proc.poll() is None:
+            print(f"[runtime] account={account_id} MT5 재시작 - 워커 종료 (pid={proc.pid})")
+            proc.terminate()
+            try:
+                await asyncio.to_thread(proc.wait, 5)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+
+        _terminal_procs.pop(account_id, None)
+        _terminal_procs[account_id] = await asyncio.to_thread(_restart_terminal_blocking, account_id, cfg)
+        await asyncio.sleep(5)   # 터미널 로그인 대기 (기동 때와 같은 값)
+
+        _account_configs[account_id] = cfg
+        mt5_gateway_router.WORKER_PORTS[account_id] = cfg["worker_port"]
+        if account_id in _SKIP_WORKER_IDS:
+            print(f"[runtime] account={account_id} 워커 자동 스폰 스킵 (수동 실행 대상)")
+            return
+        _worker_procs[account_id] = _spawn_worker(account_id, cfg)
+        print(f"[runtime] account={account_id} MT5 재시작 완료")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     await init_db.init_db()
@@ -371,6 +416,7 @@ async def lifespan(app: FastAPI):
         # 관리 화면의 "앱" 탭 - 플러터 웹 빌드가 있을 때만 (메인 서버 포트는 .env TRADEROS_PORT, 기본 8000)
         web_app={"port": int(os.getenv("TRADEROS_PORT", "8000")), "path": APP_PATH + "/"},
         start_account=start_account_runtime, stop_account=stop_account_runtime,
+        restart_terminal=restart_terminal_runtime,
         terminal_dir_for=lambda number: os.path.dirname(_terminal_path_for(number)),
     )
     admin_server, admin_task = admin_app.start_admin_server()

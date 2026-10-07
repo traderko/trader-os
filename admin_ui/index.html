@@ -543,6 +543,7 @@ function renderAccounts(s) {
         ${a.is_default ? '<span class="badge warn">기본</span>' : ''}
         <span class="badge ${w[0]}">${w[1]}</span>
         ${eaBadge(a)}
+        ${a.lock_enabled ? `<button class="btn" style="margin-left:auto" data-restart="${a.id}" data-num="${esc(a.account_number)}" ${a.worker === 'starting' ? 'disabled' : ''} title="MT5를 정상 종료한 뒤 다시 띄우고 tradeLock EA를 다시 붙입니다">MT5 재시작</button>` : ''}
       </div>${lock}${mt5}</div>`;
   }).join('');
 }
@@ -901,6 +902,19 @@ $('logFile').onchange = () => { loadLog(); setTimeout(() => $('logText').scrollT
 $('logReload').onclick = loadLog;
 setInterval(() => { if ($('logAuto').checked && $('logs').classList.contains('on')) loadLog(); }, 5000);
 
+// ── MT5 재시작 (대시보드·계좌 탭 공용) ──
+async function restartMt5(id, num) {
+  if (!confirm(`${num} 계좌의 MT5를 재시작할까요?\n\nMT5를 정상 종료한 뒤 다시 띄우고 tradeLock EA를 다시 붙입니다. (30초~1분)\n포지션은 브로커 서버에 있어서 그대로 유지되지만, 재시작하는 동안에는 잠금 감시가 잠깐 멈춥니다.`)) return false;
+  await api(`accounts/${id}/restart-mt5`, { method: 'POST' });
+  toast('MT5를 재시작하는 중입니다. 상태가 "워커 실행 중"으로 바뀌면 끝난 것입니다.');
+  return true;
+}
+document.addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-restart]'); if (!b) return;
+  try { if (await restartMt5(b.dataset.restart, b.dataset.num)) { b.disabled = true; loadStatus(); } }
+  catch (err) { toast(err.message, true); }
+});
+
 // ── 계좌 ──
 const WORKER_TXT = { running: ['ok', '워커 실행 중'], starting: ['warn', '켜는 중…'], stopped: ['bad', '워커 멈춤'], off: ['', '조회 전용 · MT5 안 띄움'] };
 async function loadAccounts() {
@@ -923,6 +937,7 @@ async function loadAccounts() {
           ${s.start_error ? `<br><small style="color:var(--bad)">실행 오류: ${esc(s.start_error)}</small>` : ''}
         </span>
         <label class="switch"><input type="checkbox" data-acc-lock ${a.lock_enabled ? 'checked' : ''}> MT5 실행</label>
+        ${a.lock_enabled ? `<button class="btn" data-acc-restart ${s.worker === 'starting' ? 'disabled' : ''} title="MT5를 정상 종료한 뒤 다시 띄우고 tradeLock EA를 다시 붙입니다">MT5 재시작</button>` : ''}
         ${a.is_default ? '' : '<button class="btn" data-acc-default>기본으로</button>'}
         <button class="btn" data-acc-pw>비밀번호 변경</button>
         <button class="btn danger" data-acc-del>삭제</button>
@@ -935,7 +950,9 @@ $('accList').addEventListener('click', async (e) => {
   const row = e.target.closest('[data-acc]'); if (!row) return;
   const id = row.dataset.acc, num = row.querySelector('.acc-num').textContent;
   try {
-    if (e.target.closest('[data-acc-default]')) {
+    if (e.target.closest('[data-acc-restart]')) {
+      if (!(await restartMt5(id, num))) return;
+    } else if (e.target.closest('[data-acc-default]')) {
       await api('accounts/' + id, { method: 'PATCH', body: JSON.stringify({ is_default: true }) }); toast(`${num}을(를) 기본 계좌로 바꿨습니다.`);
     } else if (e.target.closest('[data-acc-pw]')) {
       const pw = prompt(`${num} 계좌의 새 비밀번호`); if (!pw) return;
