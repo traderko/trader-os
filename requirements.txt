@@ -14,7 +14,7 @@ httpx
 requests
 psutil
 pywin32
-MetaTrader5
+metatrader5
 pandas
 numpy
 pyautogui

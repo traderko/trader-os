@@ -298,6 +298,14 @@ async def get_lock_state(db: AsyncSession, account_id: int) -> dict:
         "phrase_type": PHRASE_TYPE_SESSION if current_reason == "session_window" else accepted[0],
         "phrase_types": accepted,   # 실제로 받는 문구 종류 전체
     }
+    # 일일 손실 한도 (services/loss_limit.py) - 오늘 손실률과, 지금 잠금이 그것 때문인지
+    from services import loss_limit
+    daily = loss_limit.public_info(account_id)
+    if daily is not None:
+        extra["daily_loss"] = daily
+    if current_reason == "manual" and loss_limit.locked_by_limit(account_id, lock.manual_lock_until):
+        extra["manual_kind"] = "loss_limit"
+
     if session is not None:
         extra["session"] = {
             "start": session.start.isoformat(),
@@ -404,6 +412,20 @@ async def confirm_unlock(db: AsyncSession, account_id: int, account_number: str,
     }
  
  
+async def set_loss_limit_lock(db: AsyncSession, account_id: int, until: datetime) -> None:
+    """일일 손실 한도 - until(다음 거래일 06:00)까지 풀 수 없는 잠금. 수동 잠금과 같은 칸을 쓰며,
+    이미 더 늦게까지 걸린 수동 잠금이 있으면 그대로 둔다. (알림은 호출한 쪽에서)"""
+    now = datetime.now(KST)
+    lock = await _get_or_create_lock(db, account_id)
+    cur = lock.manual_lock_until.replace(tzinfo=KST) if lock.manual_lock_until else None
+    if cur is not None and cur >= until:
+        return
+    if cur is None or cur <= now:
+        lock.manual_lock_since = now.replace(tzinfo=None)
+    lock.manual_lock_until = until.astimezone(KST).replace(tzinfo=None)
+    await db.commit()
+
+
 async def set_manual_lock(db: AsyncSession, account_id: int, account_number: str, minutes: int) -> dict:
     max_minutes = lock_cfg()["manual_lock_max_minutes"]
     if minutes <= 0 or minutes > max_minutes:

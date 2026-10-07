@@ -90,6 +90,7 @@
   .lockbox.open { background: var(--ok-weak); }
   .lockbox > b { display: block; }
   .lockbox small { color: var(--muted); }
+  .lockbox small.daily { display: block; margin-top: 4px; }
   .lockbox .unlock-btn { margin-top: 8px; }
   .unlock { margin-top: 10px; }
   .unlock .target { background: var(--panel); border: 1px dashed var(--line); border-radius: 8px; padding: 8px 10px;
@@ -266,6 +267,21 @@
         </select>
         <button class="btn" id="sessAdd">+ 구간 추가</button>
       </div>
+    </div>
+
+    <div class="panel">
+      <h2>일일 손실 한도</h2>
+      <p class="hint">거래일(한국 시간 <b>06:00</b>) 시작 평가금보다 몇 % 줄었는지 2초마다 봅니다. 그날 입금·출금은 빼고 계산합니다.
+        차단·청산은 <b>10초 동안 계속</b> 넘어 있어야 실행합니다 (스프레드가 순간 튀어서 잘못 청산되지 않게).
+        차단·청산으로 걸린 잠금은 확인 문구로 풀 수 없고, 다음 거래일 06:00에 풀립니다. 안 쓰는 단계는 0으로 두세요.</p>
+      <div class="row"><label class="name">일일 손실 한도 사용</label>
+        <label class="switch"><input type="checkbox" data-k="daily_loss_enabled"> 켜기</label></div>
+      <div class="row"><label class="name">경고<small>텔레그램으로 알림만</small></label>
+        <input type="number" data-k="daily_loss_warn_pct" min="0" max="50"><span class="unit">% 손실</span></div>
+      <div class="row"><label class="name">새 진입 차단<small>지금 포지션은 두고, 새로 들어가면 바로 청산</small></label>
+        <input type="number" data-k="daily_loss_block_pct" min="0" max="50"><span class="unit">% 손실</span></div>
+      <div class="row"><label class="name">전부 청산<small>모든 포지션을 닫고 다음 거래일까지 잠금</small></label>
+        <input type="number" data-k="daily_loss_close_pct" min="0" max="50"><span class="unit">% 손실</span></div>
     </div>
 
     <div class="panel">
@@ -522,11 +538,14 @@ function renderAccounts(s) {
       const why = L.reason === 'session_window' && L.session && L.session.names
         ? L.session.names.join('·') + ' 집중 구간' : (REASON[L.reason] || L.reason || '');
       const causes = L.session && L.session.causes ? ` (${L.session.causes.map(esc).join(', ')})` : '';
+      const dl = L.daily_loss && L.daily_loss.enabled
+        ? `<small class="daily">오늘 손실 <b>${Number(L.daily_loss.pct || 0).toFixed(1)}%</b> · ${[['warn', '경고'], ['block', '차단'], ['close', '청산']].filter(([k]) => L.daily_loss[k]).map(([k, n]) => `${n} ${L.daily_loss[k]}%`).join(' · ')}</small>` : '';
+      const lossLock = L.manual_kind === 'loss_limit';
       lock = L.locked
-        ? `<div class="lockbox locked"><b>🔒 잠김 · ${esc(why)}${causes}</b><small>${L.reason === 'manual' ? `남은 시간 ${hm(L.remaining_sec)}` : (L.phrase_type === 'session' ? '전용 문구를 입력해야 풀립니다' : '확인 문구를 입력해야 풀립니다')}</small>
+        ? `<div class="lockbox locked"><b>🔒 잠김 · ${lossLock ? '일일 손실 한도' : esc(why)}${causes}</b><small>${L.reason === 'manual' ? `${lossLock ? '다음 거래일 06:00에 풀림 · ' : ''}남은 시간 ${hm(L.remaining_sec)}` : (L.phrase_type === 'session' ? '전용 문구를 입력해야 풀립니다' : '확인 문구를 입력해야 풀립니다')}</small>
             ${L.reason === 'manual' ? '' : `<div><button class="btn unlock-btn" data-unlock="${a.id}">잠금 풀기</button></div>`}
-            <div class="unlock" id="unlock-${a.id}" hidden></div></div>`
-        : `<div class="lockbox open"><b>🔓 거래 가능</b><small>${esc(why)} · ${hm(L.remaining_sec)} 뒤 다시 잠김</small></div>`;
+            <div class="unlock" id="unlock-${a.id}" hidden></div>${dl}</div>`
+        : `<div class="lockbox open"><b>🔓 거래 가능</b><small>${esc(why)} · ${hm(L.remaining_sec)} 뒤 다시 잠김</small>${dl}</div>`;
     }
     const m = a.mt5;
     const mt5 = m ? `<dl class="kv">

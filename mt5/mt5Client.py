@@ -74,7 +74,7 @@ class Mt5Client:
     
     def __init__(self):
         load_dotenv()
-        main_account = int(os.getenv("MAIN_ACCOUNT"))
+        main_account = int(os.getenv("MAIN_ACCOUNT") or 0)   # 예전 GUI 자동화용 - 없어도 됨
         Mt5Client.main_account = main_account
         self.main_account = main_account
 

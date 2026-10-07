@@ -318,6 +318,7 @@
 .viewonly-note h2 { margin: 0 0 6px; }
 .viewonly-note p { margin: 0; line-height: 1.6; }
 .pnote { grid-column: 1 / -1; font-size: 12px; color: var(--muted, #888); line-height: 1.5; }
+.lock small.daily { display: block; margin-top: 3px; }
 </style>
 </head>
 <body>
@@ -673,17 +674,22 @@ async function loadLock() {
 function renderLock() {
   const el = $('lock'), s = lockState;
   if (!s) { el.className = 'lock unknown'; el.innerHTML = '<div><b>서버에 연결할 수 없음</b><small>잠시 뒤 다시 확인합니다.</small></div>'; return; }
-  const why = reasonText(s);
+  const lossLock = s.manual_kind === 'loss_limit';
+  const why = lossLock ? '일일 손실 한도' : reasonText(s);
   const causes = s.session && s.session.causes && s.session.causes.length ? ` (${s.session.causes.map(esc).join(', ')})` : '';
+  // 일일 손실 한도를 켰으면 오늘 손실률을 같이 보여줌
+  const d = s.daily_loss && s.daily_loss.enabled ? s.daily_loss : null;
+  const dl = d ? `<small class="daily">오늘 손실 <b>${Number(d.pct || 0).toFixed(1)}%</b> · ${[['warn', '경고'], ['block', '차단'], ['close', '청산']].filter(([k]) => d[k]).map(([k, n]) => `${n} ${d[k]}%`).join(' · ')}</small>` : '';
   if (s.locked) {
     const manual = s.reason === 'manual';
     el.className = 'lock locked';
     el.innerHTML = `<div><b>🔒 잠김 · ${esc(why)}${causes}</b>
-      <small>${manual ? `${hm(s.remaining_sec)} 뒤 자동으로 풀립니다` : (s.phrase_type && s.phrase_type.startsWith('session') ? '전용 문구를 입력해야 풀립니다' : '확인 문구를 입력해야 풀립니다')}</small></div>
+      <small>${manual ? `${hm(s.remaining_sec)} 뒤 자동으로 풀립니다${lossLock ? ' (다음 거래일 06:00)' : ''}` : (s.phrase_type && s.phrase_type.startsWith('session') ? '전용 문구를 입력해야 풀립니다' : '확인 문구를 입력해야 풀립니다')}</small></div>
+      ${dl}</div>
       ${manual ? '' : '<button class="btn small" id="unlockOpen">잠금 풀기</button>'}`;
   } else {
     el.className = 'lock open';
-    el.innerHTML = `<div><b>🔓 거래 가능</b><small>${esc(why)}${why ? ' · ' : ''}${hm(s.remaining_sec)} 뒤 다시 잠김</small></div>`;
+    el.innerHTML = `<div><b>🔓 거래 가능</b><small>${esc(why)}${why ? ' · ' : ''}${hm(s.remaining_sec)} 뒤 다시 잠김</small>${dl}</div>`;
   }
 }
 $('lock').addEventListener('click', (e) => { if (e.target.id === 'unlockOpen') openUnlock(); });

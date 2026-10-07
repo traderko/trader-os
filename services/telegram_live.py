@@ -94,11 +94,14 @@ def _lock_line(s: dict | None) -> str:
         why = ("·".join(names) + " " if names else "") + "집중 구간"
     else:
         why = next((v for k, v in _REASON.items() if reason.startswith(k)), reason)
+    d = s.get("daily_loss") or {}
+    daily = f" · 오늘 {-d.get('pct', 0):+.1f}%" if d.get("enabled") else ""   # 일일 손실 한도를 켠 경우
     if s.get("locked"):
         if reason == "manual":
-            return f"🔒 수동 잠금 · {_hm(s.get('remaining_sec', 0))} 뒤 해제"
-        return f"🔒 잠김 · {html.escape(why)}"
-    return f"🔓 거래 가능 · {_hm(s.get('remaining_sec', 0))} 뒤 재확인"
+            what = "손실 한도 잠금" if s.get("manual_kind") == "loss_limit" else "수동 잠금"
+            return f"🔒 {what} · {_hm(s.get('remaining_sec', 0))} 뒤 해제{daily}"
+        return f"🔒 잠김 · {html.escape(why)}{daily}"
+    return f"🔓 거래 가능 · {_hm(s.get('remaining_sec', 0))} 뒤 재확인{daily}"
 
 
 def _positions_block(positions: list[dict]) -> list[str]:

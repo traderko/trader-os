@@ -52,6 +52,15 @@ DEFAULTS: dict = {
         ],
         # 수동 잠금
         "manual_lock_max_minutes": 24 * 60,
+        # 일일 손실 한도 - 거래일(한국 시간 06:00) 시작 평가금 대비 손실률 (services/loss_limit.py)
+        #   warn  : 텔레그램 경고
+        #   block : 새 진입 차단 (다음 거래일 06:00까지 풀 수 없는 잠금)
+        #   close : 모든 포지션 청산 + 다음 거래일까지 잠금
+        #   0 이면 그 단계는 쓰지 않음
+        "daily_loss_enabled": False,
+        "daily_loss_warn_pct": 5,
+        "daily_loss_block_pct": 7,
+        "daily_loss_close_pct": 10,
     },
     "telegram": {
         "bot_token": "",
@@ -80,6 +89,9 @@ _LOCK_RANGES = {
     "consec_loss_lookback_hours": (1, 168),
     "consec_loss_unlock_minutes": (1, 24 * 60),
     "manual_lock_max_minutes": (1, 7 * 24 * 60),
+    "daily_loss_warn_pct": (0, 50),
+    "daily_loss_block_pct": (0, 50),
+    "daily_loss_close_pct": (0, 50),
 }
 
 _LABELS = {
@@ -87,6 +99,9 @@ _LABELS = {
     "consec_loss_lookback_hours": "연속 손절 계산 기간(시간)",
     "consec_loss_unlock_minutes": "연속 손절 해제 시간(분)",
     "manual_lock_max_minutes": "수동 잠금 최대 시간(분)",
+    "daily_loss_warn_pct": "손실 경고(%)",
+    "daily_loss_block_pct": "새 진입 차단(%)",
+    "daily_loss_close_pct": "전부 청산(%)",
 }
 
 _lock = threading.Lock()
@@ -194,6 +209,13 @@ def _validate(settings: dict) -> None:
         v = lock.get(key)
         if not isinstance(v, int) or isinstance(v, bool) or not (lo <= v <= hi):
             raise SettingsError(f"{_LABELS.get(key, key)}은(는) {lo}~{hi} 사이 정수여야 합니다. (입력: {v})")
+
+    lock["daily_loss_enabled"] = bool(lock.get("daily_loss_enabled", False))
+    steps = [lock[k] for k in ("daily_loss_warn_pct", "daily_loss_block_pct", "daily_loss_close_pct") if lock[k] > 0]
+    if steps != sorted(steps) or len(set(steps)) != len(steps):
+        raise SettingsError("일일 손실 한도는 경고 < 새 진입 차단 < 전부 청산 순서로 커져야 합니다. (안 쓰는 단계는 0)")
+    if lock["daily_loss_enabled"] and not steps:
+        raise SettingsError("일일 손실 한도를 켜려면 단계를 하나 이상 정하세요.")
 
     lock["sessions"] = _validate_sessions(lock.get("sessions"))
     lock["checkin_rules"] = _validate_checkin_rules(lock.get("checkin_rules"))

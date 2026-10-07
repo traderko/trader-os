@@ -22,6 +22,7 @@ from util.parser import parse_dt
 router = APIRouter(prefix="/trades")
 
 LOCK_CLOSE_MAGIC = 990099
+LOSS_LIMIT_MAGIC = 990098   # services/loss_limit.py - 일일 손실 한도 청산
 BATCH_SIZE = 1000  # 11 columns * 1000 = 11000 params, 여유있게 안전
 
 def _iso(dt):
@@ -249,6 +250,8 @@ async def create_trade(
             + "\n거래 잠금 상태에서 들어간 포지션이라 tradeLock EA가 바로 청산했습니다.",
             json.dumps({"type": "trade_lock_forced_close", "symbol": data.symbol, **payload}),
         )
+    elif data.entry_type == "CLOSE" and getattr(data, "magic", 0) == LOSS_LIMIT_MAGIC:
+        pass   # 일일 손실 한도로 한꺼번에 청산한 것 - 워커가 요약 알림을 따로 보냄
     else:
         fcm.send(
             f"[{data.entry_type}]",
