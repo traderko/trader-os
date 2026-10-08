@@ -253,13 +253,138 @@ async def create_trade(
     elif data.entry_type == "CLOSE" and getattr(data, "magic", 0) == LOSS_LIMIT_MAGIC:
         pass   # 일일 손실 한도로 한꺼번에 청산한 것 - 워커가 요약 알림을 따로 보냄
     else:
-        fcm.send(
-            f"[{data.entry_type}]",
-            f"{data.symbol}",
-            json.dumps(payload)
-        )
+        # 알림 문구에 워커 조회(같은 종목 포지션)가 들어가서, EA 응답을 늦추지 않게 뒤에서 보냄
+        import asyncio
+        task = asyncio.create_task(_notify_trade(account.id, account.account_number, trade.id, data, kst_time, fcm, payload))
+        _bg.add(task)
+        task.add_done_callback(_bg.discard)
 
     return {"ok": True}
+
+
+_bg: set = set()
+
+
+async def _notify_trade(account_id: int, account_number: str, trade_id: int, data: TradeCreate,
+                        kst_time: datetime, fcm: FCMService, payload: dict) -> None:
+    from db.session import AsyncSessionLocal
+    try:
+        async with AsyncSessionLocal() as db:
+            trade = await db.get(Trade, trade_id)
+            title, body = await _trade_message(db, account_id, account_number, trade, data, kst_time)
+    except Exception as e:
+        print(f"[trade] 알림 문구 만들기 실패: {e}")
+        title, body = f"[{data.entry_type}] {data.symbol}", f"{data.position} {data.volume:g}lot @{data.price}"
+    fcm.send(title, body, json.dumps(payload))
+
+
+# ── 진입·청산 알림 문구 ──────────────────────────────────────────
+def _num(v: float, d: int = 2) -> str:
+    return f"{v:,.{d}f}"
+
+
+def _price(v: float | None) -> str:
+    if v is None:
+        return "-"
+    return _num(v, 2 if abs(v) >= 100 else 5 if abs(v) < 10 else 3)
+
+
+def _hold(sec: float) -> str:
+    sec = max(0, int(sec))
+    d, rem = divmod(sec, 86400)
+    h, rem = divmod(rem, 3600)
+    m = rem // 60
+    if d:
+        return f"{d}일 {h}시간"
+    if h:
+        return f"{h}시간 {m}분"
+    return f"{m}분" if m else f"{sec}초"
+
+
+async def _symbol_positions(account_id: int, symbol: str) -> list[dict]:
+    """같은 종목 지금 포지션 (워커에 물어봄 - 안 되면 빈 목록)"""
+    import asyncio
+    try:
+        rows = await asyncio.wait_for(worker_get(account_id, "/positions-all"), 2)
+        return [p for p in rows if p.get("symbol") == symbol]
+    except Exception:
+        return []
+
+
+def _side_summary(positions: list[dict]) -> str:
+    out = []
+    for t, label in ((0, "BUY"), (1, "SELL")):
+        side = [p for p in positions if p.get("type") == t]
+        if side:
+            vol = sum(p["volume"] for p in side)
+            avg = sum(p["price_open"] * p["volume"] for p in side) / vol if vol else 0
+            out.append(f"{label} {vol:g}lot @{_price(avg)} ({len(side)}개)")
+    return " · ".join(out)
+
+
+async def _trade_message(db: AsyncSession, account_id: int, account_number: str, trade: Trade, data: TradeCreate,
+                         kst_time: datetime) -> tuple[str, str]:
+    """
+    진입:  🟢 진입 · XAUUSD+ BUY 0.5lot
+           가격 4,010.25 · 22:15
+           SL 3,990.00 · TP 4,050.00
+           같은 종목 보유: BUY 1.5lot @4,005.10 (3개)
+    청산:  ✅ 익절 · XAUUSD+ BUY 0.5lot  +512.50
+           4,000.00 → 4,010.25 (+10.25) · 보유 45분
+           손익 +516.00 · 수수료 -3.50
+           오늘 누적 +1,230.00 (5건 · 승 4)
+    """
+    acc_line = f"계좌 {account_number}"
+    when = kst_time.strftime("%H:%M")
+
+    if data.entry_type == "OPEN":
+        title = f"🟢 진입 · {data.symbol} {data.position} {data.volume:g}lot"
+        lines = [f"가격 {_price(data.price)} · {when} · {acc_line}"]
+        positions = await _symbol_positions(account_id, data.symbol)
+        me = next((p for p in positions if p.get("ticket") == data.ticket), None)
+        if me and (me.get("sl") or me.get("tp")):
+            lines.append(f"SL {_price(me.get('sl')) if me.get('sl') else '없음'} · TP {_price(me.get('tp')) if me.get('tp') else '없음'}")
+        elif me:
+            lines.append("SL 없음")
+        others = [p for p in positions if p.get("ticket") != data.ticket]
+        if others:
+            lines.append("같은 종목 보유: " + _side_summary(positions))
+        return title, "\n".join(lines)
+
+    # CLOSE - 진입 방향·가격은 기록된 거래에서 (청산 체결의 방향은 반대라서)
+    side = trade.position if trade.price_open is not None else ("BUY" if data.position == "SELL" else "SELL")
+    fee = trade.commission if trade.commission is not None else data.commission   # 진입+청산 수수료 합
+    net = (data.profit or 0) + (fee or 0)
+    icon, word = ("✅", "익절") if net > 0 else ("🔴", "손절") if net < 0 else ("⚪", "본전")
+    title = f"{icon} {word} · {data.symbol} {side} {data.volume:g}lot  {net:+,.2f}"
+    lines = []
+    if trade.price_open is not None:
+        move = (data.price - trade.price_open) if side == "BUY" else (trade.price_open - data.price)
+        hold = f" · 보유 {_hold((kst_time - trade.open_time).total_seconds())}" if trade.open_time else ""
+        lines.append(f"{_price(trade.price_open)} → {_price(data.price)} ({move:+,.2f}){hold}")
+    else:
+        lines.append(f"청산가 {_price(data.price)}")
+    lines.append(f"손익 {data.profit:+,.2f} · 수수료 {fee:+,.2f} · {when} · {acc_line}")
+
+    # 오늘(거래일 06:00부터) 누적
+    try:
+        from services.loss_limit import day_start
+        start = day_start(kst_time)
+        rows = (await db.execute(
+            select(Trade.profit, Trade.commission).where(
+                Trade.account_id == account_id, Trade.close_time != None, Trade.close_time >= start)
+        )).all()
+        if rows:
+            total = sum((r.profit or 0) + (r.commission or 0) for r in rows)
+            wins = sum(1 for r in rows if (r.profit or 0) + (r.commission or 0) > 0)
+            lines.append(f"오늘 누적 {total:+,.2f} ({len(rows)}건 · 승 {wins})")
+    except Exception:
+        pass
+
+    remain = await _symbol_positions(account_id, data.symbol)
+    if remain:
+        lines.append("남은 포지션: " + _side_summary(remain))
+    return title, "\n".join(lines)
 
 @router.get("/annual")
 async def get_annual_trades(
