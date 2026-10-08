@@ -458,6 +458,57 @@ async def write_admin_remote(body: AdminRemoteIn, request: Request):
     return out
 
 
+# ── 이번 주 경제지표 (지표일 잠금 확인용) ─────────────────────────────
+@router.get("/api/events")
+async def week_events(db: AsyncSession = Depends(get_db)):
+    """이번 주(브로커 거래일 월~일)에 저장된 고영향 USD 지표 + 그날 '지표일 포함' 집중 구간이 언제 잠기는지"""
+    from datetime import timedelta
+    from db.models.economic_event import EconomicEvent
+    from services import economic_event_service as ev
+    from services.settings_service import lock_cfg
+
+    now = datetime.now(lock_svc.KST)
+    today = lock_svc.to_broker_wallclock(now).date()
+    monday = today - timedelta(days=today.weekday())
+    rows = (await db.execute(
+        select(EconomicEvent).where(EconomicEvent.broker_date >= monday,
+                                    EconomicEvent.broker_date <= monday + timedelta(days=6))
+        .order_by(EconomicEvent.event_time)
+    )).scalars().all()
+
+    # 같은 시각에 einfomax 이름이 있으면 [FF] 이름은 숨김 (같은 지표)
+    main_times = {r.event_time for r in rows if not r.event_name.startswith("[FF]")}
+    sessions = [x for x in lock_cfg()["sessions"] if x["enabled"] and x["event_days"]]
+
+    days: dict = {}
+    for r in rows:
+        if r.event_name.startswith("[FF]") and r.event_time in main_times:
+            continue
+        d = days.setdefault(r.broker_date, [])
+        d.append({"name": r.event_name, "time": r.event_time.astimezone(lock_svc.KST).isoformat(),
+                  "source": "ff" if r.event_name.startswith("[FF]") else "einfomax"})
+
+    out = []
+    for i in range(7):
+        bd = monday + timedelta(days=i)
+        locks = []
+        if days.get(bd):
+            base = datetime(bd.year, bd.month, bd.day)
+            for x in sessions:
+                start = lock_svc.broker_wallclock_to_kst(base + timedelta(minutes=x["start_min"]))
+                end = lock_svc.broker_wallclock_to_kst(base + timedelta(minutes=x["end_min"]))
+                locks.append({"name": x["name"], "start": start.isoformat(), "end": end.isoformat()})
+        out.append({"broker_date": bd.isoformat(), "weekday": WEEKDAY_KR[bd.weekday()],
+                    "today": bd == today, "events": days.get(bd, []), "locks": locks})
+
+    def h(src):
+        x = ev.health[src]
+        return {"ok_at": x["ok_at"], "saved": x["saved"], "error": x["error"], "fail_since": x["fail_since"]}
+    return {"days": out, "total": sum(len(d["events"]) for d in out),
+            "event_sessions": [x["name"] for x in sessions],
+            "health": {"einfomax": h("einfomax"), "ff": h("ff")}}
+
+
 # ── 확인 문구 ───────────────────────────────────────────────────────
 class PhraseIn(BaseModel):
     phrase: str

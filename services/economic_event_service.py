@@ -14,7 +14,46 @@ from db.upsert import upsert_insert as insert
 from db.models.economic_event import EconomicEvent
 from db.session import AsyncSessionLocal
 
-#
+# ── 지표 받기 상태 (관리 화면 대시보드·텔레그램 경고용) ──
+# 이 일정이 비면 '지표일 잠금'이 조용히 안 걸린다 (2026-10-07: DB가 비어 있어 아시아장이 안 잠김).
+# 그래서 받기·저장이 계속 실패하면 텔레그램으로 알리고, 관리 화면에 이번 주 지표를 보여 준다.
+health: dict = {
+    "einfomax": {"ok_at": None, "saved": 0, "error": None, "fail_since": None, "alerted": False},
+    "ff": {"ok_at": None, "saved": 0, "error": None, "fail_since": None, "alerted": False},
+}
+# 이만큼 계속 실패하면 경고 (einfomax 10분 간격 → 30분 = 3번, FF 1시간 간격·요청 제한이 잦음 → 3시간)
+ALERT_AFTER = {"einfomax": 30 * 60, "ff": 3 * 3600}
+SOURCE_KR = {"einfomax": "einfomax(주 출처)", "ff": "Forex Factory(보조 출처)"}
+_empty_week_alerted: dict = {"day": None}
+
+
+def _telegram(title: str, body: str) -> None:
+    try:
+        from services.telegram_service import TelegramService
+        TelegramService().send(title, body)
+    except Exception:
+        pass
+
+
+def _record(source: str, ok: bool, saved: int = 0, error: str | None = None) -> None:
+    h = health[source]
+    now = _time.time()
+    if ok:
+        if h["alerted"]:
+            _telegram("✅ 경제지표 받기 복구", f"{SOURCE_KR[source]} 에서 다시 지표를 받고 있습니다.")
+        h.update(ok_at=now, saved=saved, error=None, fail_since=None, alerted=False)
+        return
+    h["error"] = error
+    h["fail_since"] = h["fail_since"] or now
+    print(f"[economic] {source} 지표 받기 실패: {error}")
+    if not h["alerted"] and now - h["fail_since"] >= ALERT_AFTER[source]:
+        h["alerted"] = True
+        mins = int((now - h["fail_since"]) // 60)
+        _telegram("⚠️ 경제지표를 받지 못하고 있습니다",
+                  f"{SOURCE_KR[source]} - {mins}분째 실패\n{error}\n\n"
+                  "지표일 잠금(집중 구간 '지표일 포함')이 걸리지 않을 수 있습니다. "
+                  "관리 화면 대시보드의 '이번 주 지표'를 확인하세요.")
+
 
 class EconomicEventService:
     KST = ZoneInfo(Mt5Client.KOREA_TIMEZONE_STR)
@@ -27,6 +66,15 @@ class EconomicEventService:
         self.loop = asyncio.get_running_loop()
 
     def check(self):
+        try:
+            saved = self._check_einfomax()
+        except Exception as e:
+            _record("einfomax", False, error=f"{type(e).__name__}: {e}"[:300])
+            return
+        _record("einfomax", True, saved)
+        self._check_empty_week()
+
+    def _check_einfomax(self) -> int:
         data = self._fetch_events()
 
         events = data.get("data", [])
@@ -63,9 +111,10 @@ class EconomicEventService:
         # 👉 거래 잠금(아시아장 집중 구간)용으로 DB에 저장
         if rows:
             if self.loop.is_closed():   # 서버가 꺼지는 중
-                return
+                return 0
             future = asyncio.run_coroutine_threadsafe(self._save(rows), self.loop)
             future.result(timeout=30)
+        return len(rows)
 
     # ── 두 번째 출처: Forex Factory 공개 피드 ──────────────────────────
     # 거래 잠금(지표일 판단) 전용. einfomax가 끊기거나 중요도 기준이 달라 빠지는 지표를 보완한다.
@@ -93,10 +142,19 @@ class EconomicEventService:
             pass
 
     def check_forexfactory(self):
+        try:
+            saved = self._check_forexfactory()
+        except Exception as e:
+            _record("ff", False, error=f"{type(e).__name__}: {e}"[:300])
+            return
+        if saved is not None:          # None = 최근에 받았거나 요청 제한 대기 (실패 아님)
+            _record("ff", True, saved)
+
+    def _check_forexfactory(self) -> int | None:
         now = _time.time()
         st = self._ff_state()
         if now - st.get("ok_at", 0) < self.FF_MIN_INTERVAL or now < st.get("retry_after", 0):
-            return   # 최근에 받았거나 차단 대기 중 - 저장된 일정 그대로 사용
+            return None   # 최근에 받았거나 차단 대기 중 - 저장된 일정 그대로 사용
 
         response = requests.get(self.FF_URL, headers={"User-Agent": "Mozilla/5.0"}, timeout=15)
         if response.status_code == 429:
@@ -106,7 +164,7 @@ class EconomicEventService:
                 wait = 3600
             self._ff_save_state(retry_after=now + max(wait, 600))
             print(f"[ff] Forex Factory 요청 제한(429) - {max(wait, 600) // 60}분 뒤에 다시 받습니다. 저장된 일정은 그대로 씁니다.")
-            return
+            return None
         response.raise_for_status()
         self._ff_save_state(ok_at=now, retry_after=0)
 
@@ -133,9 +191,32 @@ class EconomicEventService:
 
         if rows:
             if self.loop.is_closed():   # 서버가 꺼지는 중
-                return
+                return None
             future = asyncio.run_coroutine_threadsafe(self._save(rows), self.loop)
             future.result(timeout=30)
+        return len(rows)
+
+    def _check_empty_week(self) -> None:
+        """평일인데 이번 주(월~금) 지표가 하나도 없으면 하루 한 번 경고 - 휴일 주간일 수도 있어 '확인 필요'로만"""
+        now = datetime.now(EconomicEventService.KST)
+        if now.weekday() > 4 or now.weekday() == 0 and now.hour < 12:   # 주말·월요일 오전은 아직 일정이 덜 찼을 수 있음
+            return
+        today = now.date()
+        if _empty_week_alerted["day"] == today or self.loop.is_closed():
+            return
+        monday = today - timedelta(days=today.weekday())
+        future = asyncio.run_coroutine_threadsafe(self._count(monday, monday + timedelta(days=4)), self.loop)
+        if future.result(timeout=30) == 0:
+            _empty_week_alerted["day"] = today
+            _telegram("⚠️ 이번 주 경제지표가 하나도 없습니다",
+                      "고영향 USD 지표가 이번 주에 0개로 저장돼 있습니다. 휴일 주간이 아니라면 지표 받기에 문제가 있는 것입니다.\n"
+                      "관리 화면 대시보드의 '이번 주 지표'를 확인하세요.")
+
+    async def _count(self, start, end) -> int:
+        from sqlalchemy import func, select
+        async with AsyncSessionLocal() as db:
+            return (await db.execute(select(func.count()).select_from(EconomicEvent)
+                                     .where(EconomicEvent.broker_date >= start, EconomicEvent.broker_date <= end))).scalar()
 
     @staticmethod
     def _broker_date(dt_utc: datetime):

@@ -143,6 +143,13 @@
     font: 12px/1.45 Consolas, "D2Coding", monospace; white-space: pre-wrap; word-break: break-all;
   }
   .empty { color: var(--muted); padding: 20px 0; text-align: center; }
+  .evdays { display: grid; gap: 8px; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); margin-top: 8px; }
+  .evday { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+  .evday.today { border-color: var(--accent); }
+  .evday.none { color: var(--muted); }
+  .evday b { display: block; margin-bottom: 4px; }
+  .evday .ev { display: flex; gap: 8px; } .evday .ev time { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .evday .lk { margin-top: 6px; color: var(--warn); font-size: 12px; }
   .warnbar { background: var(--warn-weak); color: var(--warn); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; }
 
   /* 집중 구간 카드 */
@@ -190,6 +197,11 @@
   <section id="dash" class="on">
     <div id="dashWarn"></div>
     <div class="grid" id="accounts"><div class="empty">불러오는 중…</div></div>
+    <div class="panel" id="evPanel" style="margin-top:16px">
+      <h2>이번 주 지표 <small class="hint" id="evSub" style="font-weight:400"></small></h2>
+      <div id="evHealth"></div>
+      <div id="evDays" class="evdays"><div class="empty">불러오는 중…</div></div>
+    </div>
   </section>
 
   <!-- 계좌 -->
@@ -511,6 +523,7 @@ $('tabs').onclick = (e) => {
   const b = e.target.closest('button[data-tab]'); if (!b) return;
   document.querySelectorAll('#tabs button').forEach((x) => x.classList.toggle('on', x === b));
   document.querySelectorAll('main section').forEach((s) => s.classList.toggle('on', s.id === b.dataset.tab));
+  if (b.dataset.tab === 'dash') loadEvents();
   if (b.dataset.tab === 'logs') loadLogList();
   if (b.dataset.tab === 'update') loadUpdate(false);
   if (b.dataset.tab === 'phrases') loadPhrases();
@@ -567,6 +580,30 @@ function showVersion(v) {
   el.title = v.update_available ? '눌러서 업데이트 탭으로' : (v.release ? '지금 실행 중인 버전' : 'git 으로 받은 폴더 (자동 업데이트 없음)');
   el.onclick = v.update_available ? () => document.querySelector('#tabs button[data-tab="update"]').click() : null;
 }
+// ── 이번 주 지표 ──
+const kstHM = (iso) => new Date(iso).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false });
+const kstMD = (iso) => new Date(iso).toLocaleDateString('ko-KR', { timeZone: 'Asia/Seoul', month: 'numeric', day: 'numeric', weekday: 'short' });
+const agoMin = (t) => t ? Math.round((Date.now() / 1000 - t) / 60) : null;
+async function loadEvents() {
+  let r; try { r = await api('events'); } catch (e) { $('evDays').innerHTML = `<div class="empty">${esc(e.message)}</div>`; return; }
+  $('evSub').textContent = r.event_sessions.length
+    ? `· 지표가 있는 날은 ${r.event_sessions.join('·')} 구간이 잠깁니다 (고영향 USD, 한국 시간)`
+    : '· 지표일에 잠그는 집중 구간이 없습니다 (잠금 규칙 탭 → 집중 구간 → 지표일 포함)';
+  const warns = [];
+  for (const [k, label] of [['einfomax', 'einfomax'], ['ff', 'Forex Factory']]) {
+    const h = r.health[k];
+    if (h.error) warns.push(`${label} 받기 실패 (${agoMin(h.fail_since)}분째): ${esc(h.error)}`);
+  }
+  if (!r.total) warns.push('이번 주 저장된 지표가 0개입니다. 휴일 주간이 아니라면 지표 받기에 문제가 있습니다 - 지표일 잠금이 걸리지 않습니다.');
+  $('evHealth').innerHTML = warns.map((w) => `<div class="warnbar">${w}</div>`).join('');
+  $('evDays').innerHTML = r.days.map((d) => {
+    const evs = d.events.map((e) => `<div class="ev"><time>${kstMD(e.time).replace(/\s/g, '')} ${kstHM(e.time)}</time><span>${esc(e.name.replace(/^\[FF\] /, ''))}</span></div>`).join('');
+    const lk = d.locks.map((l) => `🔒 ${esc(l.name)} ${kstMD(l.start)} ${kstHM(l.start)}~${kstHM(l.end)}`).join('<br>');
+    return `<div class="evday${d.today ? ' today' : ''}${d.events.length ? '' : ' none'}"><b>${esc(d.weekday)} ${d.broker_date.slice(5).replace('-', '/')}${d.today ? ' · 오늘' : ''}</b>
+      ${evs || '지표 없음'}${lk ? `<div class="lk">${lk}</div>` : ''}</div>`;
+  }).join('');
+}
+
 async function loadStatus() {
   try {
     const s = await api('status');
@@ -1186,6 +1223,8 @@ applyTheme(document.documentElement.dataset.theme || null);
 // ── 시작 ──
 loadSettings().catch((e) => toast('설정을 불러오지 못했습니다: ' + e.message, true));
 loadStatus();
+loadEvents();
+setInterval(() => { if (!document.hidden && $('dash').classList.contains('on')) loadEvents(); }, 5 * 60 * 1000);
 // 잠금 풀기 입력 중에는 대시보드를 새로 그리지 않음 (입력하던 글자가 사라지지 않게)
 const unlocking = () => [...document.querySelectorAll('.unlock:not([hidden])')].length > 0;
 setInterval(() => { if (!document.hidden && $('dash').classList.contains('on') && !unlocking()) loadStatus(); }, 5000);
