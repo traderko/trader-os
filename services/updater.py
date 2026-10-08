@@ -49,6 +49,35 @@ def release_info() -> dict | None:
     return None
 
 
+def _git_commit() -> str | None:
+    """git 으로 받은 폴더면 지금 커밋 (앞 7자리) - 관리 화면 버전 표시용"""
+    git = os.path.join(BASE_DIR, ".git")
+    try:
+        head = open(os.path.join(git, "HEAD"), encoding="utf-8").read().strip()
+        if not head.startswith("ref:"):
+            return head[:7]
+        ref = head[4:].strip()
+        p = os.path.join(git, *ref.split("/"))
+        if os.path.isfile(p):
+            return open(p, encoding="utf-8").read().strip()[:7]
+        with open(os.path.join(git, "packed-refs"), encoding="utf-8") as f:
+            for line in f:
+                if line.strip().endswith(" " + ref):
+                    return line.split()[0][:7]
+    except OSError:
+        pass
+    return None
+
+
+def version_label() -> dict:
+    """관리 화면 위쪽에 보여줄 버전. 배포판: release.json 버전 / git 폴더: 커밋"""
+    info = release_info()
+    if info:
+        return {"version": info["version"], "label": f"v{info['version']}", "release": True}
+    c = _git_commit()
+    return {"version": None, "label": f"개발판 {c}" if c else "개발판", "release": False}
+
+
 def _ver(v: str) -> tuple:
     v = (v or "").strip().lstrip("vV")
     out = []

@@ -254,7 +254,17 @@ async def status(db: AsyncSession = Depends(get_db)):
         "web_app": RUNTIME.get("web_app"),   # {"port": 8000, "path": "/trader-os/"} - 플러터 웹 빌드가 있을 때만
         "accounts": items,
         "telegram_enabled": TelegramService().enabled,
+        "version": _version(),
     }
+
+
+def _version() -> dict:
+    from services import updater
+    v = updater.version_label()
+    s = updater.summary()
+    v["update_available"] = s["available"]
+    v["latest"] = (s.get("latest") or {}).get("version") if s["available"] else None
+    return v
 
 
 # ── 설정 ────────────────────────────────────────────────────────────

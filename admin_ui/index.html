@@ -49,6 +49,8 @@
     padding: 12px 20px; display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
   }
   header h1 { font-size: 17px; margin: 0; letter-spacing: -0.2px; }
+  header h1 .ver { font-size: 12px; font-weight: 500; color: var(--muted); margin-left: 4px; }
+  header h1 .ver.new { color: var(--warn); cursor: pointer; }
   .srv { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
   .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--muted); }
   .dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
@@ -163,7 +165,7 @@
 </head>
 <body>
 <header>
-  <h1>TraderOS 관리</h1>
+  <h1>TraderOS 관리 <span id="verLabel" class="ver" title="지금 실행 중인 버전"></span></h1>
   <div class="srv"><span class="dot" id="srvDot"></span><span id="srvText">연결 중…</span></div>
   <nav id="tabs">
     <button data-tab="dash" class="on">대시보드</button>
@@ -557,6 +559,14 @@ $('adminLogout').onclick = async () => {
 
 // ── 대시보드 ──
 let settings = null;
+function showVersion(v) {
+  if (!v) return;
+  const el = $('verLabel');
+  el.textContent = v.label + (v.update_available ? ` → v${v.latest} 있음` : '');
+  el.className = 'ver' + (v.update_available ? ' new' : '');
+  el.title = v.update_available ? '눌러서 업데이트 탭으로' : (v.release ? '지금 실행 중인 버전' : 'git 으로 받은 폴더 (자동 업데이트 없음)');
+  el.onclick = v.update_available ? () => document.querySelector('#tabs button[data-tab="update"]').click() : null;
+}
 async function loadStatus() {
   try {
     const s = await api('status');
@@ -564,6 +574,7 @@ async function loadStatus() {
     $('srvText').textContent = `서버 실행 중 · ${hm(s.uptime_sec)}째`;
     renderAccounts(s);
     setWebApp(s.web_app);
+    showVersion(s.version);
   } catch (e) {
     $('srvDot').className = 'dot bad';
     $('srvText').textContent = '서버에 연결할 수 없음';

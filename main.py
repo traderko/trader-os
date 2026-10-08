@@ -195,31 +195,18 @@ def _launch_terminal_with_ea(account_id: int, cfg: dict):
 
 WORKER_SCRIPT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trade_lock_worker.py")
 
-STDOUT_LOG_MAX_BYTES = 2 * 1024 * 1024  # 2MB 넘으면 마지막 절반만 남기고 자름
- 
- 
-def _cap_log_file(path: str, max_bytes: int):
-    """서브프로세스 stdout 캡처 파일이 무한정 커지는 걸 방지 - 초과분은 앞부분부터 잘라냄."""
-    if not os.path.exists(path):
-        return
-    if os.path.getsize(path) <= max_bytes:
-        return
-    with open(path, "rb") as f:
-        f.seek(-max_bytes // 2, os.SEEK_END)  # 뒤쪽 절반만 유지
-        tail = f.read()
-    with open(path, "wb") as f:
-        f.write(b"===== (log truncated - size limit) =====\n")
-        f.write(tail)
- 
- 
+# 워커 출력은 메인 서버가 파이프로 받아 logs\worker_<id>_stdout.log 에 씀 - 크기 제한·정리는 util/log_files.py
+from util import log_files
+
+
 def _spawn_worker(account_id: int, cfg: dict) -> subprocess.Popen:
-    # worker_{id}.log는 워커 자체의 RotatingFileHandler가 관리하는 운영 로그이므로
-    # 이름이 겹치지 않게 여기서는 _stdout.log로 분리 (크래시 트레이스백 등 안전망 용도)
+    # 크래시 트레이스백 등 워커가 print 한 것 전부. 파일이 커지면 .prev.log 로 넘기고 새로 씀 (서버가 켜진 동안에도)
     log_path = os.path.join(LOG_DIR, f"worker_{account_id}_stdout.log")
-    _cap_log_file(log_path, STDOUT_LOG_MAX_BYTES)
-    log_file = open(log_path, "a", encoding="utf-8", buffering=1)  # line-buffered
-    log_file.write(f"\n===== worker start {account_id} =====\n")
- 
+    log = log_files.get(log_path)
+    log.write(f"\n===== worker start {account_id} =====\n".encode("utf-8"))
+
+    # 한글이 깨지지 않게 UTF-8, 바로바로 보이게 버퍼 없이
+    env = dict(os.environ, PYTHONIOENCODING="utf-8", PYTHONUNBUFFERED="1")
     proc = subprocess.Popen(
         [
             sys.executable, WORKER_SCRIPT,
@@ -227,9 +214,11 @@ def _spawn_worker(account_id: int, cfg: dict) -> subprocess.Popen:
             "--port", str(cfg["worker_port"]),
             "--terminal-path", cfg["terminal_path"],
         ],
-        stdout=log_file,
+        stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,  # 에러도 같은 파일에 (트레이스백 포함)
+        env=env,
     )
+    log_files.pipe_to(proc.stdout, log_path)
     print(f"[lifespan] account={account_id} 워커 시작 (pid={proc.pid}, port={cfg['worker_port']}, log={log_path})")
     return proc
  
@@ -239,14 +228,18 @@ def _tail_log(account_id: int, n_lines: int = 20) -> str:
     log_path = os.path.join(LOG_DIR, f"worker_{account_id}_stdout.log")
     if not os.path.exists(log_path):
         return "(로그 파일 없음)"
-    with open(log_path, "r", encoding="utf-8") as f:
+    with open(log_path, "r", encoding="utf-8", errors="replace") as f:
         lines = f.readlines()
     return "".join(lines[-n_lines:])
  
  
 async def _watchdog_loop():
+    next_log_cleanup = 0.0
     while True:
         await asyncio.sleep(WATCHDOG_INTERVAL_SEC)
+        if time.time() >= next_log_cleanup:       # 서버 시작 직후 한 번, 그 뒤 하루마다
+            next_log_cleanup = time.time() + 86400
+            await asyncio.to_thread(log_files.cleanup, LOG_DIR)
         for account_id, proc in list(_worker_procs.items()):
             if proc.poll() is not None:
                 if account_id not in _account_configs:
