@@ -33,18 +33,19 @@ class TelegramService:
     def enabled(self) -> bool:
         return bool(self.token and self.chat_id)
 
-    def send(self, title: str, body: str) -> None:
-        """비동기(백그라운드 스레드)로 전송. 텔레그램이 느리거나 실패해도 호출한 쪽을 막지 않는다."""
+    def send(self, title: str, body: str, buttons: list | None = None) -> None:
+        """비동기(백그라운드 스레드)로 전송. 텔레그램이 느리거나 실패해도 호출한 쪽을 막지 않는다.
+        buttons: 메시지 아래 버튼 [[{"text": .., "callback_data": ..}, ...], ...] (누르면 services/telegram_live.py 가 처리)"""
         if not self.enabled:
             return
-        threading.Thread(target=self._send_sync, args=(title, body), daemon=True).start()
+        threading.Thread(target=self._send_sync, args=(title, body, buttons), daemon=True).start()
 
-    def _send_sync(self, title: str, body: str) -> None:
-        ok, msg = self.send_now(title, body)
+    def _send_sync(self, title: str, body: str, buttons: list | None = None) -> None:
+        ok, msg = self.send_now(title, body, buttons)
         if not ok:
             print(f"[telegram] {msg}")
 
-    def send_now(self, title: str, body: str) -> tuple[bool, str]:
+    def send_now(self, title: str, body: str, buttons: list | None = None) -> tuple[bool, str]:
         """바로 보내고 (성공 여부, 설명) 반환. 관리 화면의 [테스트 전송] 버튼이 쓴다."""
         cfg = telegram_cfg()
         if not (cfg["bot_token"] and cfg["chat_id"]):
@@ -54,7 +55,8 @@ class TelegramService:
         try:
             res = requests.post(
                 TELEGRAM_API.format(token=cfg["bot_token"]),
-                json={"chat_id": cfg["chat_id"], "text": text, "disable_web_page_preview": True},
+                json={"chat_id": cfg["chat_id"], "text": text, "disable_web_page_preview": True,
+                      **({"reply_markup": {"inline_keyboard": buttons}} if buttons else {})},
                 timeout=10,
             )
         except Exception as e:

@@ -271,11 +271,11 @@ async def _notify_trade(account_id: int, account_number: str, trade_id: int, dat
     try:
         async with AsyncSessionLocal() as db:
             trade = await db.get(Trade, trade_id)
-            title, body = await _trade_message(db, account_id, account_number, trade, data, kst_time)
+            title, body, buttons = await _trade_message(db, account_id, account_number, trade, data, kst_time)
     except Exception as e:
         print(f"[trade] 알림 문구 만들기 실패: {e}")
-        title, body = f"[{data.entry_type}] {data.symbol}", f"{data.position} {data.volume:g}lot @{data.price}"
-    fcm.send(title, body, json.dumps(payload))
+        title, body, buttons = f"[{data.entry_type}] {data.symbol}", f"{data.position} {data.volume:g}lot @{data.price}", None
+    fcm.send(title, body, json.dumps(payload), buttons=buttons)
 
 
 # ── 진입·청산 알림 문구 ──────────────────────────────────────────
@@ -323,7 +323,7 @@ def _side_summary(positions: list[dict]) -> str:
 
 
 async def _trade_message(db: AsyncSession, account_id: int, account_number: str, trade: Trade, data: TradeCreate,
-                         kst_time: datetime) -> tuple[str, str]:
+                         kst_time: datetime) -> tuple[str, str, list | None]:
     """
     진입:  🟢 진입 · XAUUSD+ BUY 0.5lot
            가격 4,010.25 · 22:15
@@ -349,7 +349,18 @@ async def _trade_message(db: AsyncSession, account_id: int, account_number: str,
         others = [p for p in positions if p.get("ticket") != data.ticket]
         if others:
             lines.append("같은 종목 보유: " + _side_summary(positions))
-        return title, "\n".join(lines)
+        # 텔레그램 버튼 - 이 포지션의 SL/TP (services/telegram_live.py 가 처리)
+        #   callback_data: pos:<sl|tp|be>:<o=이 포지션|a=같은 종목·방향 전체>:<계좌id>:<티켓>
+        key = f"{account_id}:{data.ticket}"
+        buttons = [[{"text": "🛑 SL", "callback_data": f"pos:sl:o:{key}"},
+                    {"text": "🎯 TP", "callback_data": f"pos:tp:o:{key}"},
+                    {"text": "⚖️ 본전 SL", "callback_data": f"pos:be:o:{key}"}]]
+        same = [p for p in positions if p.get("type") == (me or {}).get("type", 0 if data.position == "BUY" else 1)]
+        if len(same) > 1:
+            buttons.append([{"text": f"🛑 SL 전체 {len(same)}개", "callback_data": f"pos:sl:a:{key}"},
+                            {"text": f"🎯 TP 전체", "callback_data": f"pos:tp:a:{key}"},
+                            {"text": "⚖️ 평단 SL", "callback_data": f"pos:be:a:{key}"}])
+        return title, "\n".join(lines), buttons
 
     # CLOSE - 진입 방향·가격은 기록된 거래에서 (청산 체결의 방향은 반대라서)
     side = trade.position if trade.price_open is not None else ("BUY" if data.position == "SELL" else "SELL")
@@ -384,7 +395,7 @@ async def _trade_message(db: AsyncSession, account_id: int, account_number: str,
     remain = await _symbol_positions(account_id, data.symbol)
     if remain:
         lines.append("남은 포지션: " + _side_summary(remain))
-    return title, "\n".join(lines)
+    return title, "\n".join(lines), None
 
 @router.get("/annual")
 async def get_annual_trades(

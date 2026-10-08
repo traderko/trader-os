@@ -34,14 +34,15 @@ async def get_all_positions(request: Request):
     positions = await asyncio.to_thread(state.mt5.positions_get)
     if positions is None:
         return []
-    sizes = {}
+    sizes, digits = {}, {}
     for p in positions:
         if p.symbol not in sizes:
             info = state.mt5.symbol_info(p.symbol)
             sizes[p.symbol] = getattr(info, "trade_contract_size", None) if info else None
+            digits[p.symbol] = getattr(info, "digits", None) if info else None
     return [
         {
-            "contract_size": sizes.get(p.symbol),
+            "contract_size": sizes.get(p.symbol), "digits": digits.get(p.symbol),
             "ticket": p.ticket, "symbol": p.symbol, "volume": p.volume, "type": p.type,
             "price_open": p.price_open, "price_current": p.price_current, "profit": p.profit,
             "swap": p.swap, "sl": p.sl, "tp": p.tp, "time": p.time,

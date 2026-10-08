@@ -47,9 +47,9 @@ def get_fcm_service() -> "FCMService":
 
 
 class FCMService:
-    def send(self, title: str, body: str, patloadJsonStr: str = '{}') -> str | None:
-        # 텔레그램은 백그라운드로 먼저 보냄 - FCM이 실패해도 텔레그램은 도착하게
-        _telegram.send(title, body)
+    def send(self, title: str, body: str, patloadJsonStr: str = '{}', buttons: list | None = None) -> str | None:
+        # 텔레그램은 백그라운드로 먼저 보냄 - FCM이 실패해도 텔레그램은 도착하게 (buttons: 텔레그램 메시지 아래 버튼)
+        _telegram.send(title, body, buttons)
 
         if init_firebase() is None:
             return None

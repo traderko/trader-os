@@ -15,6 +15,7 @@
 #   - [🔓 잠금 풀기] 버튼 · /unlock → 웹·EA와 같은 규칙으로 해제: 사유에 맞는 문구를 보여주고,
 #     그 문구를 띄어쓰기까지 똑같이 직접 쳐서 답장하면 풀림 (5분 안에, 너무 빨리 오면 붙여넣기로 보고 거절)
 #     관리 화면에 등록한 chat id 대화에서만 받음 - 봇을 찾은 다른 사람은 못 풂. 수동 잠금은 여기서도 못 풂
+#   - 진입 알림의 [🛑 SL] [🎯 TP] [⚖️ 본전 SL] 버튼 · /pos → 포지션 SL/TP 설정 (가격을 답장으로 입력, 0 이면 해제)
 #   - 관리 화면 [chat id 찾기] → 최근 봇에게 말을 건 대화 목록(recent_chats)
 #
 # 설정: 관리 화면 텔레그램 탭 (data/settings.json 의 telegram.live_enabled / live_interval_sec)
@@ -359,6 +360,151 @@ class TelegramLive:
         # 해제되면 '거래 잠금 해제됨' 알림이 따로 옴 (웹·EA에서 풀 때와 같음)
         self.force.set()
 
+    # ── 포지션 SL/TP (진입 알림 버튼, /pos) ──
+    async def _targets(self, aid: int, ticket: int, scope: str) -> tuple[dict | None, list[dict]]:
+        """(기준 포지션, 바꿀 포지션들). scope o=그 포지션만, a=같은 종목·방향 전체"""
+        try:
+            rows = await asyncio.wait_for(worker_get(aid, "/positions-all"), 5)
+        except Exception:
+            return None, []
+        me = next((p for p in rows if p.get("ticket") == ticket), None)
+        if me is None:
+            return None, []
+        if scope == "a":
+            return me, [p for p in rows if p["symbol"] == me["symbol"] and p["type"] == me["type"]]
+        return me, [me]
+
+    @staticmethod
+    def _fmt_price(v, digits) -> str:
+        if not v:
+            return "없음"
+        d = digits if isinstance(digits, int) else (2 if abs(v) >= 100 else 5)
+        return f"{v:,.{d}f}"
+
+    def _describe(self, me: dict, targets: list[dict]) -> str:
+        side = "BUY" if me["type"] == 0 else "SELL"
+        vol = sum(p["volume"] for p in targets)
+        avg = sum(p["price_open"] * p["volume"] for p in targets) / vol if vol else me["price_open"]
+        d = me.get("digits")
+        what = f"#{me['ticket']}" if len(targets) == 1 else f"{len(targets)}개"
+        return f"{html.escape(me['symbol'])} {side} {vol:g}lot @{self._fmt_price(avg, d)} ({what})"
+
+    async def pos_button(self, client, token, chat_id: str, data: str) -> str:
+        """pos:<sl|tp|be>:<o|a>:<계좌id>:<티켓> 버튼. 콜백 답(짧은 글) 을 돌려줌"""
+        try:
+            _, field, scope, aid, ticket = data.split(":")
+            aid, ticket = int(aid), int(ticket)
+        except ValueError:
+            return "잘못된 버튼"
+        me, targets = await self._targets(aid, ticket, scope)
+        if me is None:
+            await self._send(client, token, chat_id, "이 포지션은 이미 청산됐거나 MT5에 연결되지 않았습니다.")
+            return "포지션 없음"
+        if field == "be":
+            vol = sum(p["volume"] for p in targets)
+            price = sum(p["price_open"] * p["volume"] for p in targets) / vol
+            if isinstance(me.get("digits"), int):
+                price = round(price, me["digits"])
+            await self._apply_level(client, token, chat_id, aid, "sl", price, targets, me)
+            return "본전 SL 설정"
+        cur = targets[0].get(field) if len(targets) == 1 else None
+        label = "SL(손절)" if field == "sl" else "TP(익절)"
+        r = await self._send(
+            client, token, chat_id,
+            f"{self._describe(me, targets)}\n{label} 가격을 보내세요.\n"
+            f"현재가 {self._fmt_price(me.get('price_current'), me.get('digits'))}"
+            + (f" · 지금 {label.split('(')[0]} {self._fmt_price(cur, me.get('digits'))}" if len(targets) == 1 else "")
+            + "\n0 을 보내면 해제 · 그만두려면 /cancel",
+            reply_markup={"force_reply": True, "input_field_placeholder": "예: 3990.5"},
+        )
+        if r.get("ok"):
+            self.pending[chat_id] = {"type": "pos", "field": field, "aid": aid, "ticket": ticket, "scope": scope,
+                                     "at": time.time()}
+        return "가격을 입력하세요"
+
+    async def try_pos(self, client, token, chat_id: str, text: str) -> None:
+        p = self.pending.get(chat_id)
+        if time.time() - p["at"] > UNLOCK_TTL:
+            self.pending.pop(chat_id, None)
+            await self._send(client, token, chat_id, "⏱ 5분이 지났습니다. 버튼을 다시 눌러 주세요.")
+            return
+        t = text.strip().replace(",", "")
+        if t in ("없음", "해제"):
+            t = "0"
+        try:
+            price = float(t)
+        except ValueError:
+            await self._send(client, token, chat_id, "숫자로 보내 주세요. (예: 3990.5, 해제는 0 · 그만두려면 /cancel)")
+            return
+        me, targets = await self._targets(p["aid"], p["ticket"], p["scope"])
+        self.pending.pop(chat_id, None)
+        if me is None:
+            await self._send(client, token, chat_id, "이 포지션은 이미 청산됐거나 MT5에 연결되지 않았습니다.")
+            return
+        await self._apply_level(client, token, chat_id, p["aid"], p["field"], price, targets, me)
+
+    async def _apply_level(self, client, token, chat_id, aid, field, price, targets, me) -> None:
+        cur = me.get("price_current") or 0
+        buy = me["type"] == 0
+        label = "SL" if field == "sl" else "TP"
+        # 방향이 맞는지 먼저 확인 (BUY 의 SL 은 현재가 아래, TP 는 위 / SELL 은 반대)
+        if price and cur:
+            below = price < cur
+            ok = (below if field == "sl" else not below) if buy else (not below if field == "sl" else below)
+            if not ok:
+                where = ("아래" if field == "sl" else "위") if buy else ("위" if field == "sl" else "아래")
+                await self._send(client, token, chat_id,
+                                 f"❌ {'BUY' if buy else 'SELL'} 포지션의 {label}은(는) 현재가({self._fmt_price(cur, me.get('digits'))})보다 {where}여야 합니다.")
+                return
+        path = "/positions/set-sl" if field == "sl" else "/positions/set-tp"
+        body = {"tickets": [p["ticket"] for p in targets], ("sl_price" if field == "sl" else "tp_price"): price}
+        try:
+            from services.worker_client import worker_post
+            res = await asyncio.wait_for(worker_post(aid, path, body), 15)
+        except Exception as e:
+            await self._send(client, token, chat_id, f"⚠️ {label} 설정 실패: {html.escape(str(e))[:200]}")
+            return
+        okn, failed = len(res.get("success") or []), res.get("failed") or []
+        what = "해제" if not price else self._fmt_price(price, me.get("digits"))
+        msg = f"{'✅' if not failed else '⚠️'} {self._describe(me, targets)}\n{label} {what} · {okn}/{len(targets)}개 적용"
+        if failed:
+            reasons = {f.get("reason", "") for f in failed}
+            msg += "\n실패: " + html.escape(", ".join(sorted(reasons))[:200])
+            if any("10016" in r for r in reasons):
+                msg += "\n(가격이 현재가에 너무 가깝거나 방향이 맞지 않습니다)"
+        await self._send(client, token, chat_id, msg)
+        self.force.set()     # 실시간 현황의 SL/TP 예상 손익도 바로 갱신
+
+    async def show_positions(self, client, token, chat_id: str) -> None:
+        """/pos - 종목·방향별로 SL/TP 버튼"""
+        async with AsyncSessionLocal() as db:
+            accs = (await db.execute(select(Account).where(Account.lock_enabled.is_(True)).order_by(Account.id))).scalars().all()
+        sent = False
+        for a in accs:
+            try:
+                rows = await asyncio.wait_for(worker_get(a.id, "/positions-all"), 5)
+            except Exception:
+                continue
+            groups: dict[tuple, list] = {}
+            for p in rows:
+                groups.setdefault((p["symbol"], p["type"]), []).append(p)
+            for (sym, typ), ps in sorted(groups.items()):
+                me = ps[0]
+                key = f"{a.id}:{me['ticket']}"
+                sl = {p.get("sl") for p in ps}
+                tp = {p.get("tp") for p in ps}
+                d = me.get("digits")
+                info = (f"<b>{html.escape(a.account_number)}</b>  {self._describe(me, ps)}\n"
+                        f"SL {self._fmt_price(sl.pop(), d) if len(sl) == 1 else '제각각'} · "
+                        f"TP {self._fmt_price(tp.pop(), d) if len(tp) == 1 else '제각각'}")
+                await self._send(client, token, chat_id, info, reply_markup={"inline_keyboard": [[
+                    {"text": "🛑 SL", "callback_data": f"pos:sl:a:{key}"},
+                    {"text": "🎯 TP", "callback_data": f"pos:tp:a:{key}"},
+                    {"text": "⚖️ 평단 SL", "callback_data": f"pos:be:a:{key}"}]]})
+                sent = True
+        if not sent:
+            await self._send(client, token, chat_id, "열린 포지션이 없습니다.")
+
     async def _pin(self, client, token, chat_id, mid) -> None:
         p = await self._call(client, token, "pinChatMessage", chat_id=chat_id, message_id=mid, disable_notification=True)
         if p.get("ok"):
@@ -418,11 +564,17 @@ class TelegramLive:
                 mine = cid == str(telegram_cfg()["chat_id"] or "")
                 if mine and text.startswith("/unlock"):
                     await self.start_unlock(client, token, cid, None)
+                elif mine and text.startswith("/pos"):
+                    await self.show_positions(client, token, cid)
                 elif mine and text.startswith("/cancel"):
-                    if self.pending.pop(cid, None):
-                        await self._send(client, token, cid, "잠금 풀기를 그만뒀습니다.")
+                    p = self.pending.pop(cid, None)
+                    if p:
+                        await self._send(client, token, cid, "SL/TP 설정을 그만뒀습니다." if p.get("type") == "pos" else "잠금 풀기를 그만뒀습니다.")
                 elif mine and raw and not raw.startswith("/") and cid in self.pending:
-                    await self.try_unlock(client, token, cid, raw, int(msg.get("date") or time.time()))
+                    if self.pending[cid].get("type") == "pos":
+                        await self.try_pos(client, token, cid, raw)
+                    else:
+                        await self.try_unlock(client, token, cid, raw, int(msg.get("date") or time.time()))
                 elif text.startswith("/start") or text.startswith("/id"):
                     a = await self._call(client, token, "sendMessage", chat_id=chat["id"],
                                          text=f"이 대화의 chat id: {chat['id']}\n관리 화면 텔레그램 탭의 chat id 칸에 넣으세요.")
@@ -445,6 +597,11 @@ class TelegramLive:
                         answer = "등록된 대화에서만 잠금을 풀 수 있습니다"
                     else:
                         answer = "문구를 보냈습니다"
+                elif data.startswith("pos:"):
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        answer = await self.pos_button(client, token, cid, data)
                 await self._call(client, token, "answerCallbackQuery", callback_query_id=cb["id"], text=answer)
                 if data.startswith("unlock:") and answer == "문구를 보냈습니다":
                     try:
@@ -475,6 +632,7 @@ class TelegramLive:
                             print(f"[telegram-live] 봇 {status['bot']} 연결됨 - 봇에게 /start 를 보내면 chat id를 알려줍니다")
                             await self._call(client, token, "setMyCommands", commands=[
                                 {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
+                                {"command": "pos", "description": "포지션 SL/TP 설정"},
                                 {"command": "cancel", "description": "잠금 풀기 그만두기"},
                                 {"command": "id", "description": "이 대화의 chat id 보기"},
                             ])
