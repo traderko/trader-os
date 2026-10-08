@@ -1,58 +1,62 @@
 @echo off
-chcp 65001 >nul
+rem TraderOS installer (run once). Keep this file ASCII-only (see start.bat).
 setlocal
 cd /d "%~dp0"
-title TraderOS 설치
+title TraderOS install
 
 echo.
-echo  TraderOS 설치를 시작합니다. (처음 한 번만, 5~10분 걸릴 수 있습니다)
+echo  Installing TraderOS. This runs once and can take 5-10 minutes.
 echo.
 
-rem ── 1) x64 Python 3.12 찾기 (없으면 python.org 에서 받아 설치) ──
-rem    MetaTrader5 파이썬 패키지는 x64(AMD64)용만 있다. ARM 윈도우(맥 VMware·Parallels, Surface 등)에
-rem    ARM64용 Python 을 깔면 "No matching distribution found for metatrader5" 가 나므로
-rem    ARM 윈도우에서도 x64 Python 을 쓴다 (윈도우가 에뮬레이션으로 돌려 줌 - MT5 도 같은 방식으로 돔)
+rem 1) Find x64 Python 3.12, or download it from python.org.
+rem    The MetaTrader5 package only ships x64 (AMD64) builds, so on ARM Windows
+rem    (Mac VMware/Parallels, Surface ...) we still need x64 Python. Windows runs it
+rem    under emulation, the same way it runs MT5 itself.
 set "PY_URL=https://www.python.org/ftp/python/3.12.10/python-3.12.10-amd64.exe"
 call :find_python
-if not defined PY (
-    echo  x64 Python 3.12 가 없어 python.org 에서 받아 설치합니다...
-    rem winget 은 ARM64 Python 이 이미 깔려 있으면 x64 를 따로 설치하지 않아서 설치 파일을 직접 받는다
-    curl -L --fail -o "%TEMP%\python-3.12-amd64.exe" "%PY_URL%" || goto :fail
-    "%TEMP%\python-3.12-amd64.exe" /quiet InstallAllUsers=0 PrependPath=0 Include_launcher=0 Include_test=0 TargetDir="%LocalAppData%\Programs\Python\Python312" || goto :fail
-    del "%TEMP%\python-3.12-amd64.exe" >nul 2>nul
-    call :find_python
-)
-if not defined PY (
-    echo.
-    echo  [실패] x64 Python 3.12 를 찾지 못했습니다.
-    echo  https://www.python.org/downloads/windows/ 에서 "Windows installer (64-bit)" 를 받아 설치한 뒤
-    echo  이 파일을 다시 실행하세요. ARM 윈도우라도 ARM64 가 아니라 64-bit^(x64^) 를 받아야 합니다.
-    pause
-    exit /b 1
-)
-echo  Python: %PY%
+if defined PY goto have_python
 
-rem ── 2) 가상환경 + 패키지 ──
-if exist "venv\Scripts\python.exe" (
-    "venv\Scripts\python.exe" -c "import sysconfig,sys; sys.exit(0 if sysconfig.get_platform()=='win-amd64' else 1)" >nul 2>nul || (
-        echo  기존 가상환경이 ARM64 Python 으로 만들어져 있어 다시 만듭니다...
-        rmdir /s /q venv
-    )
-)
-if not exist "venv\Scripts\python.exe" (
-    %PY% -m venv venv || goto :fail
-)
-"venv\Scripts\python.exe" -m pip install --upgrade pip
-"venv\Scripts\python.exe" -m pip install -r requirements.txt || goto :fail
+echo  x64 Python 3.12 not found - downloading it from python.org ...
+rem (winget will not install x64 next to an existing ARM64 Python, so download directly)
+curl -L --fail -o "%TEMP%\python-3.12-amd64.exe" "%PY_URL%" || goto fail
+"%TEMP%\python-3.12-amd64.exe" /quiet InstallAllUsers=0 PrependPath=0 Include_launcher=0 Include_test=0 TargetDir="%LocalAppData%\Programs\Python\Python312" || goto fail
+del "%TEMP%\python-3.12-amd64.exe" >nul 2>nul
+call :find_python
+if defined PY goto have_python
 
 echo.
-echo  설치가 끝났습니다. start.bat 을 실행하세요.
+echo  [FAILED] Could not find x64 Python 3.12.
+echo  Download "Windows installer (64-bit)" from https://www.python.org/downloads/windows/
+echo  install it, then run this file again. On ARM Windows pick 64-bit (x64), not ARM64.
+pause
+exit /b 1
+
+:have_python
+echo  Python: %PY%
+
+rem 2) Virtual environment + packages
+if not exist "venv\Scripts\python.exe" goto make_venv
+"venv\Scripts\python.exe" -c "import sysconfig,sys; sys.exit(0 if sysconfig.get_platform()=='win-amd64' else 1)" >nul 2>nul
+if not errorlevel 1 goto packages
+echo  Existing venv was made with ARM64 Python - recreating it ...
+rmdir /s /q venv
+
+:make_venv
+%PY% -m venv venv || goto fail
+
+:packages
+"venv\Scripts\python.exe" -m pip install --upgrade pip
+"venv\Scripts\python.exe" -m pip install -r requirements.txt || goto fail
+
+echo.
+echo  Install finished. Run start.bat.
 echo.
 pause
 exit /b 0
 
-rem x64 Python 3.12 후보를 차례로 확인
-rem   (platform.machine() 은 ARM 윈도우에서 x64 Python 이어도 ARM64 라고 답해서, 파이썬 자체의 빌드 종류 sysconfig.get_platform() 으로 확인)
+rem Try x64 Python 3.12 candidates in order.
+rem (platform.machine() reports ARM64 for x64 Python on ARM Windows, so check the
+rem  interpreter build itself with sysconfig.get_platform())
 :find_python
 set "PY="
 call :try_py py -V:3.12
@@ -71,6 +75,6 @@ exit /b 0
 
 :fail
 echo.
-echo  [실패] 설치 중 오류가 났습니다. 위 메시지를 확인하세요.
+echo  [FAILED] Install error - see the messages above.
 pause
 exit /b 1
