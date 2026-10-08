@@ -81,6 +81,12 @@ DEFAULTS: dict = {
         "password_hash": "",
         "session_days": 30,
     },
+    # 관리 화면(:8100)을 다른 기기에서 열기 (services/admin_remote.py) - 기본 꺼짐, 켜기·비밀번호는 이 PC에서만
+    "admin_remote": {
+        "enabled": False,
+        "password_hash": "",
+        "session_days": 7,
+    },
 }
 
 # (최소, 최대) - 관리 화면에서 잘못된 값을 넣어 잠금이 무력화되지 않게
@@ -239,6 +245,14 @@ def _validate(settings: dict) -> None:
     sd = ac.get("session_days", 30)
     if not _int(sd) or not (1 <= sd <= 365):
         raise SettingsError("로그인 유지 기간은 1~365일이어야 합니다.")
+
+    ar = settings["admin_remote"]
+    ar["enabled"] = bool(ar.get("enabled"))
+    if ar["enabled"] and not ar.get("password_hash"):
+        raise SettingsError("관리 화면 원격 접속을 켜려면 관리자 비밀번호를 먼저 정하세요.")
+    sd = ar.get("session_days", 7)
+    if not _int(sd) or not (1 <= sd <= 90):
+        raise SettingsError("관리 화면 로그인 유지 기간은 1~90일이어야 합니다.")
 
 
 def _int(v) -> bool:

@@ -176,6 +176,8 @@
     <button data-tab="update" id="updateTab">업데이트</button>
     <button data-tab="webapp" id="webappTab" hidden>📱 앱</button>
   </nav>
+  <div id="remoteBar" hidden><span class="badge warn" title="다른 기기에서 관리자 비밀번호로 연 화면입니다">원격 접속</span>
+    <button class="btn" id="adminLogout" style="padding:3px 10px;font-size:12px">로그아웃</button></div>
   <div class="theme" id="theme" title="화면 테마">
     <button data-theme="auto">자동</button><button data-theme="light">라이트</button><button data-theme="dark">다크</button>
   </div>
@@ -411,6 +413,34 @@
         <button class="btn primary" id="acSave">저장</button>
       </div>
     </div>
+    <div class="panel" id="arPanel">
+      <h2>관리 화면 원격 접속</h2>
+      <p class="hint">이 관리 화면(<code>:8100</code>)을 폰·다른 PC(맥의 가상머신 포함)에서 엽니다. 기본은 꺼져 있어 이 PC에서만 열립니다.
+        켜면 <b>같은 공유기·Tailscale 에서 온 접속만</b>, <b>관리자 비밀번호</b>로 로그인해야 들어올 수 있습니다.</p>
+      <p class="hint" id="arRemoteNote" hidden>이 설정은 서버가 돌고 있는 PC에서만 바꿀 수 있습니다.</p>
+      <div id="arForm">
+        <div class="row"><label class="name">원격 접속</label>
+          <label class="switch"><input type="checkbox" id="arOn"> 켜기</label><span id="arState" class="badge"></span></div>
+        <div class="row"><label class="name">관리자 비밀번호<small id="arPwNow"></small></label>
+          <input type="password" class="wide" id="arPw" placeholder="8자 이상 (웹 화면 비밀번호와 다르게)" autocomplete="new-password"></div>
+        <div class="row"><label class="name">로그인 유지</label>
+          <input type="number" id="arDays" min="1" max="90" style="width:80px"><span class="unit">일</span></div>
+        <div class="guide" id="arGuide" hidden>
+          <h3>다른 기기에서 열기</h3>
+          <ol class="steps">
+            <li>브라우저에서 <code id="arUrls"></code> 을 엽니다.</li>
+            <li>Windows 방화벽이 물어보면 <b>허용</b>을 누릅니다. (이미 8000 을 허용했다면 그대로 됩니다)</li>
+            <li>관리자 비밀번호로 로그인합니다. 5번 틀리면 그 기기는 10분 동안 막힙니다.</li>
+          </ol>
+          <p class="hint">원격에서도 계좌·잠금 규칙·텔레그램·업데이트를 모두 바꿀 수 있습니다. 비밀번호는 다른 곳에서 쓰지 않는 것으로 정하세요.
+            집 와이파이(HTTP)로 로그인하면 비밀번호가 암호화되지 않고 오갑니다 - 믿을 수 있는 네트워크나 Tailscale 에서만 쓰세요.</p>
+        </div>
+        <div class="actions">
+          <button class="btn" id="arLogoutAll" title="원격으로 로그인한 모든 기기를 로그아웃">원격 기기 모두 로그아웃</button>
+          <button class="btn primary" id="arSave">저장</button>
+        </div>
+      </div>
+    </div>
   </section>
 
   <!-- 앱 (플러터 웹 빌드) -->
@@ -446,6 +476,7 @@
 
 <script>
 const API = 'api/';
+let isRemote = false;   // 다른 기기에서 비밀번호로 연 화면인지 (ping 이 알려줌)
 const REASON = {
   restricted_window: '정기 재확인', session_window: '아시아장 집중 구간',
   consec_loss: '연속 손절', manual: '수동 잠금',
@@ -468,6 +499,7 @@ async function api(path, opt = {}) {
   });
   const text = await res.text();
   let data = null; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
+  if (res.status === 401 && isRemote) { location.reload(); throw new Error('다시 로그인하세요.'); }
   if (!res.ok) throw new Error((data && data.detail) || text || res.status);
   return data;
 }
@@ -481,7 +513,7 @@ $('tabs').onclick = (e) => {
   if (b.dataset.tab === 'update') loadUpdate(false);
   if (b.dataset.tab === 'phrases') loadPhrases();
   if (b.dataset.tab === 'acctab') loadAccounts();
-  if (b.dataset.tab === 'access') loadAccess();
+  if (b.dataset.tab === 'access') { loadAccess(); loadAdminRemote(); }
   document.body.classList.toggle('full', b.dataset.tab === 'webapp');
   if (b.dataset.tab === 'webapp') openWebApp();
 };
@@ -504,8 +536,24 @@ function openWebApp() {
 }
 
 // 관리 화면이 열려 있다고 서버에 알림 - 서버를 재시작해도 브라우저 탭을 또 열지 않게
-setInterval(() => fetch(API + 'ping').catch(() => {}), 4000);
-fetch(API + 'ping').catch(() => {});
+async function ping() {
+  try {
+    const r = await fetch(API + 'ping');
+    if (r.status === 401) return location.reload();          // 원격 로그인 만료
+    const d = await r.json();
+    if (d.remote !== isRemote) {
+      isRemote = !!d.remote;
+      $('remoteBar').hidden = !isRemote;
+      document.querySelectorAll('a[href="api/telegram/updates"]').forEach((a) => a.hidden = isRemote);
+    }
+  } catch {}
+}
+setInterval(ping, 4000);
+ping();
+$('adminLogout').onclick = async () => {
+  try { await fetch(API + 'admin-logout', { method: 'POST' }); } catch {}
+  location.reload();
+};
 
 // ── 대시보드 ──
 let settings = null;
@@ -907,6 +955,43 @@ $('acSave').onclick = async () => {
 $('acLogoutAll').onclick = async () => {
   if (!confirm('로그인해 둔 모든 기기(폰·다른 PC)를 로그아웃할까요?')) return;
   try { await api('access', { method: 'PUT', body: JSON.stringify({ logout_all: true }) }); toast('모든 기기를 로그아웃했습니다.'); }
+  catch (e) { toast(e.message, true); }
+};
+
+// ── 관리 화면 원격 접속 ──
+let adminRemote = null;
+async function loadAdminRemote() {
+  try { adminRemote = await api('admin-remote'); }
+  catch (e) { $('arForm').hidden = true; $('arRemoteNote').hidden = false; return; }
+  $('arForm').hidden = false; $('arRemoteNote').hidden = true;
+  const r = adminRemote;
+  $('arOn').checked = r.enabled;
+  $('arDays').value = r.session_days;
+  $('arPw').value = '';
+  $('arPwNow').textContent = r.has_password ? '정해 둠 (바꿀 때만 새로 입력)' : '아직 없음';
+  const on = r.listening && r.listening !== '127.0.0.1';
+  $('arState').className = 'badge ' + (on ? 'warn' : '');
+  $('arState').textContent = on ? '다른 기기에서 열 수 있음' : '이 PC에서만';
+  const ips = [...r.lan_ips, ...r.tailscale_ips];
+  $('arUrls').textContent = ips.length ? ips.map((ip) => `http://${ip}:${r.port}/`).join('  또는  ') : `http://(이 PC의 주소):${r.port}/`;
+  $('arGuide').hidden = !r.enabled;
+}
+$('arSave').onclick = async () => {
+  const pw = $('arPw').value, on = $('arOn').checked;
+  if (on && !adminRemote.has_password && !pw) return toast('원격 접속을 켜려면 관리자 비밀번호를 먼저 정하세요.', true);
+  if (on && !adminRemote.enabled &&
+      !confirm('같은 네트워크·Tailscale 의 다른 기기에서 비밀번호로 이 관리 화면을 열 수 있게 할까요?')) return;
+  try {
+    if (pw) adminRemote = await api('admin-remote', { method: 'PUT', body: JSON.stringify({ password: pw }) });
+    adminRemote = await api('admin-remote', { method: 'PUT',
+      body: JSON.stringify({ enabled: on, session_days: Number($('arDays').value) || 7 }) });
+    toast('저장했습니다.' + (pw ? ' 비밀번호가 바뀌어 원격 기기는 모두 로그아웃됐습니다.' : ''));
+    setTimeout(loadAdminRemote, 1500);      // 관리 서버가 다시 열린 뒤
+  } catch (e) { toast(e.message, true); }
+};
+$('arLogoutAll').onclick = async () => {
+  if (!confirm('원격으로 로그인한 모든 기기를 로그아웃할까요?')) return;
+  try { await api('admin-remote', { method: 'PUT', body: JSON.stringify({ logout_all: true }) }); toast('원격 기기를 모두 로그아웃했습니다.'); }
   catch (e) { toast(e.message, true); }
 };
 

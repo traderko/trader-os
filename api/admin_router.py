@@ -19,8 +19,12 @@
 #   GET  /api/logs              로그 파일 목록
 #   GET  /api/logs/{name}       로그 끝부분
 #
-# 보안: 공개 API(:8000)와 다른 포트(:8100)에 127.0.0.1로만 열어서, 외부·프록시(nginx 등)로는
-#   애초에 접근할 수 없다. 혹시 몰라 요청마다 한 번 더 확인(local_only)도 한다.
+#   GET/PUT /api/admin-remote   관리 화면 원격 접속 설정 (이 PC에서만)
+#   POST /api/admin-login, /api/admin-logout   원격 로그인
+#
+# 보안: 공개 API(:8000)와 다른 포트(:8100)에 기본은 127.0.0.1로만 연다.
+#   '관리 화면 원격 접속'을 켜면 같은 네트워크·Tailscale 에서 관리자 비밀번호로 들어올 수 있다 (services/admin_remote.py).
+#   요청마다 admin_guard 가 확인한다.
 
 import asyncio
 
@@ -89,23 +93,93 @@ def mt5_login_state(account_number: str, info: dict | None = None) -> str:
         return "unknown"
     return "ok" if ea_installer.has_logged_in(data_dir) else "needed"
 
-_LOCAL_HOSTS = {"127.0.0.1", "::1", "localhost"}
-_PROXY_HEADERS = ("x-forwarded-for", "x-real-ip", "forwarded")
+def admin_guard(request: Request):
+    from services import admin_remote
+    ok, code, msg = admin_remote.check(request)
+    if not ok:
+        raise HTTPException(code, msg)
 
 
-def local_only(request: Request):
-    host = request.client.host if request.client else ""
-    if host not in _LOCAL_HOSTS or any(h in request.headers for h in _PROXY_HEADERS):
-        raise HTTPException(403, "관리 화면은 서버가 돌고 있는 PC에서만 열 수 있습니다.")
+router = APIRouter(tags=["admin"], dependencies=[Depends(admin_guard)])
+login_router = APIRouter(tags=["admin"])
 
 
-router = APIRouter(tags=["admin"], dependencies=[Depends(local_only)])
+# ── 화면 · 원격 로그인 ───────────────────────────────────────────────
+_LOGIN_HTML = """<!doctype html><html lang="ko"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1"><title>TraderOS 관리 - 로그인</title>
+<style>
+:root{--bg:#f4f5f7;--card:#fff;--fg:#1d2330;--mute:#6b7280;--line:#d9dde3;--acc:#2f6fed;--bad:#c62828}
+@media (prefers-color-scheme:dark){:root{--bg:#14171c;--card:#1d2128;--fg:#e6e8eb;--mute:#9aa1ab;--line:#30353d;--acc:#5b8cff;--bad:#ff6b6b}}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;background:var(--bg);color:var(--fg);
+font:15px/1.5 system-ui,-apple-system,"Malgun Gothic",sans-serif;padding:16px}
+form{background:var(--card);border:1px solid var(--line);border-radius:12px;padding:24px;width:100%;max-width:340px}
+h1{font-size:18px;margin:0 0 4px}p{color:var(--mute);margin:0 0 16px;font-size:13px}
+input{width:100%;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:transparent;color:inherit;font:inherit}
+button{margin-top:12px;width:100%;padding:10px;border:0;border-radius:8px;background:var(--acc);color:#fff;font:inherit;font-weight:600;cursor:pointer}
+#err{color:var(--bad);font-size:13px;min-height:1.5em;margin:8px 0 0}
+</style></head><body>
+<form id="f"><h1>TraderOS 관리 화면</h1><p>관리자 비밀번호를 입력하세요.</p>
+<input type="password" id="pw" autocomplete="current-password" autofocus required>
+<button>로그인</button><div id="err"></div></form>
+<script>
+document.getElementById('f').onsubmit=async(e)=>{e.preventDefault();const err=document.getElementById('err');err.textContent='';
+try{const r=await fetch('api/admin-login',{method:'POST',headers:{'Content-Type':'application/json'},
+body:JSON.stringify({password:document.getElementById('pw').value})});
+if(r.ok)return location.reload();const d=await r.json().catch(()=>({}));err.textContent=d.detail||('오류 '+r.status);}
+catch(x){err.textContent='서버에 연결하지 못했습니다.';}};
+</script></body></html>"""
 
 
-# ── 화면 ────────────────────────────────────────────────────────────
-@router.get("/", include_in_schema=False)
-async def admin_page():
-    return FileResponse(ADMIN_HTML, media_type="text/html; charset=utf-8")
+@login_router.get("/", include_in_schema=False)
+async def admin_page(request: Request):
+    from fastapi.responses import HTMLResponse
+    from services import admin_remote
+    ok, code, msg = admin_remote.check_network(request)
+    if not ok:
+        raise HTTPException(code, msg)
+    if not admin_remote.is_local(request) and not admin_remote.check_session(request.cookies.get(admin_remote.COOKIE)):
+        return HTMLResponse(_LOGIN_HTML, headers={"Cache-Control": "no-store"})
+    return FileResponse(ADMIN_HTML, media_type="text/html; charset=utf-8", headers={"Cache-Control": "no-store"})
+
+
+class AdminLoginIn(BaseModel):
+    password: str
+
+
+@login_router.post("/api/admin-login")
+async def admin_login(body: AdminLoginIn, request: Request):
+    from fastapi.responses import JSONResponse
+    from services import access_service, admin_remote
+    ok, code, msg = admin_remote.check_network(request)
+    if not ok:
+        raise HTTPException(code, msg)
+    if not admin_remote.same_origin(request):
+        raise HTTPException(403, "다른 페이지에서 보낸 요청은 받지 않습니다.")
+    key = "admin:" + admin_remote.remote_ip(request)
+    wait = access_service.login_blocked(key)
+    if wait:
+        raise HTTPException(429, f"비밀번호를 여러 번 틀렸습니다. {wait // 60 + 1}분 뒤에 다시 시도하세요.")
+    # 비밀번호 확인은 무거우므로(PBKDF2) 다른 요청을 막지 않게 스레드에서
+    if not await asyncio.to_thread(admin_remote.verify, body.password):
+        access_service.login_failed(key)
+        print(f"[admin] 원격 로그인 실패 - {admin_remote.remote_ip(request)}")
+        raise HTTPException(401, "비밀번호가 맞지 않습니다.")
+    access_service.login_ok(key)
+    token, max_age = admin_remote.make_session()
+    print(f"[admin] 원격 로그인 - {admin_remote.remote_ip(request)}")
+    res = JSONResponse({"ok": True})
+    res.set_cookie(admin_remote.COOKIE, token, max_age=max_age, httponly=True, samesite="strict",
+                   secure=request.url.scheme == "https", path="/")
+    return res
+
+
+@login_router.post("/api/admin-logout")
+async def admin_logout():
+    from fastapi.responses import JSONResponse
+    from services import admin_remote
+    res = JSONResponse({"ok": True})
+    res.delete_cookie(admin_remote.COOKIE, path="/")
+    return res
 
 
 # ── 상태 ────────────────────────────────────────────────────────────
@@ -117,10 +191,13 @@ async def _account_info(account_id: int) -> dict | None:
 
 
 @router.get("/api/ping")
-async def ping():
+async def ping(request: Request):
     """관리 화면이 열려 있는지 알리는 용도 (서버 재시작 때 브라우저를 또 열지 않기 위해)"""
-    RUNTIME["page_seen_at"] = time.time()
-    return {"ok": True}
+    from services import admin_remote
+    local = admin_remote.is_local(request)
+    if local:
+        RUNTIME["page_seen_at"] = time.time()
+    return {"ok": True, "remote": not local}
 
 
 @router.get("/api/status")
@@ -199,6 +276,9 @@ def _public_settings() -> dict:
         "live_position": s["telegram"].get("live_position", "top"),
         "env_fallback": not token and bool(os.getenv("TELEGRAM_BOT_TOKEN")),
     }
+    s.pop("admin_remote", None)                       # 관리자 비밀번호 해시 - /api/admin-remote 에서 따로
+    if isinstance(s.get("access"), dict):
+        s["access"] = {k: v for k, v in s["access"].items() if k != "password_hash"}
     s["weekday_names"] = WEEKDAY_KR
     return s
 
@@ -319,6 +399,52 @@ async def telegram_test():
     if not ok:
         raise HTTPException(400, msg)
     return {"ok": True, "message": msg}
+
+
+# ── 관리 화면 원격 접속 (services/admin_remote.py) - /api/admin-remote 는 원격에서 막힘 (이 PC에서만) ──
+class AdminRemoteIn(BaseModel):
+    enabled: bool | None = None
+    password: str | None = None
+    session_days: int | None = None
+    logout_all: bool = False
+
+
+def _admin_remote_out(request: Request) -> dict:
+    from api import admin_app
+    from services import access_service, admin_remote
+    c = admin_remote.cfg()
+    return {"enabled": c["enabled"], "has_password": bool(c["password_hash"]), "session_days": c["session_days"],
+            "listening": admin_app._current.get("host"), "port": admin_app.ADMIN_PORT,
+            "lan_ips": admin_remote.lan_ips(), "tailscale_ips": access_service.tailscale_ips()}
+
+
+@router.get("/api/admin-remote")
+async def read_admin_remote(request: Request):
+    return _admin_remote_out(request)
+
+
+@router.put("/api/admin-remote")
+async def write_admin_remote(body: AdminRemoteIn, request: Request):
+    from api import admin_app
+    from services import admin_remote
+    try:
+        if body.password:
+            admin_remote.set_password(body.password)       # 바꾸면 원격 로그인 모두 풀림
+        patch = {}
+        if body.enabled is not None:
+            patch["enabled"] = body.enabled
+        if body.session_days is not None:
+            patch["session_days"] = body.session_days
+        if patch:
+            update_settings({"admin_remote": patch})
+        if body.logout_all:
+            admin_remote.rotate_key()
+    except (ValueError, SettingsError) as e:
+        raise HTTPException(400, str(e))
+    asyncio.create_task(admin_app.rebind())            # 켜고 끈 경우에만 실제로 다시 엶
+    out = _admin_remote_out(request)
+    out["listening"] = "0.0.0.0" if out["enabled"] else admin_app.ADMIN_HOST
+    return out
 
 
 # ── 확인 문구 ───────────────────────────────────────────────────────
