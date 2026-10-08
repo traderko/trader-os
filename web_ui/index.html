@@ -280,6 +280,19 @@
   .opts { display: flex; gap: 14px; flex-wrap: wrap; font-size: 13px; color: var(--muted); margin: -2px 2px 10px; }
   .opts label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
   .opts input { accent-color: var(--accent); width: 16px; height: 16px; margin: 0; }
+  #sYearBar[hidden], #sRange[hidden] { display: none; }
+  .recap { display: grid; gap: 10px; }
+  .recap > div { display: flex; align-items: center; gap: 12px; font-size: 16px; }
+  @media (max-width: 420px) { .recap > div { font-size: 14.5px; gap: 10px; } .recap b { font-size: 17px !important; } }
+  .recap .ic { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; background: var(--code, var(--bg)); font-size: 18px; flex-shrink: 0; }
+  .recap b { font-size: 20px; }
+  .recap .sub { display: block; font-size: 12px; color: var(--muted); margin-top: 1px; }
+  .wtable { width: 100%; border-collapse: collapse; font-size: 14px; }
+  .wtable th { font-size: 12px; font-weight: 500; color: var(--muted); text-align: right; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  .wtable th:first-child, .wtable td:first-child { text-align: left; }
+  .wtable td { text-align: right; padding: 9px 4px; border-bottom: 1px solid var(--line); }
+  .wtable tr.total td { font-weight: 700; border-bottom: 0; }
+  .wtable .share { display: inline-block; height: 6px; border-radius: 3px; background: var(--up); vertical-align: middle; margin-right: 6px; opacity: .7; }
   .kgrid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px 8px; }
   .kgrid small { display: block; font-size: 11.5px; color: var(--muted); }
   .kgrid span { font-weight: 600; }
@@ -457,11 +470,15 @@
 
 <!-- 매매통계 -->
 <section class="tab" id="tab-stats">
-  <div class="month">
+  <div class="seg" id="sPeriod">
+    <button data-p="week">이번 주</button><button data-p="1m">1개월</button><button data-p="3m">3개월</button><button data-p="year">연도</button>
+  </div>
+  <div class="month" id="sYearBar">
     <button class="btn" id="sPrev" aria-label="이전 해">‹</button>
     <strong class="num" id="sLabel"></strong>
     <button class="btn" id="sNext" aria-label="다음 해">›</button>
   </div>
+  <p class="hint2" id="sRange" hidden></p>
   <div class="opts">
     <label title="모든 계좌의 거래를 합쳐서 봅니다"><input type="checkbox" id="sAll" checked> 모든 계좌</label>
     <label title="같은 종목·방향으로 2분 안에 나눠 들어간 포지션을 한 트레이드로 봅니다"><input type="checkbox" id="sGroup" checked> 분할 진입 묶기</label>
@@ -1521,6 +1538,27 @@ let stRaw = null;        // { trades, report }
 let stMode = 'symbol';
 let stShow = 50;
 
+// 기간: week(이번 주, 월요일 06:00부터) / 1m / 3m (지금부터 거꾸로) / year(연도별)
+let stPeriod = (() => { try { return localStorage.getItem('stPeriod') || '3m'; } catch { return '3m'; } })();
+const PERIOD_LABEL = { week: '이번 주', '1m': '최근 1개월', '3m': '최근 3개월', year: '' };
+function periodFrom(now = new Date()) {
+  if (stPeriod === 'year') return new Date(stYear, 0, 1);
+  if (stPeriod === 'week') { const td = tradingDate(now); return new Date(td.getFullYear(), td.getMonth(), td.getDate() - (td.getDay() + 6) % 7, TD_CUTOFF); }
+  const m = stPeriod === '1m' ? 1 : 3;
+  return new Date(now.getFullYear(), now.getMonth() - m, now.getDate(), now.getHours(), now.getMinutes());
+}
+function renderPeriod() {
+  document.querySelectorAll('#sPeriod button').forEach((b) => b.classList.toggle('on', b.dataset.p === stPeriod));
+  $('sYearBar').hidden = stPeriod !== 'year';
+  const from = periodFrom();
+  $('sRange').hidden = stPeriod === 'year';
+  $('sRange').textContent = `${PERIOD_LABEL[stPeriod]} · ${dayKey(from)} ${hmOf(from)} ~ 지금 (청산 시각 기준)`;
+}
+$('sPeriod').onclick = (e) => {
+  const b = e.target.closest('button[data-p]'); if (!b || b.dataset.p === stPeriod) return;
+  stPeriod = b.dataset.p; try { localStorage.setItem('stPeriod', stPeriod); } catch {}
+  loadStats();
+};
 $('sPrev').onclick = () => { stYear--; loadStats(); };
 $('sNext').onclick = () => { stYear++; loadStats(); };
 $('sAll').onchange = () => loadStats();
@@ -1529,18 +1567,29 @@ $('sGroup').onchange = () => { stShow = 50; renderStats(); };
 async function loadStats() {
   if (!acc) return;
   $('sLabel').textContent = `${stYear}년`;
-  const want = `${acc.account_number}|${stYear}|${$('sAll').checked}`;
+  renderPeriod();
+  const key = () => `${acc.account_number}|${stYear}|${$('sAll').checked}|${stPeriod}`;
+  const want = key();
   $('sBody').innerHTML = '<div class="empty">불러오는 중…</div>';
-  const an = encodeURIComponent(acc.account_number);
+  const an = encodeURIComponent(acc.account_number), all = $('sAll').checked;
+  const from = periodFrom(), now = new Date();
+  // 연도: 그 해 / 최근 기간: 기간이 걸친 해들을 받아서 청산 시각으로 자름 (달·해를 넘을 수 있음)
+  const years = [];
+  if (stPeriod === 'year') years.push(stYear);
+  else for (let y = from.getFullYear(); y <= now.getFullYear(); y++) years.push(y);
   try {
-    const [trades, report] = await Promise.all([
-      api(`/trades/annual?year=${stYear}&is_all=${$('sAll').checked}&account_number=${an}`),
-      api(`/accounts/${an}/annual-report?year=${stYear}`)
-        .then((r) => r && r.source === 'trades' ? null : r)   // 잔고 없이 거래로만 계산한 값은 잔고 낙폭에 못 씀
+    const [lists, report] = await Promise.all([
+      Promise.all(years.map((y) => api(`/trades/annual?year=${y}&is_all=${all}&account_number=${an}`))),
+      api(`/accounts/${an}/annual-report?year=${years[0]}`)
+        .then((r) => r && r.source === 'trades' ? null : r)   // 잔고 없이 거래로만 계산한 값은 잔고 낙폭·수익률에 못 씀
         .catch(() => null),   // 실패해도 나머지 통계는 표시
     ]);
-    if (want !== `${acc.account_number}|${stYear}|${$('sAll').checked}`) return;
-    stRaw = { trades, report }; stShow = 50;
+    if (want !== key()) return;
+    const allTrades = lists.flat();
+    const trades = stPeriod === 'year' ? allTrades : allTrades.filter((t) => t.close_time && dt(t.close_time) >= from);
+    // 잔고 낙폭은 연도별일 때만 (최근 기간은 해를 넘을 수 있어서), 수익률은 계좌 하나일 때만
+    stRaw = { trades, allTrades, from, report: stPeriod === 'year' ? report : null, balReport: all ? null : report };
+    stShow = 50;
     $('dot').className = 'dot ok';
     renderStats();
   } catch (e) {
@@ -1665,6 +1714,65 @@ function balanceDrawdown(report, ts) {
   return worst;
 }
 
+// 기간 시작 잔고 = 그 해 시작 잔고 + 기간 전 입출금 + 기간 전 (이 계좌) 청산 손익
+function periodReturn(net) {
+  const r = stRaw.balReport, from = stRaw.from;
+  if (!r || r.starting_balance == null) return null;
+  const ys = new Date(r.year, 0, 1);
+  const flow = (list, sign) => (list || []).reduce((acc2, f) => { const t = dt(f.time); return acc2 + (t >= ys && t < from ? sign * Math.abs(f.amount) : 0); }, 0);
+  const inPeriod = (list, sign) => (list || []).reduce((acc2, f) => acc2 + (dt(f.time) >= from ? sign * Math.abs(f.amount) : 0), 0);
+  const before = stRaw.allTrades.filter((t) => t.close_time && dt(t.close_time) >= ys && dt(t.close_time) < from).reduce((a, t) => a + tNet(t), 0);
+  const start = r.starting_balance + flow(r.deposits, 1) + flow(r.withdrawals, -1) + before;
+  if (!(start > 0)) return null;
+  return { pct: net / start, start, flows: inPeriod(r.deposits, 1) + inPeriod(r.withdrawals, -1) };
+}
+
+// 세션: 진입 시각 기준. 주말(거래일 토·일 = 토 06:00 ~ 월 06:00)은 코인장으로 따로
+const WIN_SESSIONS = ['아시아장', '유로장', '미장', '주말·코인장'];
+const winSessionOf = (t) => { const wd = tradingDate(t.open).getDay(); return wd === 0 || wd === 6 ? 3 : sessionOf(t.open); };
+function sessionWins(ts) {
+  const rows = WIN_SESSIONS.map((label, k) => ({ label, k, wins: 0, losses: 0, gw: 0 }));
+  for (const t of ts) {
+    const r = rows[winSessionOf(t)];
+    if (t.net > BE_EPS) { r.wins++; r.gw += t.net; } else if (t.net < -BE_EPS) r.losses++;
+  }
+  const total = rows.reduce((a, r) => a + r.wins, 0);
+  return { total, rows: rows.filter((r) => r.wins || r.losses).sort((a, b) => b.wins - a.wins || a.k - b.k) };
+}
+
+function recapHtml(S, ts) {
+  const ret = periodReturn(S.net);
+  const what = stPeriod === 'year' ? `${stYear}년` : PERIOD_LABEL[stPeriod];
+  const retLine = ret
+    ? `<b class="${cls(ret.pct)}">${ret.pct >= 0 ? '+' : ''}${(ret.pct * 100).toFixed(1)}%</b>
+       <span class="sub">시작 잔고 ${fmt(ret.start, 0)} 대비 · 순손익 ${signed(S.net)}${Math.abs(ret.flows) > 0.005 ? ` · 기간 중 입출금 ${signed(ret.flows)} 제외` : ''}</span>`
+    : `<b class="${cls(S.net)}">${signed(S.net)}</b><span class="sub">${$('sAll').checked ? '수익률은 계좌 하나만 볼 때 표시 (\'모든 계좌\' 끄기)' : '잔고 기록이 없어 수익률 대신 순손익'}</span>`;
+  return `<section class="panel"><div class="recap">
+    <div><span class="ic">💵</span><span>진입 ${S.trades}번 / <b>익절 ${S.wins}회</b> / 손절 ${S.losses}회${S.be ? ` / 본전 ${S.be}회` : ''}
+      <span class="sub">승률 ${pct1(S.winRate)}</span></span></div>
+    <div><span class="ic">⚖️</span><span>손익비 평균 <b>${S.payoff == null ? '-' : S.payoff.toFixed(1) + ' : 1'}</b>
+      <span class="sub">평균 이익 ${fmt(S.avgWin)} · 평균 손실 ${fmt(S.avgLoss)}</span></span></div>
+    <div><span class="ic">📈</span><span>${esc(what)} 수익률 ${retLine}</span></div>
+  </div></section>`;
+}
+
+function sessionWinsHtml(ts) {
+  const w = sessionWins(ts);
+  if (!w.total) return '';
+  const top = w.rows[0];
+  return `<h3 class="sec">세션별 익절</h3>
+    <section class="panel">
+      <table class="wtable">
+        <tr><th>세션</th><th>익절</th><th>비중</th><th>손절</th><th>승률</th></tr>
+        ${w.rows.map((r) => `<tr><td>${esc(r.label)}</td><td class="num"><b>${r.wins}회</b></td>
+          <td class="num"><span class="share" style="width:${Math.round(r.wins / w.total * 48)}px"></span>${(r.wins / w.total * 100).toFixed(1)}%</td>
+          <td class="num muted">${r.losses}회</td><td class="num">${pct1(r.wins + r.losses ? r.wins / (r.wins + r.losses) : null)}</td></tr>`).join('')}
+        <tr class="total"><td>합계</td><td class="num">${w.total}회</td><td class="num">100%</td><td class="num muted">${w.rows.reduce((a, r) => a + r.losses, 0)}회</td><td></td></tr>
+      </table>
+      <p class="hint2" style="margin:10px 0 0">전체 익절 ${w.total}건 중 <b>${esc(top.label)}</b>에서 ${top.wins}건(${(top.wins / w.total * 100).toFixed(1)}%). 진입 시각 기준 · 주말(토 06:00 ~ 월 06:00)은 주말·코인장</p>
+    </section>`;
+}
+
 const pct1 = (v) => v == null ? '-' : (v * 100).toFixed(1) + '%';
 const fix2 = (v) => v == null ? '-' : fmt(v);
 
@@ -1694,7 +1802,8 @@ function renderStats() {
   const maxAbs = ex ? Math.max(0, ...ex.byOrder.map((o) => Math.abs(o.avg))) : 0;
   const list = [...ts].reverse();
 
-  $('sBody').innerHTML = `
+  $('sBody').innerHTML = recapHtml(S, ts) + sessionWinsHtml(ts) + `
+    <h3 class="sec">자세히</h3>
     <section class="panel"><div class="kgrid">
       <div class="big"><small>승률</small><span class="num">${pct1(S.winRate)}</span><em>${S.wins}승 ${S.losses}패 ${S.be}무</em></div>
       <div class="big"><small>순손익</small><span class="num ${cls(S.net)}">${signed(S.net)}</span><em>${S.trades}건</em></div>
