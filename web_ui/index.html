@@ -159,6 +159,12 @@
   .sheet input { width: 100%; }
   .sheet .msg { min-height: 18px; font-size: 12.5px; margin-top: 6px; color: var(--bad); }
   .sheet .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+  .pinebar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+  .pinebar input { width: 72px; }
+  .pinebar .muted { font-size: 12px; }
+  #pineText { width: 100%; height: 240px; resize: vertical; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    background: var(--code, var(--bg)); color: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 8px; white-space: pre; }
+  .pinemeta { font-size: 12px; margin-top: 4px; }
 
   /* 아래 탭 */
   body { padding-bottom: calc(64px + env(safe-area-inset-bottom)); }
@@ -183,6 +189,8 @@
 
   /* 거래내역 */
   .month { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+  .month .btn.small { padding-left: 9px; padding-right: 9px; white-space: nowrap; flex-shrink: 0; }
+  @media (max-width: 420px) { .month { gap: 4px; } .month strong { font-size: 15px; } }
   .month strong { font-size: 16px; min-width: 96px; text-align: center; }
   .month .btn { padding: 6px 11px; }
   .month .sp { flex: 1; }
@@ -414,6 +422,7 @@
     <strong class="num" id="mLabel"></strong>
     <button class="btn" id="mNext" aria-label="다음 달">›</button>
     <span class="sp"></span>
+    <button class="btn small ghost" id="tPine" title="트레이딩뷰 파인스크립트 input.text_area() 에 붙여넣을 거래내역">📋 TV</button>
     <button class="btn small ghost" id="tCollect" title="MT5 체결 기록에서 거래내역을 다시 모읍니다">MT5에서 모으기</button>
   </div>
   <div class="seg" id="tSyms"></div>
@@ -488,6 +497,27 @@
     <div class="acts">
       <button class="btn" data-close>취소</button>
       <button class="btn primary" id="unlockGo" disabled>해제</button>
+    </div>
+  </div>
+</div>
+
+<!-- 트레이딩뷰(파인스크립트 input) 내보내기 -->
+<div class="modal" id="pineModal" hidden>
+  <div class="sheet">
+    <h3>트레이딩뷰에 붙여넣을 거래내역</h3>
+    <p>파인스크립트 <code>input.text_area()</code> 입력창에 그대로 붙여넣으세요. 청산된 거래만 들어갑니다.</p>
+    <div class="seg" id="pineSyms"></div>
+    <div class="pinebar">
+      <input type="number" id="pineDays" min="1" max="3650" value="7" inputmode="numeric" aria-label="일수">
+      <button class="btn small" id="pineRecent">최근 N일만</button>
+      <button class="btn small" id="pineAll">전체보기</button>
+      <span class="muted" id="pineRange"></span>
+    </div>
+    <textarea id="pineText" readonly spellcheck="false"></textarea>
+    <div class="pinemeta muted" id="pineMeta"></div>
+    <div class="acts">
+      <button class="btn" data-close>닫기</button>
+      <button class="btn primary" id="pineCopy">복사하기</button>
     </div>
   </div>
 </div>
@@ -991,6 +1021,119 @@ function renderTrades() {
   $('tList').innerHTML = html;
 }
 $('tList').onclick = (e) => { const r = e.target.closest('.trade'); if (r) openDetail(Number(r.dataset.id)); };
+
+// ── 트레이딩뷰(파인스크립트 input.text_area) 내보내기 ──
+// 앱(플러터)의 generateTradeHistoryForPineInput 과 같은 형식:
+//   첫 줄:   H,<기준시각 ms>[,<심볼>]          기준시각 = 가장 이른 거래의 진입 시각
+//   이후 줄: 진입오프셋초,진입가,청산오프셋초,청산가,b|s,랏,손익[,심볼]
+//   심볼이 하나뿐이면 첫 줄에만 쓰고 각 줄에서는 뺌 (글자 수 절약)
+const pine = { sym: null, days: 7, trades: [], key: null };
+const pineFmt = (v) => Number(v).toFixed(2);
+
+function pineText(list, symbol) {
+  const closed = list.filter((t) => t.close_time && t.price_close != null && t.profit != null && (!symbol || t.symbol === symbol))
+                     .sort((a, b) => dt(a.open_time) - dt(b.open_time));
+  if (!closed.length) return '';
+  const base = dt(closed[0].open_time).getTime();
+  const head = ['H', base]; if (symbol) head.push(symbol);
+  const lines = closed.map((t) => {
+    const f = [Math.round((dt(t.open_time).getTime() - base) / 1000), pineFmt(t.price_open),
+               Math.round((dt(t.close_time).getTime() - base) / 1000), pineFmt(t.price_close),
+               String(t.position || '').toLowerCase().startsWith('b') ? 'b' : 's', pineFmt(t.volume), pineFmt(t.profit)];
+    if (!symbol) f.push(t.symbol);
+    return f.join(',');
+  });
+  return [head.join(','), ...lines].join('\n');
+}
+
+// 기간에 맞는 해의 거래를 받아 둠 (월 단위 화면과 달리 달·해를 넘을 수 있어서 연간 API를 씀)
+async function pineLoad() {
+  const an = encodeURIComponent(acc.account_number), now = new Date();
+  const key = `${acc.account_number}|${pine.days ?? 'all'}`;
+  if (pine.key === key) return;
+  let years;
+  if (pine.days != null) {
+    const from = new Date(now.getTime() - pine.days * 86400000).getFullYear();
+    years = []; for (let y = now.getFullYear(); y >= from; y--) years.push(y);
+  } else years = null;
+  const out = [];
+  if (years) {
+    for (const ls of await Promise.all(years.map((y) => api(`/trades/annual?year=${y}&is_all=false&account_number=${an}`)))) out.push(...ls);
+  } else {
+    // 전체: 올해부터 거꾸로, 2년 연속 거래가 없으면 멈춤 (최대 15년)
+    let empty = 0;
+    for (let y = now.getFullYear(); y > now.getFullYear() - 15 && empty < 2; y--) {
+      const ls = await api(`/trades/annual?year=${y}&is_all=false&account_number=${an}`);
+      empty = ls.length ? 0 : empty + 1; out.push(...ls);
+    }
+  }
+  pine.trades = out; pine.key = key;
+}
+
+function pineSymbolOptions() {
+  // 종목 묶음(골드·나스닥…) + 이 기간에 실제로 거래한 심볼 이름
+  const inRange = pineInRange();
+  const opts = [{ key: 'all', label: '전체', symbols: [...new Set(inRange.map((t) => t.symbol))] }];
+  for (const g of SYMBOLS) {
+    const syms = [...new Set(inRange.filter((t) => symKeyOf(t.symbol) === g.key).map((t) => t.symbol))];
+    opts.push({ key: g.key, label: g.label, symbols: syms });
+  }
+  const other = [...new Set(inRange.filter((t) => symKeyOf(t.symbol) === 'other').map((t) => t.symbol))];
+  if (other.length) opts.push({ key: 'other', label: '기타', symbols: other });
+  return opts;
+}
+function pineInRange() {
+  if (pine.days == null) return pine.trades;
+  const cutoff = Date.now() - pine.days * 86400000;
+  return pine.trades.filter((t) => dt(t.open_time).getTime() > cutoff);
+}
+
+function pineRender() {
+  const opts = pineSymbolOptions();
+  if (!opts.some((o) => o.key === pine.sym)) pine.sym = opts[1]?.key || 'all';
+  $('pineSyms').innerHTML = opts.map((o) =>
+    `<button data-sym="${o.key}" class="${o.key === pine.sym ? 'on' : ''}">${esc(o.label)}${o.symbols.length ? '' : ' ·0'}</button>`).join('');
+  const opt = opts.find((o) => o.key === pine.sym);
+  const list = pineInRange().filter((t) => pine.sym === 'all' || symKeyOf(t.symbol) === pine.sym);
+  // 이 묶음에서 실제 심볼이 하나면 첫 줄에 한 번만, 여러 개면(브로커가 바뀐 경우 등) 줄마다
+  const one = pine.sym !== 'all' && opt.symbols.length === 1 ? opt.symbols[0] : null;
+  const text = pineText(list, one);
+  $('pineText').value = text || '(내보낼 청산 거래가 없습니다)';
+  $('pineCopy').disabled = !text;
+  $('pineRange').textContent = pine.days == null ? '(전체)' : `(최근 ${pine.days}일)`;
+  const n = text ? text.split('\n').length - 1 : 0;
+  $('pineMeta').textContent = text ? `${n}건 · ${text.length.toLocaleString()}자${one ? ` · 심볼 ${one}` : (opt.symbols.length > 1 ? ' · 심볼이 여러 개라 줄마다 표시' : '')}` : '';
+}
+
+async function openPine() {
+  if (!acc) return;
+  pine.sym = tSym === 'all' ? (SYMBOLS[0]?.key || 'all') : tSym;     // 앱처럼 기본은 골드
+  $('pineDays').value = pine.days ?? 7;
+  $('pineText').value = '불러오는 중…'; $('pineMeta').textContent = ''; $('pineCopy').disabled = true;
+  $('pineModal').hidden = false;
+  pine.key = null;                       // 열 때마다 새로 받음 (방금 청산한 거래까지)
+  try { await pineLoad(); pineRender(); }
+  catch (e) { $('pineText').value = '거래내역을 불러오지 못했습니다: ' + e.message; }
+}
+async function pineSetDays(days) {
+  pine.days = days;
+  $('pineText').value = '불러오는 중…';
+  try { await pineLoad(); pineRender(); } catch (e) { $('pineText').value = '거래내역을 불러오지 못했습니다: ' + e.message; }
+}
+$('tPine').onclick = openPine;
+$('pineSyms').onclick = (e) => { const b = e.target.closest('button[data-sym]'); if (!b) return; pine.sym = b.dataset.sym; pineRender(); };
+$('pineRecent').onclick = () => { const d = parseInt($('pineDays').value, 10); pineSetDays(d > 0 ? d : (pine.days ?? 7)); };
+$('pineAll').onclick = () => pineSetDays(null);
+$('pineModal').addEventListener('click', (e) => { if (e.target === $('pineModal') || e.target.closest('[data-close]')) $('pineModal').hidden = true; });
+$('pineCopy').onclick = async () => {
+  const text = $('pineText').value;
+  try {
+    // http(Tailscale·같은 네트워크)에서는 navigator.clipboard 가 없어서 예전 방식으로
+    if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
+    else { const ta = $('pineText'); ta.focus(); ta.select(); if (!document.execCommand('copy')) throw new Error('copy'); ta.setSelectionRange(0, 0); }
+    toast('클립보드에 복사했습니다');
+  } catch { $('pineText').select(); toast('복사하지 못했습니다. 글자를 길게 눌러 직접 복사하세요.', true); }
+};
 
 $('tCollect').onclick = async () => {
   if (!acc) return;
