@@ -514,6 +514,61 @@ class TelegramLive:
         else:
             print(f"[telegram-live] 메시지 고정 실패: {p.get('description')}")
 
+    # ── 업데이트 (services/updater.py) ──
+    async def show_update(self, client, token, chat_id: str) -> None:
+        """/update - 새 버전 확인 후 [업데이트] 버튼"""
+        from services import updater
+        s = await updater.check(notify=False)
+        if not s["enabled"]:
+            await self._send(client, token, chat_id, "이 설치본은 자동 업데이트를 쓰지 않습니다. (git 으로 받은 폴더 등)")
+            return
+        if s.get("error"):
+            await self._send(client, token, chat_id, html.escape(s["error"]))
+            return
+        if not s["available"]:
+            await self._send(client, token, chat_id, f"✅ 최신 버전입니다 ({html.escape(str(s['current']))})")
+            return
+        title, body, buttons = updater.offer_message(s["current"], s["latest"])
+        await self._send(client, token, chat_id, f"<b>{html.escape(title)}</b>\n{html.escape(body)}",
+                         reply_markup={"inline_keyboard": buttons})
+
+    async def update_button(self, client, token, chat_id: str, data: str, message_id) -> str:
+        """upd:ask:<버전> → 한 번 더 확인 / upd:go:<버전> → 시작 / upd:no → 취소. 콜백 답(짧은 글)을 돌려줌"""
+        from services import updater
+        parts = data.split(":")
+        action = parts[1] if len(parts) > 1 else ""
+        if action == "no":
+            if message_id:
+                await self._call(client, token, "editMessageText", chat_id=chat_id, message_id=message_id,
+                                 text="업데이트를 취소했습니다.")
+            return "취소했습니다"
+        s = updater.summary()
+        if not s["enabled"]:
+            return "이 설치본은 자동 업데이트를 쓰지 않습니다"
+        if s["downloading"] or s["pending_restart"]:
+            return "이미 업데이트 중입니다"
+        if not s["available"]:
+            return f"이미 최신 버전입니다 ({s['current']})"
+        latest = s["latest"]["version"]
+        if action == "ask" or (action == "go" and (parts[2] if len(parts) > 2 else "") != latest):
+            await self._send(client, token, chat_id,
+                             f"<b>{html.escape(str(s['current']))} → {html.escape(latest)} 업데이트할까요?</b>\n"
+                             "• 서버가 1~2분 꺼졌다 켜집니다. 그동안 <b>잠금 감시·강제 청산·손실 한도가 멈춥니다</b>.\n"
+                             "• 열린 포지션이 있으면 SL이 걸려 있는지 먼저 확인하세요.\n"
+                             "• 설정·DB·사진은 그대로 남습니다.",
+                             reply_markup={"inline_keyboard": [[
+                                 {"text": "✅ 지금 업데이트", "callback_data": f"upd:go:{latest}"},
+                                 {"text": "취소", "callback_data": "upd:no"}]]})
+            return "확인 메시지를 보냈습니다"
+        try:
+            updater.apply_in_background("텔레그램")
+        except RuntimeError as e:
+            return str(e)[:190]
+        if message_id:      # 두 번 누르지 않게 버튼을 없앰
+            await self._call(client, token, "editMessageText", chat_id=chat_id, message_id=message_id,
+                             text=f"⬆️ {s['current']} → {latest} 업데이트를 시작했습니다.")
+        return "업데이트를 시작합니다"
+
     # ── 봇에게 온 메시지·버튼 ──
     async def poll(self, client: httpx.AsyncClient, token: str, confirm: bool) -> None:
         """봇에게 온 메시지 확인.
@@ -564,6 +619,8 @@ class TelegramLive:
                 mine = cid == str(telegram_cfg()["chat_id"] or "")
                 if mine and text.startswith("/unlock"):
                     await self.start_unlock(client, token, cid, None)
+                elif mine and text.startswith("/update"):
+                    await self.show_update(client, token, cid)
                 elif mine and text.startswith("/pos"):
                     await self.show_positions(client, token, cid)
                 elif mine and text.startswith("/cancel"):
@@ -602,6 +659,12 @@ class TelegramLive:
                         answer = "등록된 대화에서만 쓸 수 있습니다"
                     else:
                         answer = await self.pos_button(client, token, cid, data)
+                elif data.startswith("upd:"):
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        answer = await self.update_button(client, token, cid, data,
+                                                          (cb.get("message") or {}).get("message_id"))
                 await self._call(client, token, "answerCallbackQuery", callback_query_id=cb["id"], text=answer)
                 if data.startswith("unlock:") and answer == "문구를 보냈습니다":
                     try:
@@ -633,6 +696,7 @@ class TelegramLive:
                             await self._call(client, token, "setMyCommands", commands=[
                                 {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
                                 {"command": "pos", "description": "포지션 SL/TP 설정"},
+                                {"command": "update", "description": "새 버전 확인·업데이트"},
                                 {"command": "cancel", "description": "잠금 풀기 그만두기"},
                                 {"command": "id", "description": "이 대화의 chat id 보기"},
                             ])

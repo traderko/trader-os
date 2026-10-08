@@ -125,9 +125,8 @@ async def check(notify: bool = True) -> dict:
             st["notified"] = latest["version"]
             try:
                 from services.telegram_service import TelegramService
-                TelegramService().send("⬆️ TraderOS 새 버전",
-                                       f"{info['version']} → {latest['version']}\n"
-                                       f"관리 화면(이 PC의 http://127.0.0.1:8100/) '업데이트' 탭에서 설치할 수 있습니다.")
+                title, body, buttons = offer_message(info["version"], latest)
+                TelegramService().send(title, body, buttons)
             except Exception:
                 pass
         _write_state(st)
@@ -138,11 +137,78 @@ async def check(notify: bool = True) -> dict:
     return summary()
 
 
+def _plain_notes(notes: str, limit: int = 1500) -> str:
+    """릴리스 노트(마크다운)를 텔레그램용 일반 글로"""
+    lines = []
+    for ln in (notes or "").replace("\r", "").split("\n"):
+        t = ln.strip()
+        if not t or t.startswith("<!--"):
+            continue
+        t = t.lstrip("#").strip() if t.startswith("#") else t
+        if t.startswith(("- ", "* ")):
+            t = "• " + t[2:]
+        t = t.replace("**", "").replace("__", "").replace("`", "")
+        lines.append(t)
+    out = "\n".join(lines)
+    if len(out) > limit:
+        out = out[:limit].rsplit("\n", 1)[0] + "\n…(더 보기는 아래 '변경 내용' 버튼)"
+    return out
+
+
+def offer_message(current: str, latest: dict) -> tuple[str, str, list]:
+    """새 버전 알림 (제목, 본문, 버튼) - 텔레그램 [업데이트] 버튼 포함"""
+    body = [f"현재 {current} → 새 버전 {latest['version']}"]
+    if latest.get("name") and latest["name"].lstrip("vV") != latest["version"]:
+        body.append(latest["name"])
+    if latest.get("published_at"):
+        body.append(f"공개: {latest['published_at'][:10]}")
+    notes = _plain_notes(latest.get("notes") or "")
+    if notes:
+        body += ["", "📝 릴리스 노트", notes]
+    body += ["", "업데이트하면 서버가 1~2분 꺼졌다 켜집니다 (그동안 잠금 감시도 멈춤).",
+             "설정·DB·사진은 그대로 남습니다."]
+    row = [{"text": "⬆️ 업데이트", "callback_data": f"upd:ask:{latest['version']}"}]
+    if latest.get("url"):
+        row.append({"text": "📄 변경 내용", "url": latest["url"]})
+    return f"⬆️ TraderOS 새 버전 {latest['version']}", "\n".join(body), [row]
+
+
+def _notify(title: str, body: str, buttons: list | None = None, wait: bool = False) -> None:
+    try:
+        from services.telegram_service import TelegramService
+        t = TelegramService()
+        if wait:
+            t.send_now(title, body, buttons)      # 서버가 곧 꺼질 때 - 보내고 나서 끄도록
+        else:
+            t.send(title, body, buttons)
+    except Exception:
+        pass
+
+
+def _report_after_restart() -> None:
+    """업데이트로 다시 켜졌으면 결과를 텔레그램으로 알림"""
+    st = _read_state()
+    job = st.pop("applying", None)
+    if not job:
+        return
+    _write_state(st)
+    info = release_info() or {}
+    now = info.get("version")
+    if now and _ver(now) >= _ver(job.get("to") or ""):
+        _notify("✅ TraderOS 업데이트 완료", f"{job.get('from')} → {now}\n서버가 다시 켜졌습니다.")
+    else:
+        _notify("⚠️ TraderOS 업데이트 확인 필요",
+                f"{job.get('from')} → {job.get('to')} 업데이트 후 버전이 {now} 입니다.\n"
+                f"start.bat 창의 [update] 메시지를 확인하거나, 관리 화면 '업데이트' 탭에서 다시 시도하세요.")
+
+
 async def loop() -> None:
     """서버 시작 때와 6시간마다 확인"""
     if release_info() is None:
         return
-    await asyncio.sleep(30)    # 서버가 다 켜진 뒤에
+    await asyncio.sleep(10)
+    _report_after_restart()
+    await asyncio.sleep(20)    # 서버가 다 켜진 뒤에
     while True:
         await check()
         await asyncio.sleep(CHECK_EVERY_SEC)
@@ -216,8 +282,8 @@ def _shutdown_server() -> None:
     os._exit(0)
 
 
-def apply_in_background() -> dict:
-    """[업데이트] 버튼 - 뒤에서 받아서 풀고 서버를 끔"""
+def apply_in_background(source: str = "관리 화면") -> dict:
+    """[업데이트] 버튼 (관리 화면·텔레그램) - 뒤에서 받아서 풀고 서버를 끔"""
     s = summary()
     if not s["enabled"]:
         raise RuntimeError("이 설치본은 자동 업데이트를 쓰지 않습니다 (git 으로 받은 폴더 등).")
@@ -229,13 +295,20 @@ def apply_in_background() -> dict:
     def job():
         try:
             status.update(downloading=True, error=None, progress=0)
+            _notify("⬇️ 업데이트 받는 중", f"{s['current']} → {s['latest']['version']} ({source}에서 시작)")
             _download_and_extract(s["latest"])
             status.update(downloading=False, progress=100)
+            st = _read_state()
+            st["applying"] = {"from": s["current"], "to": s["latest"]["version"], "at": time.time()}
+            _write_state(st)
             print(f"[update] {s['current']} → {s['latest']['version']} 준비 완료 - 서버를 껐다가 업데이트 후 다시 켭니다")
+            _notify("🔄 서버를 다시 켭니다", "새 버전으로 바꾸는 중입니다. 1~2분 뒤 완료 메시지가 옵니다.\n"
+                    "(10분이 지나도 안 오면 PC의 start.bat 창을 확인하세요)", wait=True)
             _shutdown_server()
         except Exception as e:
             status.update(downloading=False, error=f"업데이트 실패: {e}")
             print(f"[update] 실패: {e}")
+            _notify("❌ 업데이트 실패", f"{e}\n서버는 그대로 켜져 있습니다.")
         finally:
             _lock.release()
 

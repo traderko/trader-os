@@ -232,8 +232,8 @@ def _validate(settings: dict) -> None:
         raise SettingsError("실시간 현황 위치는 top 또는 bottom 이어야 합니다.")
 
     ac = settings["access"]
-    if ac.get("mode") not in ("open", "tailscale", "public"):
-        raise SettingsError("접속 방식은 open, tailscale, public 중 하나여야 합니다.")
+    if ac.get("mode") not in ("open", "tailscale", "lan", "public"):
+        raise SettingsError("접속 방식은 open, tailscale, lan, public 중 하나여야 합니다.")
     if ac["mode"] == "public" and not ac.get("password_hash"):
         raise SettingsError("공개 서버 방식은 비밀번호를 먼저 정해야 합니다.")
     sd = ac.get("session_days", 30)

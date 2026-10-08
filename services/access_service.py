@@ -8,6 +8,7 @@
 #   access.mode (관리 화면 '접속' 탭에서 선택, data/settings.json)
 #     open      : 제한 없음 (예전 동작)
 #     tailscale : Tailscale 주소(100.64.0.0/10, fd7a:115c:a1e0::/48)에서 온 요청만 - 내 PC에서 돌릴 때
+#     lan       : 같은 공유기(사설 IP: 192.168.x, 10.x, 172.16~31.x)와 Tailscale 에서 온 요청 - 집 와이파이의 폰·다른 PC, 맥의 가상머신 등
 #     public    : 비밀번호로 로그인한 브라우저만 - 도메인·고정 IP 서버(예: Vultr)에서 돌릴 때
 #                 nginx·Caddy 같은 HTTPS 리버스 프록시 뒤에 두는 걸 전제로 함
 #
@@ -33,6 +34,7 @@ PBKDF2_ROUNDS = 200_000
 _LOOPBACK = {"127.0.0.1", "::1", "localhost"}
 _PROXY_HEADERS = (b"x-forwarded-for", b"x-real-ip", b"forwarded")
 _TAILSCALE_NETS = [ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("fd7a:115c:a1e0::/48")]
+_LAN_NETS = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fe80::/10", "fc00::/7")]
 
 # 로그인 없이 열리는 경로 (public 방식) - 로그인 화면을 그리는 데 필요한 것만
 PUBLIC_PATHS = ("/auth/",)
@@ -79,6 +81,14 @@ def is_tailscale(ip: str) -> bool:
     except ValueError:
         return False
     return any(a in n for n in _TAILSCALE_NETS)
+
+
+def is_lan(ip: str) -> bool:
+    try:
+        a = ipaddress.ip_address(ip)
+    except ValueError:
+        return False
+    return any(a in n for n in _LAN_NETS)
 
 
 def tailscale_ips() -> list[str]:
@@ -218,7 +228,12 @@ def decide(scope) -> tuple[bool, int, str]:
         ip = client_ip(scope)
         if is_tailscale(ip):
             return True, 0, ""
-        return False, 403, f"이 서버는 Tailscale로만 접속할 수 있습니다. (접속 주소 {ip})"
+        return False, 403, f"이 서버는 Tailscale로만 접속할 수 있습니다. (접속 주소 {ip}) - 같은 와이파이에서 쓰려면 관리 화면 '접속' 탭에서 '같은 네트워크'로 바꾸세요."
+    if mode == "lan":
+        ip = client_ip(scope)
+        if is_lan(ip) or is_tailscale(ip):
+            return True, 0, ""
+        return False, 403, f"이 서버는 같은 네트워크(공유기)와 Tailscale에서만 접속할 수 있습니다. (접속 주소 {ip})"
     # public
     path = normalize_path(scope.get("path", ""))
     if path.startswith(PUBLIC_PATHS):
