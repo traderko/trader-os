@@ -631,3 +631,29 @@ async def auth_logout():
 
 app.add_middleware(_AccessGuard)   # 마지막에 추가 = 가장 바깥에서 먼저 검사 (웹 화면·사진·API 모두)
 
+
+# ── 관리 화면을 :8000/admin/ 으로도 (8100 포트를 안 쳐도 되게) ──
+# 관리 앱(api/admin_app.py)을 그대로 붙인다. 접속 제한은 위 _AccessGuard 대신 관리 화면 규칙(services/admin_remote.py):
+#   '관리 화면 원격 접속'이 켜져 있을 때만, 같은 네트워크·Tailscale 에서, 관리자 비밀번호로.
+#   이 경로는 리버스 프록시를 거칠 수 있어 이 PC에서 열어도 비밀번호를 묻는다.
+ADMIN_PATH = "/admin"
+
+
+class _AdminMount:
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope["type"] == "http":
+            path = access.normalize_path(scope.get("path", ""))
+            if path == ADMIN_PATH:
+                return await RedirectResponse(scope.get("path", "") + "/")(scope, receive, send)
+            if path.startswith(ADMIN_PATH + "/"):
+                sub = path[len(ADMIN_PATH):]
+                sub_scope = dict(scope, root_path="", path=sub, raw_path=sub.encode("utf-8"), traderos_via="main")
+                return await admin_app.admin_app(sub_scope, receive, send)
+        return await self.app(scope, receive, send)
+
+
+app.add_middleware(_AdminMount)   # _AccessGuard 보다 바깥 - /admin 은 관리 화면 규칙으로만 검사
+

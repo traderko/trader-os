@@ -417,7 +417,7 @@
       <h2>관리 화면 원격 접속</h2>
       <p class="hint">이 관리 화면(<code>:8100</code>)을 폰·다른 PC(맥의 가상머신 포함)에서 엽니다. 기본은 꺼져 있어 이 PC에서만 열립니다.
         켜면 <b>같은 공유기·Tailscale 에서 온 접속만</b>, <b>관리자 비밀번호</b>로 로그인해야 들어올 수 있습니다.</p>
-      <p class="hint" id="arRemoteNote" hidden>이 설정은 서버가 돌고 있는 PC에서만 바꿀 수 있습니다.</p>
+      <p class="hint" id="arRemoteNote" hidden>이 설정은 서버 PC의 <code>http://127.0.0.1:8100/</code> 에서만 바꿀 수 있습니다.</p>
       <div id="arForm">
         <div class="row"><label class="name">원격 접속</label>
           <label class="switch"><input type="checkbox" id="arOn"> 켜기</label><span id="arState" class="badge"></span></div>
@@ -973,7 +973,8 @@ async function loadAdminRemote() {
   $('arState').className = 'badge ' + (on ? 'warn' : '');
   $('arState').textContent = on ? '다른 기기에서 열 수 있음' : '이 PC에서만';
   const ips = [...r.lan_ips, ...r.tailscale_ips];
-  $('arUrls').textContent = ips.length ? ips.map((ip) => `http://${ip}:${r.port}/`).join('  또는  ') : `http://(이 PC의 주소):${r.port}/`;
+  $('arUrls').textContent = (ips.length ? ips : ['(이 PC의 주소)']).map((ip) => `http://${ip}:${r.main_port}/admin/`).join('  또는  ')
+    + `   (포트를 직접: :${r.port}/)`;
   $('arGuide').hidden = !r.enabled;
 }
 $('arSave').onclick = async () => {

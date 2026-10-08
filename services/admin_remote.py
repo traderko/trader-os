@@ -10,6 +10,11 @@
 #   원격에서도 막는 것: 원격 접속 설정 자체, 봇 토큰이 주소에 들어가는 getUpdates 바로가기
 #
 # 로그인 쿠키는 웹 화면(access_service)과 같은 방식 "만료시각.서명", 키만 따로 (data/admin_session.key)
+#
+# :8000/admin/ 으로도 열 수 있다 (main.py 가 관리 앱을 /admin 에 붙임 - scope["traderos_via"] = "main").
+#   8000 은 nginx 같은 리버스 프록시 뒤에 있을 수 있어서, 이 경로로 온 요청은 "이 PC에서 왔다"고 믿지 않는다:
+#   이 PC에서 열어도 비밀번호 로그인이 필요하고, 프록시가 넘겨준 주소(X-Forwarded-For)가 인터넷이면 거절.
+#   (이 PC에서 비밀번호 없이 쓰려면 127.0.0.1:8100)
 
 import hashlib
 import hmac
@@ -40,18 +45,32 @@ def cfg() -> dict:
     }
 
 
+def via_main(request) -> bool:
+    """:8000/admin/ 으로 온 요청인지"""
+    return request.scope.get("traderos_via") == "main"
+
+
 def is_local(request) -> bool:
+    """비밀번호 없이 통과시켜도 되는 요청 - :8100 에 이 PC에서 직접 온 것만"""
+    if via_main(request):
+        return False
     host = request.client.host if request.client else ""
     return host in LOCAL_HOSTS and not any(h in request.headers for h in PROXY_HEADERS)
 
 
 def remote_ip(request) -> str:
-    # 원격 접속은 프록시 헤더를 믿지 않음 (직접 붙은 주소만)
-    return request.client.host if request.client else ""
+    host = request.client.host if request.client else ""
+    if via_main(request) and host in LOCAL_HOSTS:
+        # 8000 앞의 리버스 프록시가 넘겨준 실제 주소 (없으면 이 PC)
+        fwd = request.headers.get("x-forwarded-for") or request.headers.get("x-real-ip")
+        if fwd:
+            return fwd.split(",")[0].strip()
+    # 8100 에 직접 붙은 원격 접속은 프록시 헤더를 믿지 않음
+    return host
 
 
 def network_ok(ip: str) -> bool:
-    return access.is_lan(ip) or access.is_tailscale(ip)
+    return ip in LOCAL_HOSTS or access.is_lan(ip) or access.is_tailscale(ip)
 
 
 # ── 비밀번호 ──
@@ -128,6 +147,9 @@ def check_network(request) -> tuple[bool, int, str]:
     if is_local(request):
         return True, 0, ""
     if not cfg()["enabled"]:
+        if via_main(request):
+            return False, 403, ("/admin 으로 열려면 서버 PC의 관리 화면(http://127.0.0.1:8100/) '접속' 탭에서 "
+                                "'관리 화면 원격 접속'을 켜세요.")
         return False, 403, "관리 화면은 서버가 돌고 있는 PC에서만 열 수 있습니다. (원격 접속 꺼짐)"
     ip = remote_ip(request)
     if not network_ok(ip):
@@ -142,7 +164,7 @@ def check(request) -> tuple[bool, int, str]:
     ok, code, msg = check_network(request)
     if not ok:
         return ok, code, msg
-    if request.url.path.startswith(LOCAL_ONLY_PATHS):
+    if any(p in request.url.path for p in LOCAL_ONLY_PATHS):
         return False, 403, "이 항목은 서버 PC에서만 열 수 있습니다."
     if not check_session(request.cookies.get(COOKIE)):
         return False, 401, "관리자 로그인이 필요합니다."

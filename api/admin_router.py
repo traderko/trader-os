@@ -415,6 +415,7 @@ def _admin_remote_out(request: Request) -> dict:
     c = admin_remote.cfg()
     return {"enabled": c["enabled"], "has_password": bool(c["password_hash"]), "session_days": c["session_days"],
             "listening": admin_app._current.get("host"), "port": admin_app.ADMIN_PORT,
+            "main_port": int(os.getenv("TRADEROS_PORT", "8000")),
             "lan_ips": admin_remote.lan_ips(), "tailscale_ips": access_service.tailscale_ips()}
 
 
