@@ -547,6 +547,24 @@ async def edit_account(account_id: int, body: AccountPatch, db: AsyncSession = D
     return _account_out(await _get_account(db, account_id))
 
 
+# ── 자동 업데이트 (services/updater.py) ─────────────────────────────
+@router.get("/api/update")
+async def update_status(check: bool = False):
+    from services import updater
+    if check:
+        return await updater.check(notify=False)
+    return updater.summary()
+
+
+@router.post("/api/update/apply")
+async def update_apply():
+    from services import updater
+    try:
+        return updater.apply_in_background()
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+
+
 @router.post("/api/accounts/{account_id}/restart-mt5")
 async def restart_mt5(account_id: int, db: AsyncSession = Depends(get_db)):
     """MT5를 정상 종료 후 다시 띄우고 워커도 다시 실행 (서버 재시작 없이)"""

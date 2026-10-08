@@ -1,5 +1,6 @@
 # 태그(v0.1.0 같은)를 올리면 배포용 zip을 만들어 GitHub Release 에 붙인다.
-#   git tag v0.1.0 && git push origin v0.1.0
+#   git tag v0.1.2 && git push origin v0.1.2
+# zip 안에 release.json(버전·저장소)을 넣는다 → 설치본의 자동 업데이트가 이걸 보고 새 버전을 확인함 (services/updater.py)
 name: Release
 
 on:
@@ -17,7 +18,12 @@ jobs:
 
       - name: Make zip
         run: |
-          git archive --format=zip --prefix=TraderOS/ -o "TraderOS-${GITHUB_REF_NAME}.zip" HEAD
+          ZIP="TraderOS-${GITHUB_REF_NAME}.zip"
+          git archive --format=zip --prefix=TraderOS/ -o "$ZIP" HEAD
+          mkdir -p stage/TraderOS
+          printf '{"version": "%s", "repo": "%s"}\n' "${GITHUB_REF_NAME#v}" "${GITHUB_REPOSITORY}" > stage/TraderOS/release.json
+          (cd stage && zip -q "../$ZIP" TraderOS/release.json)
+          unzip -l "$ZIP" | tail -3
 
       - name: Publish release
         uses: softprops/action-gh-release@v2

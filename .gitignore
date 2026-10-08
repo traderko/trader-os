@@ -13,3 +13,5 @@ venv/
 .venv/
 
 .vscode/
+# 배포 zip 에만 들어가는 버전 정보 (자동 업데이트용)
+release.json

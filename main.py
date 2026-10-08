@@ -431,11 +431,16 @@ async def lifespan(app: FastAPI):
     # 5) 텔레그램 실시간 현황 (고정 메시지를 계속 고쳐 씀 + 봇 버튼·/start 처리)
     from services.telegram_live import live as telegram_live
     telegram_live_task = asyncio.create_task(telegram_live.run())
+
+    # 6) 새 버전 확인 (배포판만 - release.json 이 있을 때, services/updater.py)
+    from services import updater
+    update_task = asyncio.create_task(updater.loop())
  
     yield
  
     # ── shutdown ──
     telegram_live_task.cancel()
+    update_task.cancel()
     await admin_app.stop_admin_server(admin_server, admin_task)
     watchdog_task.cancel()
     
