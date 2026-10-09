@@ -45,6 +45,9 @@ bool   g_everPolled = false;     // 시작 후 조회에 한 번이라도 성공
 datetime g_lockStartTime = 0;    // 참고용으로만 유지 (진단 로그 표시용) - 청산 판단엔 더 이상 안 씀
 ulong  g_protectedTickets[];     // 락 걸리는 "그 순간" 이미 존재하던 티켓 목록 - 얘내는 절대 안 건드림
 bool   g_hasSnapshot = false;    // 스냅샷을 한 번이라도 떴는지
+ulong  g_protectedOrders[];      // 락 걸리는 순간 걸려 있던 대기주문(지정가·역지정가) 티켓 -
+double g_protectedOrderPrice[];  //   잠금 전에 걸어 둔 주문이 잠금 중에 체결돼도 청산하지 않음 (그때 가격도 기록:
+                                 //   잠금 중에 가격을 옮긴 주문은 새 진입으로 봄)
 
 //--- 다이얼로그
 class CLockDialog : public CAppDialog
@@ -415,13 +418,48 @@ void TakeProtectedTicketsSnapshot()
    for(int i = 0; i < total; i++)
       g_protectedTickets[i] = PositionGetTicket(i);
 
-   PrintFormat("[TradeLock] 보호 티켓 스냅샷 %d개 저장", total);
+   // 잠금 전에 걸어 둔 대기주문도 기록 - 잠금 중에 체결되면 그 포지션은 "잠금 전 결정"으로 보고 보호
+   int orders = OrdersTotal();
+   ArrayResize(g_protectedOrders, orders);
+   ArrayResize(g_protectedOrderPrice, orders);
+   for(int i = 0; i < orders; i++)
+   {
+      ulong t = OrderGetTicket(i);
+      g_protectedOrders[i] = t;
+      g_protectedOrderPrice[i] = OrderSelect(t) ? OrderGetDouble(ORDER_PRICE_OPEN) : 0;
+   }
+
+   PrintFormat("[TradeLock] 보호 스냅샷: 포지션 %d개, 대기주문 %d개", total, orders);
 }
 
 bool IsProtectedTicket(ulong ticket)
 {
    for(int i = 0; i < ArraySize(g_protectedTickets); i++)
       if(g_protectedTickets[i] == ticket) return true;
+   return false;
+}
+
+// 이 포지션이 잠금 전에 걸어 둔 대기주문으로 열렸는지.
+// 헤징 계좌: 포지션 ID = 그 포지션을 연 주문의 티켓 (MQL5 문서). 넷팅 계좌는 같은 포지션에 더해지므로 위 티켓 보호로 충분.
+bool IsFromProtectedOrder(ulong positionId)
+{
+   for(int i = 0; i < ArraySize(g_protectedOrders); i++)
+   {
+      if(g_protectedOrders[i] != positionId) continue;
+      // 잠금 중에 가격을 옮겼으면(지금 가까운 가격으로 끌어와 체결) 잠금 전 결정이 아니므로 보호하지 않음
+      if(HistoryOrderSelect(positionId))
+      {
+         double px = HistoryOrderGetDouble(positionId, ORDER_PRICE_OPEN);
+         double pt = SymbolInfoDouble(HistoryOrderGetString(positionId, ORDER_SYMBOL), SYMBOL_POINT);
+         if(g_protectedOrderPrice[i] > 0 && px > 0 && MathAbs(px - g_protectedOrderPrice[i]) > MathMax(pt, 1e-9) * 0.5)
+         {
+            PrintFormat("[TradeLock] 주문 %I64u: 잠금 중에 가격을 옮김 (%.5f → %.5f) - 보호하지 않음",
+                        positionId, g_protectedOrderPrice[i], px);
+            return false;
+         }
+      }
+      return true;
+   }
    return false;
 }
 
@@ -439,6 +477,15 @@ void CloseAllOpenPositions(string tag)
       // POSITION_TIME 비교 방식은 넷팅 반전 등으로 흔들릴 수 있어서 폐기함 -
       // 티켓 자체는 넷팅 반전에도 유지된다고 MT5 공식 문서에 명시돼있어 더 안전함.
       bool isProtected = IsProtectedTicket(ticket);
+      if(!isProtected && IsFromProtectedOrder((ulong)PositionGetInteger(POSITION_IDENTIFIER)))
+      {
+         // 잠금 전에 걸어 둔 지정가가 체결된 포지션 - 보호 목록에 넣어 다음부터 바로 건너뜀
+         int n = ArraySize(g_protectedTickets);
+         ArrayResize(g_protectedTickets, n + 1);
+         g_protectedTickets[n] = ticket;
+         PrintFormat("[TradeLock] %s 티켓 %I64u: 잠금 전에 걸어 둔 대기주문이 체결된 것이라 청산하지 않음", sym, ticket);
+         isProtected = true;
+      }
 
       PrintFormat("[TradeLock 진단] 티켓=%d 스냅샷보호=%s 비교=%s",
                   ticket, isProtected ? "예" : "아니오",
