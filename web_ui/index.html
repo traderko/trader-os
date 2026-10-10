@@ -576,18 +576,68 @@ const hm = (sec) => { sec = Math.max(0, sec | 0); const h = sec / 3600 | 0, m = 
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem('traderos.' + k)) ?? d; } catch { return d; } },
                 set(k, v) { try { localStorage.setItem('traderos.' + k, JSON.stringify(v)); } catch {} } };
 
-async function api(path, opt = {}) {
+async function apiRaw(path, opt = {}) {
   const res = await fetch(BASE + path, { ...opt, headers: opt.body ? { 'Content-Type': 'application/json' } : undefined });
   const text = await res.text();
   let data = null; try { data = text ? JSON.parse(text) : null; } catch { data = text; }
   if (res.status === 401 && data && data.login) { showLogin(); throw new Error('로그인이 필요합니다.'); }
   if (!res.ok) throw new Error((data && data.detail) || text || ('HTTP ' + res.status));
-  return data;
+  return { data, text };
+}
+async function api(path, opt = {}) { return (await apiRaw(path, opt)).data; }
+
+// ── 캐시: 거래내역·손익·통계는 마지막으로 받은 걸 바로 보여주고, 뒤에서 새로 받아 바뀐 게 있을 때만 다시 그림 ──
+// 메모리 + 브라우저 저장소(localStorage). 앱을 닫았다 열어도 바로 보임. 저장소가 꽉 차면 오래된 것부터 지움.
+const CACHE = new Map();
+const CK = 'traderos:c:', CACHE_MAX_ITEM = 2_000_000;
+function cacheGet(path) {
+  if (CACHE.has(path)) return CACHE.get(path);
+  try { const raw = localStorage.getItem(CK + path); if (raw) { const v = JSON.parse(raw); CACHE.set(path, v); return v; } } catch {}
+  return undefined;
+}
+function cacheSet(path, text, data) {
+  const v = { t: Date.now(), text, d: data };
+  CACHE.set(path, v);
+  if (text.length > CACHE_MAX_ITEM) return;            // 너무 큰 건 메모리에만
+  const raw = JSON.stringify(v);
+  for (let i = 0; i < 6; i++) {
+    try { localStorage.setItem(CK + path, raw); return; }
+    catch {   // 꽉 참 → 가장 오래된 캐시를 지우고 다시
+      let oldest = null, ot = Infinity;
+      try {
+        for (let j = 0; j < localStorage.length; j++) {
+          const k = localStorage.key(j); if (!k || !k.startsWith(CK) || k === CK + path) continue;
+          const t = JSON.parse(localStorage.getItem(k)).t || 0; if (t < ot) { ot = t; oldest = k; }
+        }
+        if (!oldest) return; localStorage.removeItem(oldest);
+      } catch { return; }
+    }
+  }
+}
+function cacheClear() {
+  CACHE.clear();
+  try { for (let j = localStorage.length - 1; j >= 0; j--) { const k = localStorage.key(j); if (k && k.startsWith(CK)) localStorage.removeItem(k); } } catch {}
+}
+// paths 를 모두 받아 onData(데이터 배열, 캐시인지). 캐시가 다 있으면 바로 한 번, 새 데이터가 다르면 한 번 더.
+// isCurrent(): 그 사이 계좌·기간을 바꿨으면 false → 버림. 캐시를 보여준 뒤 받기에 실패하면 캐시 화면 유지.
+async function swr(paths, onData, isCurrent = () => true) {
+  const cached = paths.map(cacheGet);
+  const have = cached.every((c) => c !== undefined);
+  if (have) onData(cached.map((c) => c.d), true);
+  let fresh;
+  try { fresh = await Promise.all(paths.map((p) => apiRaw(p))); }
+  catch (e) { if (have) { $('dot').className = 'dot bad'; return; } throw e; }
+  if (!isCurrent()) return;
+  const changed = !have || fresh.some((f, i) => f.text !== cached[i].text);
+  fresh.forEach((f, i) => cacheSet(paths[i], f.text, f.data));
+  $('dot').className = 'dot ok';
+  if (changed) onData(fresh.map((f) => f.data), false);
 }
 
 // ── 로그인 (서버가 공개 서버 방식이면 비밀번호 필요) ──
 function showLogin() {
   if (!$('login').hidden) return;
+  cacheClear();   // 로그인이 풀렸으면(비밀번호 변경 등) 이 기기에 저장해 둔 거래 데이터도 지움
   $('login').hidden = false; $('loginMsg').textContent = '';
   setTimeout(() => $('loginPw').focus(), 50);
 }
@@ -620,10 +670,10 @@ let SYMBOLS = [
 ];
 const normSym = (x) => String(x || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 async function loadSymbols() {
-  try {
-    const g = await api('/symbols');
-    if (Array.isArray(g) && g.length) { SYMBOLS = g; renderSyms(); renderTSyms(); }
-  } catch {}   // 예전 서버면 기본값 그대로
+  const use = ([g]) => { if (Array.isArray(g) && g.length) { SYMBOLS = g; renderSyms(); renderTSyms(); } };
+  const c = cacheGet('/symbols');
+  if (c) { use([c.d]); swr(['/symbols'], (d, cached) => { if (!cached) use(d); }).catch(() => {}); return; }
+  try { await swr(['/symbols'], use); } catch {}   // 예전 서버면 기본값 그대로
 }
 
 // ── 상태 ──
@@ -654,7 +704,10 @@ applyTheme(document.documentElement.dataset.theme || null);
 // ── 계좌 ──
 async function loadAccounts() {
   await loadSymbols();
-  accounts = await api('/accounts');
+  // 계좌 목록: 캐시가 있으면 바로 쓰고 뒤에서 새로 받아 둠 (다음에 열 때 반영)
+  const c = cacheGet('/accounts');
+  if (c && Array.isArray(c.d) && c.d.length) { accounts = c.d; swr(['/accounts'], () => {}).catch(() => {}); }
+  else { const r = await apiRaw('/accounts'); accounts = r.data; cacheSet('/accounts', r.text, r.data); }
   const saved = store.get('acc', null);
   acc = accounts.find((a) => String(a.account_number) === String(saved))
      || accounts.find((a) => a.is_default) || accounts[0] || null;
@@ -987,14 +1040,13 @@ async function loadTrades() {
   if (!acc) return;
   $('mLabel').textContent = `${tYm.y}. ${pad2(tYm.m)}`;
   const want = `${acc.account_number}|${tYm.y}|${tYm.m}`;
-  $('tList').innerHTML = '<div class="empty">불러오는 중…</div>';
+  const cur = () => want === `${acc.account_number}|${tYm.y}|${tYm.m}`;
+  const path = `/trades?year=${tYm.y}&month=${tYm.m}&account_number=${encodeURIComponent(acc.account_number)}`;
+  if (!cacheGet(path)) $('tList').innerHTML = '<div class="empty">불러오는 중…</div>';
   try {
-    const list = await api(`/trades?year=${tYm.y}&month=${tYm.m}&account_number=${encodeURIComponent(acc.account_number)}`);
-    if (want !== `${acc.account_number}|${tYm.y}|${tYm.m}`) return;
-    trades = list;
-    $('dot').className = 'dot ok';
-    renderTrades();
+    await swr([path], ([list]) => { if (!cur()) return; trades = list; renderTrades(); }, cur);
   } catch (e) {
+    if (!cur()) return;
     $('dot').className = 'dot bad';
     $('tList').innerHTML = `<div class="empty">거래내역 조회 실패: ${esc(e.message)}</div>`;
   }
@@ -1349,18 +1401,19 @@ async function loadPnl() {
   $('pLabel').textContent = yearMode ? `${pYm.y}년` : `${pYm.y}. ${pad2(pYm.m)}`;
   $('pAllWrap').style.display = yearMode ? '' : 'none';
   const want = `${acc.account_number}|${pMode}|${pYm.y}|${pYm.m}|${$('pAll').checked}`;
-  $('pSum').innerHTML = '<div class="empty" style="grid-column:1/-1">불러오는 중…</div>';
-  $('pRows').innerHTML = ''; $('pBalance').innerHTML = ''; $('pBars').innerHTML = '';
+  const cur = () => want === `${acc.account_number}|${pMode}|${pYm.y}|${pYm.m}|${$('pAll').checked}`;
   const an = encodeURIComponent(acc.account_number);
+  const paths = yearMode
+    ? [`/accounts/${an}/annual-report?year=${pYm.y}`, `/trades/annual?year=${pYm.y}&is_all=${$('pAll').checked}&account_number=${an}`]
+    : [`/accounts/${an}/monthly-report?year=${pYm.y}&month=${pYm.m}`, `/trades?year=${pYm.y}&month=${pYm.m}&account_number=${an}`];
+  if (!paths.every(cacheGet)) {
+    $('pSum').innerHTML = '<div class="empty" style="grid-column:1/-1">불러오는 중…</div>';
+    $('pRows').innerHTML = ''; $('pBalance').innerHTML = ''; $('pBars').innerHTML = '';
+  }
   try {
-    const [report, list] = await Promise.all(yearMode
-      ? [api(`/accounts/${an}/annual-report?year=${pYm.y}`), api(`/trades/annual?year=${pYm.y}&is_all=${$('pAll').checked}&account_number=${an}`)]
-      : [api(`/accounts/${an}/monthly-report?year=${pYm.y}&month=${pYm.m}`), api(`/trades?year=${pYm.y}&month=${pYm.m}&account_number=${an}`)]);
-    if (want !== `${acc.account_number}|${pMode}|${pYm.y}|${pYm.m}|${$('pAll').checked}`) return;
-    pnlData = buildPnl(report, list, yearMode);
-    $('dot').className = 'dot ok';
-    renderPnl();
+    await swr(paths, ([report, list]) => { if (!cur()) return; pnlData = buildPnl(report, list, yearMode); renderPnl(); }, cur);
   } catch (e) {
+    if (!cur()) return;
     $('pSum').innerHTML = `<div class="empty" style="grid-column:1/-1">손익을 불러오지 못했습니다: ${esc(e.message)}</div>`;
   }
 }
@@ -1570,29 +1623,36 @@ async function loadStats() {
   renderPeriod();
   const key = () => `${acc.account_number}|${stYear}|${$('sAll').checked}|${stPeriod}`;
   const want = key();
-  $('sBody').innerHTML = '<div class="empty">불러오는 중…</div>';
   const an = encodeURIComponent(acc.account_number), all = $('sAll').checked;
   const from = periodFrom(), now = new Date();
   // 연도: 그 해 / 최근 기간: 기간이 걸친 해들을 받아서 청산 시각으로 자름 (달·해를 넘을 수 있음)
   const years = [];
   if (stPeriod === 'year') years.push(stYear);
   else for (let y = from.getFullYear(); y <= now.getFullYear(); y++) years.push(y);
-  try {
-    const [lists, report] = await Promise.all([
-      Promise.all(years.map((y) => api(`/trades/annual?year=${y}&is_all=${all}&account_number=${an}`))),
-      api(`/accounts/${an}/annual-report?year=${years[0]}`)
-        .then((r) => r && r.source === 'trades' ? null : r)   // 잔고 없이 거래로만 계산한 값은 잔고 낙폭·수익률에 못 씀
-        .catch(() => null),   // 실패해도 나머지 통계는 표시
-    ]);
-    if (want !== key()) return;
+  const tradePaths = years.map((y) => `/trades/annual?year=${y}&is_all=${all}&account_number=${an}`);
+  const repPath = `/accounts/${an}/annual-report?year=${years[0]}`;
+  let lists = null, report = (cacheGet(repPath) || {}).d ?? null;
+  const show = () => {
+    if (!lists || want !== key()) return;
+    const rep = report && report.source === 'trades' ? null : report;   // 잔고 없이 거래로만 계산한 값은 잔고 낙폭·수익률에 못 씀
     const allTrades = lists.flat();
     const trades = stPeriod === 'year' ? allTrades : allTrades.filter((t) => t.close_time && dt(t.close_time) >= from);
     // 잔고 낙폭은 연도별일 때만 (최근 기간은 해를 넘을 수 있어서), 수익률은 계좌 하나일 때만
-    stRaw = { trades, allTrades, from, report: stPeriod === 'year' ? report : null, balReport: all ? null : report };
-    stShow = 50;
-    $('dot').className = 'dot ok';
+    stRaw = { trades, allTrades, from, report: stPeriod === 'year' ? rep : null, balReport: all ? null : rep };
     renderStats();
+  };
+  if (![...tradePaths, repPath].every(cacheGet)) $('sBody').innerHTML = '<div class="empty">불러오는 중…</div>';
+  stShow = 50;
+  // 리포트는 실패해도 나머지 통계는 표시 (따로 받아서, 바뀌었을 때만 다시 그림)
+  apiRaw(repPath).then((r) => {
+    const old = cacheGet(repPath), changed = !old || old.text !== r.text;
+    cacheSet(repPath, r.text, r.data);
+    if (changed) { report = r.data; show(); }
+  }).catch(() => {});
+  try {
+    await swr(tradePaths, (d) => { lists = d; show(); }, () => want === key());
   } catch (e) {
+    if (want !== key()) return;
     $('sBody').innerHTML = `<div class="empty">불러오지 못했습니다: ${esc(e.message)}</div>`;
   }
 }
