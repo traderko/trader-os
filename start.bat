@@ -6,6 +6,46 @@ setlocal
 cd /d "%~dp0"
 title TraderOS server
 
+rem Already running? (port 8000 in use) -> just open the admin page, do not start a second server
+netstat -an | findstr /c:":8000 " | findstr /c:"LISTENING" >nul 2>&1
+if not errorlevel 1 (
+    echo  TraderOS is already running. Opening the admin page.
+    start "" "http://127.0.0.1:8100/"
+    timeout /t 3 >nul
+    exit /b 0
+)
+
+rem Always run as administrator (MT5 terminals are controlled from here).
+rem Set TRADEROS_NO_ADMIN=1 before running to skip this.
+if defined TRADEROS_NO_ADMIN goto admin_ok
+fltmc >nul 2>&1 && goto admin_ok
+
+rem Registered in Task Scheduler (first run did it) -> start through it, no UAC prompt
+powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0util\win_task.ps1" -Mode run -Bat "%~f0" >nul 2>&1
+if not errorlevel 1 (
+    echo  Starting TraderOS as administrator - a new window opens.
+    timeout /t 2 >nul
+    exit /b 0
+)
+
+rem First time: ask once (UAC). The elevated run registers the task for next time.
+echo  Requesting administrator rights - click "Yes" in the Windows prompt.
+echo  This is asked only once; later starts go through Task Scheduler without the prompt.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -WorkingDirectory '%~dp0' -Verb RunAs" >nul 2>&1
+if errorlevel 1 (
+    echo.
+    echo  [!] Administrator rights were not granted. TraderOS was not started.
+    echo      Run start.bat again and click "Yes", or right-click it - Run as administrator.
+    pause
+)
+exit /b
+:admin_ok
+
+rem Register (or update, if this folder moved) the Task Scheduler entry. Set TRADEROS_NO_TASK=1 to skip.
+if not defined TRADEROS_NO_ADMIN if not defined TRADEROS_NO_TASK (
+    powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0util\win_task.ps1" -Mode register -Bat "%~f0"
+)
+
 rem start.bat itself was replaced by an update -> swap in the new file and re-run it
 if exist "start.bat.new" (move /y "start.bat.new" "start.bat" >nul & call "%~f0" & exit /b)
 
