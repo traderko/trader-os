@@ -121,6 +121,15 @@
   .days input { display: none; }
   .days label:has(input:checked) { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+  .gdrule { border-top: 1px solid var(--line); padding: 12px 0; }
+  .gdrule .hd { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .gdrule .hd b { font-size: 14px; }
+  .gdrule .hd small { color: var(--muted); flex: 1 1 260px; }
+  .gdrule .bd { display: flex; gap: 8px 14px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+  .gdrule .bd input[type=text], .gdrule .bd textarea { flex: 1 1 100%; font: inherit; }
+  .gdrule .bd input[type=number] { width: 72px; }
+  .gdrule.off .bd { opacity: .45; }
+  .gdrule .wd label { margin-right: 4px; }
   button.btn {
     font: inherit; border: 1px solid var(--line); background: var(--panel); color: var(--text);
     border-radius: 8px; padding: 7px 14px; cursor: pointer;
@@ -179,6 +188,7 @@
     <button data-tab="acctab">계좌</button>
     <button data-tab="rules">잠금 규칙</button>
     <button data-tab="phrases">확인 문구</button>
+    <button data-tab="guides">지침</button>
     <button data-tab="telegram">텔레그램</button>
     <button data-tab="access">접속</button>
     <button data-tab="logs">로그</button>
@@ -314,6 +324,25 @@
   </section>
 
   <!-- 확인 문구 -->
+  <section id="guides">
+    <div class="panel">
+      <h2>상황별 트레이딩 지침</h2>
+      <p class="hint">정해진 시간마다가 아니라, 그 상황이 생긴 순간에 맞는 지침을 텔레그램으로 보냅니다. 거래는 막지 않습니다.</p>
+      <div class="row"><label class="name">지침 알림</label><label class="switch"><input type="checkbox" id="gdOn"> 켜기</label></div>
+      <div class="row"><label class="name">같은 알림 반복 방지<small>같은 규칙·계좌(·종목) 알림은 이 시간 안에 다시 보내지 않음</small></label>
+        <input type="number" id="gdCooldown" min="1" max="1440" style="width:80px"><span class="unit">분</span></div>
+      <div id="gdRules"></div>
+      <div class="actions"><button class="btn" id="gdTestAny">무작위 지침 미리 보내기</button><button class="btn primary" id="gdSave">저장</button></div>
+    </div>
+    <div class="panel">
+      <h2>지침 목록</h2>
+      <p class="hint">한 줄에 하나씩. '그날 첫 진입' 알림은 여기서 무작위로 고릅니다.
+        <b>정기 재확인 문구로 추가</b>를 누르면 재확인 잠금이 걸릴 때 이 지침 중 하나를 그대로 입력해야 풀립니다.</p>
+      <textarea id="gdItems" rows="12" style="width:100%;font:inherit;line-height:1.6"></textarea>
+      <div class="actions"><button class="btn" id="gdToPhrases">정기 재확인 문구로 추가</button><button class="btn primary" id="gdSave2">저장</button></div>
+    </div>
+  </section>
+
   <section id="phrases">
     <div id="phraseWarn"></div>
     <div class="panel">
@@ -527,6 +556,7 @@ $('tabs').onclick = (e) => {
   if (b.dataset.tab === 'logs') loadLogList();
   if (b.dataset.tab === 'update') loadUpdate(false);
   if (b.dataset.tab === 'phrases') loadPhrases();
+  if (b.dataset.tab === 'guides') loadGuides();
   if (b.dataset.tab === 'acctab') loadAccounts();
   if (b.dataset.tab === 'access') { loadAccess(); loadAdminRemote(); }
   document.body.classList.toggle('full', b.dataset.tab === 'webapp');
@@ -1041,6 +1071,70 @@ $('arSave').onclick = async () => {
 $('arLogoutAll').onclick = async () => {
   if (!confirm('원격으로 로그인한 모든 기기를 로그아웃할까요?')) return;
   try { await api('admin-remote', { method: 'PUT', body: JSON.stringify({ logout_all: true }) }); toast('원격 기기를 모두 로그아웃했습니다.'); }
+  catch (e) { toast(e.message, true); }
+};
+
+// ── 트레이딩 지침 ──
+let guides = null;
+const WD = ['월', '화', '수', '목', '금', '토', '일'];
+function renderGuides() {
+  const { settings: g, rules } = guides;
+  $('gdOn').checked = g.enabled; $('gdCooldown').value = g.cooldown_min;
+  $('gdItems').value = (g.items || []).join('\n');
+  $('gdRules').innerHTML = rules.map((m) => {
+    const r = g.rules[m.key] || {};
+    const params = m.params.map((p) => {
+      if (p.type === 'bool') return `<label class="switch"><input type="checkbox" data-p="${p.k}" ${r[p.k] ? 'checked' : ''}> ${esc(p.label)}</label>`;
+      if (p.type === 'weekdays') return `<span class="wd">${WD.map((w, i) => `<label><input type="checkbox" data-wd="${i}" ${(r.weekdays || []).includes(i) ? 'checked' : ''}>${w}</label>`).join('')}</span>`;
+      return `<span><input type="number" data-p="${p.k}" value="${r[p.k] ?? ''}" step="${p.type === 'float' ? '0.1' : '1'}"> ${esc(p.label)}</span>`;
+    }).join('');
+    return `<div class="gdrule${r.enabled ? '' : ' off'}" data-key="${m.key}">
+      <div class="hd"><label class="switch"><input type="checkbox" data-p="enabled" ${r.enabled ? 'checked' : ''}> <b>${esc(m.label)}</b></label>
+        <small>${esc(m.desc)}</small><button class="btn" data-test="${m.key}" style="padding:3px 10px;font-size:12px">미리 보내기</button></div>
+      <div class="bd"><textarea data-p="text" rows="${(r.text || '').includes('\n') ? 2 : 1}" placeholder="${m.key === 'first_entry' ? '비워 두면 지침 목록에서 무작위로' : '보낼 지침 문구'}">${esc(r.text || '')}</textarea>${params}</div>
+    </div>`;
+  }).join('');
+}
+function collectGuides() {
+  const rules = {};
+  document.querySelectorAll('#gdRules .gdrule').forEach((el) => {
+    const r = {};
+    el.querySelectorAll('[data-p]').forEach((i) => {
+      const k = i.dataset.p;
+      r[k] = i.type === 'checkbox' ? i.checked : i.type === 'number' ? Number(i.value) : i.value;
+    });
+    const wd = el.querySelectorAll('[data-wd]');
+    if (wd.length) r.weekdays = [...wd].filter((i) => i.checked).map((i) => Number(i.dataset.wd));
+    rules[el.dataset.key] = r;
+  });
+  return { enabled: $('gdOn').checked, cooldown_min: Number($('gdCooldown').value) || 30,
+           items: $('gdItems').value.split('\n').map((x) => x.trim()).filter(Boolean), rules };
+}
+async function loadGuides() {
+  try { guides = await api('guidelines'); renderGuides(); } catch (e) { toast(e.message, true); }
+}
+async function saveGuides() {
+  try { guides = await api('guidelines', { method: 'PUT', body: JSON.stringify(collectGuides()) }); renderGuides(); toast('저장했습니다. 바로 적용됩니다.'); return true; }
+  catch (e) { toast(e.message, true); return false; }
+}
+$('gdSave').onclick = saveGuides; $('gdSave2').onclick = saveGuides;
+$('gdRules').addEventListener('change', (e) => {
+  if (e.target.dataset.p === 'enabled') e.target.closest('.gdrule').classList.toggle('off', !e.target.checked);
+});
+$('gdRules').addEventListener('click', async (e) => {
+  const b = e.target.closest('[data-test]'); if (!b) return;
+  if (!(await saveGuides())) return;
+  try { await api('guidelines/test', { method: 'POST', body: JSON.stringify({ key: b.dataset.test }) }); toast('보냈습니다. 텔레그램을 확인하세요.'); }
+  catch (err) { toast(err.message, true); }
+});
+$('gdTestAny').onclick = async () => {
+  if (!(await saveGuides())) return;
+  try { await api('guidelines/test', { method: 'POST', body: '{}' }); toast('보냈습니다. 텔레그램을 확인하세요.'); } catch (e) { toast(e.message, true); }
+};
+$('gdToPhrases').onclick = async () => {
+  if (!(await saveGuides())) return;
+  if (!confirm('지침 목록을 정기 재확인 문구로 추가할까요? 재확인 잠금이 걸릴 때 이 중 하나를 그대로 입력해야 풀립니다.')) return;
+  try { const r = await api('guidelines/to-phrases', { method: 'POST' }); toast(`${r.added}개 추가 (${r.skipped}개는 이미 있음). 확인 문구 탭에서 볼 수 있습니다.`); }
   catch (e) { toast(e.message, true); }
 };
 

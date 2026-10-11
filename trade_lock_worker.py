@@ -268,8 +268,14 @@ async def _loss_limit_loop(mt5, account_row):
                     async with AsyncSessionLocal() as db:
                         await lock_svc.set_loss_limit_lock(db, aid, until)
                 if level == 1:
+                    try:
+                        from services import guidelines
+                        guide = guidelines.rule_text("loss_warn")
+                    except Exception:
+                        guide = None
                     _fcm.send("⚠️ 일일 손실 경고",
-                              f"계좌 {number}: 오늘 손실 {pct:.1f}% (기준 {base:,.2f} → 지금 {info.equity:,.2f})\n한도: {limits}",
+                              f"계좌 {number}: 오늘 손실 {pct:.1f}% (기준 {base:,.2f} → 지금 {info.equity:,.2f})\n한도: {limits}"
+                              + (f"\n\n📌 {guide}" if guide else ""),
                               '{"type":"daily_loss_warn","account_number":"%s"}' % number)
                 elif level == 2:
                     _fcm.send("⛔ 일일 손실 한도 - 새 진입 차단",

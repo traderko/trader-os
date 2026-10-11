@@ -509,6 +509,44 @@ async def week_events(db: AsyncSession = Depends(get_db)):
             "health": {"einfomax": h("einfomax"), "ff": h("ff")}}
 
 
+# ── 트레이딩 지침 (services/guidelines.py) ─────────────────────────────
+@router.get("/api/guidelines")
+async def read_guidelines():
+    from services import guidelines
+    return {"settings": get_settings()["guidelines"], "rules": guidelines.RULES}
+
+
+@router.put("/api/guidelines")
+async def write_guidelines(body: dict):
+    from services import guidelines
+    patch = {k: body[k] for k in ("enabled", "cooldown_min", "items", "rules") if k in body}
+    try:
+        update_settings({"guidelines": patch})
+    except SettingsError as e:
+        raise HTTPException(400, str(e))
+    return {"settings": get_settings()["guidelines"], "rules": guidelines.RULES}
+
+
+@router.post("/api/guidelines/to-phrases")
+async def guidelines_to_phrases(db: AsyncSession = Depends(get_db)):
+    """지침 목록을 정기 재확인 문구로 추가"""
+    from services import guidelines
+    return await guidelines.add_items_as_phrases(db)
+
+
+@router.post("/api/guidelines/test")
+async def guidelines_test(body: dict | None = None):
+    """규칙 하나(또는 무작위 지침)를 텔레그램으로 미리 보내 봄"""
+    from services import guidelines
+    key = (body or {}).get("key")
+    r = (get_settings()["guidelines"]["rules"] or {}).get(key) if key else None
+    items = get_settings()["guidelines"]["items"] or ["(지침 목록이 비어 있습니다)"]
+    text = (r or {}).get("text") or "\n".join(f"□ {x}" for x in random.sample(items, min(2, len(items))))
+    label = next((x["label"] for x in guidelines.RULES if x["key"] == key), "지침")
+    await asyncio.to_thread(guidelines.send, text, f"(관리 화면에서 보낸 미리보기 · {label})")
+    return {"ok": True}
+
+
 # ── 확인 문구 ───────────────────────────────────────────────────────
 class PhraseIn(BaseModel):
     phrase: str

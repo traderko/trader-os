@@ -81,6 +81,39 @@ DEFAULTS: dict = {
         "password_hash": "",
         "session_days": 30,
     },
+    # 트레이딩 지침 (services/guidelines.py) - 상황이 생긴 순간 맞는 지침을 텔레그램으로
+    "guidelines": {
+        "enabled": True,
+        "cooldown_min": 30,          # 같은 지침은 이 시간 안에 다시 보내지 않음
+        "items": [
+            "돈을 가져오는 매매가 아닌 돈을 주는 매매를 하고 있는가?",
+            "손실보다 수익을 먼저 생각하고 있는가?",
+            "길게 먹는 것이 내 실력이라고 생각하고 있는가?",
+            "예수금을 숫자가 아닌 생활비라고 생각하고 있는가?",
+            "도 닦는다는 심정으로 거래에 임하고 있는가?",
+            "자기확신과 욕심으로 손절 세팅을 하지 않았는가?",
+            "시간 당 수십 번의 거래를 하고 있는가?",
+            "차트에서 보여준 근거보다 나의 희망회로가 더 우선시되는가?",
+            "시간봉보다 분봉을 메인으로 보고 있는가?",
+            "도파민 뇌동매매, 복수매매를 하고 있는가?",
+            "미장 직전후, 지표발표를 앞두고 포지션 정리를 하였는가?",
+            "나의 최대손실 비율을 허용하였는가?",
+            "시나리오가 없는 매매를 하고 있는가?",
+            "되돌리지 않고, 바로 가지 않는 곳에서 비중을 키웠는가?",
+            "너무 많은 손실을 감내하고 있는가?",
+            "목요일(지표발표일) 아시아장에서 역매매하고 있는가?",
+        ],
+        "rules": {
+            "revenge":      {"enabled": True, "text": "도파민 뇌동매매, 복수매매를 하고 있는가?", "minutes": 10},
+            "overtrade":    {"enabled": True, "text": "시간 당 수십 번의 거래를 하고 있는가?", "count": 5, "minutes": 60},
+            "no_sl":        {"enabled": True, "text": "자기확신과 욕심으로 손절 세팅을 하지 않았는가?", "seconds": 60},
+            "event_hold":   {"enabled": True, "text": "미장 직전후, 지표발표를 앞두고 포지션 정리를 하였는가?", "minutes": 30, "us_open": True},
+            "loss_warn":    {"enabled": True, "text": "나의 최대손실 비율을 허용하였는가?\n너무 많은 손실을 감내하고 있는가?"},
+            "size_jump":    {"enabled": True, "text": "되돌리지 않고, 바로 가지 않는 곳에서 비중을 키웠는가?", "ratio": 2.0, "lookback": 20},
+            "asia_counter": {"enabled": True, "text": "목요일·금요일·지표발표일 아시아장에서 역매매하고 있는가?", "weekdays": [3, 4], "event_days": True},
+            "first_entry":  {"enabled": True, "text": "", "count": 2},
+        },
+    },
     # 관리 화면(:8100)을 다른 기기에서 열기 (services/admin_remote.py) - 기본 꺼짐, 켜기·비밀번호는 이 PC에서만
     "admin_remote": {
         "enabled": False,
@@ -246,6 +279,8 @@ def _validate(settings: dict) -> None:
     if not _int(sd) or not (1 <= sd <= 365):
         raise SettingsError("로그인 유지 기간은 1~365일이어야 합니다.")
 
+    _validate_guidelines(settings["guidelines"])
+
     ar = settings["admin_remote"]
     ar["enabled"] = bool(ar.get("enabled"))
     if ar["enabled"] and not ar.get("password_hash"):
@@ -253,6 +288,46 @@ def _validate(settings: dict) -> None:
     sd = ar.get("session_days", 7)
     if not _int(sd) or not (1 <= sd <= 90):
         raise SettingsError("관리 화면 로그인 유지 기간은 1~90일이어야 합니다.")
+
+
+# 지침 규칙별 숫자 범위 (key → (최소, 최대))
+_GUIDE_RANGES = {
+    "minutes": (1, 240), "count": (1, 100), "seconds": (10, 3600), "lookback": (5, 200), "ratio": (1.2, 20),
+}
+
+
+def _validate_guidelines(g: dict) -> None:
+    g["enabled"] = bool(g.get("enabled", True))
+    cd = g.get("cooldown_min", 30)
+    if not _int(cd) or not (1 <= cd <= 1440):
+        raise SettingsError("지침 반복 방지 시간은 1~1440분이어야 합니다.")
+    items = [str(x).strip() for x in (g.get("items") or []) if str(x).strip()]
+    if len(items) > 100:
+        raise SettingsError("지침은 100개까지 넣을 수 있습니다.")
+    g["items"] = items
+    rules = g.get("rules") or {}
+    defaults = DEFAULTS["guidelines"]["rules"]
+    for key, r in list(rules.items()):
+        if key not in defaults or not isinstance(r, dict):
+            rules.pop(key, None)
+            continue
+        r["enabled"] = bool(r.get("enabled", True))
+        r["text"] = str(r.get("text") or "").strip()[:500]
+        for k, (lo, hi) in _GUIDE_RANGES.items():
+            if k in defaults[key]:
+                v = r.get(k, defaults[key][k])
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not (lo <= v <= hi):
+                    raise SettingsError(f"지침 '{key}' 의 {k} 값은 {lo}~{hi} 사이여야 합니다. (입력: {v})")
+                r[k] = float(v) if k == "ratio" else int(v)
+        if "weekdays" in defaults[key]:
+            wd = r.get("weekdays") or []
+            if not isinstance(wd, list) or any(not _int(x) or not (0 <= x <= 6) for x in wd):
+                raise SettingsError("요일은 0(월)~6(일) 숫자 목록이어야 합니다.")
+            r["weekdays"] = sorted(set(wd))
+        for b in ("event_days", "us_open"):
+            if b in defaults[key]:
+                r[b] = bool(r.get(b, defaults[key][b]))
+    g["rules"] = rules
 
 
 def _int(v) -> bool:

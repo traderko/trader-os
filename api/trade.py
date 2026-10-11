@@ -183,7 +183,9 @@ async def create_trade(
 
         last_closed = last_closed_result.scalar_one_or_none()
 
+        from services import guidelines
         if (
+            not guidelines.rule("revenge") and      # 지침 '손절 직후 재진입'이 켜져 있으면 그쪽에서 자세히 알림
             last_closed and
             last_closed.profit < 0 and
             (kst_time - last_closed.close_time).total_seconds() < 180
@@ -234,6 +236,15 @@ async def create_trade(
 
     await db.commit()
     _mark_seen(data)
+
+    # 트레이딩 지침 (복수매매·과매매·비중 급증·아시아장·첫 진입) - 뒤에서 확인 (services/guidelines.py)
+    if data.entry_type == "OPEN":
+        import asyncio
+        from services import guidelines
+        gt = asyncio.create_task(guidelines.on_open(account.id, account.account_number, data.symbol, data.position,
+                                                    data.volume, kst_time))
+        _bg.add(gt)
+        gt.add_done_callback(_bg.discard)
 
     payload = {
         'trade_id': trade.id

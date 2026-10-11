@@ -428,12 +428,17 @@ async def lifespan(app: FastAPI):
     # 6) 새 버전 확인 (배포판만 - release.json 이 있을 때, services/updater.py)
     from services import updater
     update_task = asyncio.create_task(updater.loop())
+
+    # 7) 트레이딩 지침 - SL 없는 포지션, 지표·미장 전 보유 (services/guidelines.py)
+    from services import guidelines
+    guideline_task = asyncio.create_task(guidelines.loop())
  
     yield
  
     # ── shutdown ──
     telegram_live_task.cancel()
     update_task.cancel()
+    guideline_task.cancel()
     await admin_app.stop_admin_server(admin_server, admin_task)
     watchdog_task.cancel()
     
