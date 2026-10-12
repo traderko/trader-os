@@ -566,11 +566,16 @@ $('tabs').onclick = (e) => {
 // ── 앱 탭 (플러터 웹) ──
 let webAppUrl = null;
 function setWebApp(info) {
-  webAppUrl = info ? `${location.protocol}//${location.hostname}:${info.port}${info.path}` : null;
+  // :8000/admin/ (또는 도메인/admin/) 으로 연 관리 화면이면 같은 주소에서 /admin → /app (포트를 붙이지 않음)
+  // :8100 으로 연 관리 화면이면 같은 호스트의 웹 화면 포트(8000)로
+  const viaMain = location.pathname.match(/^(.*?)\/admin(\/|$)/);
+  webAppUrl = !info ? null
+    : viaMain ? `${location.origin}${viaMain[1]}${info.path}`
+    : `${location.protocol}//${location.hostname}:${info.port}${info.path}`;
   $('webappTab').hidden = !webAppUrl;
   if (webAppUrl) {
     $('webappOpen').href = webAppUrl;
-    $('webappUrl').textContent = `http://<Tailscale IP>:${info.port}${info.path}`;
+    $('webappUrl').textContent = viaMain ? webAppUrl : `http://<Tailscale IP>:${info.port}${info.path}`;
   }
 }
 function openWebApp() {
