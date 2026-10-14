@@ -1261,6 +1261,8 @@ const pad2 = (n) => String(n).padStart(2, '0');
 const dt = (s) => s ? new Date(s) : null;
 const hmOf = (d) => d ? `${pad2(d.getHours())}:${pad2(d.getMinutes())}` : '';
 const dayKey = (d) => `${d.getFullYear()}.${pad2(d.getMonth() + 1)}.${pad2(d.getDate())}`;
+// 거래일: 오전 6시에 바뀜 (새벽 거래는 전날로) - 손익 탭·일일 손실 한도·텔레그램 '오늘 누적'과 같은 기준
+const tdDate = (d) => new Date(d.getTime() - 6 * 3600e3);
 const WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 const symKeyOf = (symbol) => { const n = normSym(symbol); for (const s of SYMBOLS) if ((s.names || []).some((x) => n.startsWith(normSym(x)))) return s.key; return 'other'; };
 const net = (t) => (t.profit || 0) + (t.commission || 0);
@@ -1304,13 +1306,13 @@ function renderTrades() {
 
   const groups = new Map();
   for (const t of list) {
-    const k = dayKey(dt(t.open_time));
+    const k = dayKey(tdDate(dt(t.open_time)));
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(t);
   }
   let html = '';
   for (const [k, items] of groups) {
-    const d = dt(items[0].open_time), sum = items.filter((t) => t.close_time).reduce((s, t) => s + net(t), 0);
+    const d = tdDate(dt(items[0].open_time)), sum = items.filter((t) => t.close_time).reduce((s, t) => s + net(t), 0);
     html += `<div class="day" data-day="${k}"><span><b>${k.slice(5)}</b> (${WEEK[d.getDay()]}) · ${items.length}건</span><span class="num ${cls(sum)}">${signed(sum)}</span></div>`;
     for (const t of items) {
       const o = dt(t.open_time), c = dt(t.close_time), n = t.note || {};
@@ -1321,7 +1323,7 @@ function renderTrades() {
         <div class="t1">${tSel && canSel ? `<input type="checkbox" class="ck" ${isSel ? 'checked' : ''} tabindex="-1" aria-label="선택">` : ''}<span class="side ${t.position === 'BUY' ? 'buy' : 'sell'}" style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:${t.position === 'BUY' ? 'var(--accent-weak)' : 'var(--bad-weak)'};color:${t.position === 'BUY' ? 'var(--up)' : 'var(--down)'}">${esc(t.position)}</span>
           <span>${esc(t.symbol)}</span><span class="num muted" style="font-weight:400">${fmt(t.volume)} lot</span>${ch && ch.length > 1 ? `<span class="chain" title="이어서 들어간 거래 묶음">🔗${ch.length}</span>` : ''}${n.time_frame ? `<span class="chip">${TF[n.time_frame] || ''}</span>` : ''}</div>
         <div class="pl">${c ? `<strong class="num ${cls(t.profit)}">${signed(t.profit)}</strong><small class="num">수수료 ${fmt(t.commission)}</small>` : '<strong class="muted" style="font-size:13px">보유 중</strong>'}</div>
-        <div class="t2 num">${hmOf(o)}${c ? ' → ' + (dayKey(c) !== dayKey(o) ? dayKey(c).slice(5) + ' ' : '') + hmOf(c) : ''} · ${fmt(t.price_open)}${c ? ' → ' + fmt(t.price_close) : ''}</div>
+        <div class="t2 num">${dayKey(o) !== k ? dayKey(o).slice(5) + ' ' : ''}${hmOf(o)}${c ? ' → ' + (dayKey(c) !== dayKey(o) ? dayKey(c).slice(5) + ' ' : '') + hmOf(c) : ''} · ${fmt(t.price_open)}${c ? ' → ' + fmt(t.price_close) : ''}</div>
         ${tags || snip || (t.images || []).length ? `<div class="t3">${tags}${(t.images || []).length ? `<span>📷 ${t.images.length}</span>` : ''}${snip ? `<span class="snip">${esc(snip)}</span>` : ''}</div>` : ''}
       </div>`;
     }
@@ -1332,7 +1334,7 @@ $('tList').onclick = (e) => {
   if (tSel) {   // 선택 모드: 거래를 누르면 선택, 날짜 줄을 누르면 그날 청산 거래 전부
     const day = e.target.closest('.day');
     if (day) {
-      const ts = trades.filter((t) => t.close_time && dayKey(dt(t.open_time)) === day.dataset.day && (tSym === 'all' || symKeyOf(t.symbol) === tSym));
+      const ts = trades.filter((t) => t.close_time && dayKey(tdDate(dt(t.open_time))) === day.dataset.day && (tSym === 'all' || symKeyOf(t.symbol) === tSym));
       const all = ts.every((t) => tSel.has(t.id));
       ts.forEach((t) => all ? tSel.delete(t.id) : tSel.set(t.id, t));
       return tSelChanged();
