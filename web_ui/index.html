@@ -226,6 +226,23 @@
   .trade .pl { grid-row: 1 / span 2; grid-column: 2; text-align: right; }
   .trade .pl strong { display: block; font-size: 15px; }
   .trade .pl small { font-size: 11px; color: var(--muted); }
+  .trade .ck { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); flex-shrink: 0; }
+  .trade.sel { background: var(--accent-weak); }
+  .trade.nosel { opacity: .5; }
+  body.tsel .day { cursor: pointer; }
+  #tSelBar { position: fixed; left: 0; right: 0; bottom: calc(60px + env(safe-area-inset-bottom)); z-index: 15; display: flex; align-items: center; gap: 6px;
+    padding: 8px 12px; background: var(--panel); border-top: 1px solid var(--line); box-shadow: 0 -4px 14px rgba(0,0,0,.08); font-size: 13px; }
+  #tSelBar[hidden] { display: none; }
+  #tSelBar .sp { flex: 1; }
+  @media (min-width: 900px) { #tSelBar { bottom: 0; } }
+  body.tsel { padding-bottom: calc(120px + env(safe-area-inset-bottom)); }
+  .simtbl { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
+  .simtbl th { font-weight: 500; color: var(--muted); font-size: 11.5px; text-align: right; padding: 6px 4px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .simtbl th:first-child, .simtbl td:first-child { text-align: left; }
+  .simtbl td { text-align: right; padding: 7px 4px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .simtbl tr.base td { color: var(--muted); }
+  .simtbl small { display: block; font-size: 11px; color: var(--muted); }
+  .simwrap { overflow-x: auto; }
   .chip { font-size: 11.5px; padding: 1px 8px; border-radius: 999px; background: var(--code); color: var(--muted); white-space: nowrap; }
   .chip.entry { background: var(--accent-weak); color: var(--accent); }
   .chip.exit { background: var(--ok-weak); color: var(--ok); }
@@ -477,6 +494,7 @@
     <strong class="num" id="mLabel"></strong>
     <button class="btn" id="mNext" aria-label="다음 달">›</button>
     <span class="sp"></span>
+    <button class="btn small ghost" id="tSelBtn" title="거래를 골라 2·5·10배 랏으로 했다면 시뮬레이션">☑ 선택</button>
     <button class="btn small ghost" id="tPine" title="트레이딩뷰 파인스크립트 input.text_area() 에 붙여넣을 거래내역">📋 TV</button>
     <button class="btn small ghost" id="tCollect" title="MT5 체결 기록에서 거래내역을 다시 모읍니다">MT5에서 모으기</button>
   </div>
@@ -557,6 +575,28 @@
       <button class="btn" data-close>취소</button>
       <button class="btn primary" id="unlockGo" disabled>해제</button>
     </div>
+  </div>
+</div>
+
+<!-- 거래 선택 막대 (거래내역 → ☑ 선택) -->
+<div id="tSelBar" hidden>
+  <span id="tSelInfo">0건 선택</span>
+  <span class="sp"></span>
+  <button class="btn small ghost" id="tSelAll">이 달 전체</button>
+  <button class="btn small ghost" id="tSelNone">해제</button>
+  <button class="btn small primary" id="tSimGo" disabled>시뮬레이션 돌리기</button>
+</div>
+
+<!-- 선택한 거래 랏 배수 시뮬레이션 -->
+<div class="modal" id="simModal" hidden>
+  <div class="sheet" style="max-width:560px">
+    <h3>랏 배수 시뮬레이션</h3>
+    <p id="simWhat"></p>
+    <div class="pinebar"><label class="muted" for="simMults">배수</label>
+      <input id="simMults" value="2, 5, 10" inputmode="decimal" style="width:140px" autocomplete="off">
+      <button class="btn small" id="simRun">다시 계산</button></div>
+    <div id="simBody"><div class="empty">계산 중…</div></div>
+    <div class="acts"><button class="btn" data-close>닫기</button></div>
   </div>
 </div>
 
@@ -1177,6 +1217,7 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) refr
 // ══════════════ 탭 ══════════════
 let tab = 'pos';
 function showTab(t) {
+  if (t !== 'trades' && tSel) tSelMode(false);
   tab = t;
   document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === t));
   document.querySelectorAll('main .tab').forEach((s) => s.classList.toggle('on', s.id === 'tab-' + t));
@@ -1194,6 +1235,7 @@ $('tabs').onclick = (e) => { const b = e.target.closest('button[data-tab]'); if 
 const TF = { 1: '1m', 2: '2m', 5: '5m', 10: '10m', 60: '1h', 120: '2h', 240: '4h', 1440: 'D' };
 const TAG_TYPES = [['entry', '진입'], ['exit', '청산'], ['loss', '손실']];
 let trades = [];
+let tSel = null;   // 거래 선택 모드 (아래 '거래 골라서 랏 배수 시뮬레이션')
 let tYm = (() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 }; })();
 let tSym = 'all';
 let allTags = null;
@@ -1251,13 +1293,14 @@ function renderTrades() {
   let html = '';
   for (const [k, items] of groups) {
     const d = dt(items[0].open_time), sum = items.filter((t) => t.close_time).reduce((s, t) => s + net(t), 0);
-    html += `<div class="day"><span><b>${k.slice(5)}</b> (${WEEK[d.getDay()]}) · ${items.length}건</span><span class="num ${cls(sum)}">${signed(sum)}</span></div>`;
+    html += `<div class="day" data-day="${k}"><span><b>${k.slice(5)}</b> (${WEEK[d.getDay()]}) · ${items.length}건</span><span class="num ${cls(sum)}">${signed(sum)}</span></div>`;
     for (const t of items) {
       const o = dt(t.open_time), c = dt(t.close_time), n = t.note || {};
       const tags = (t.tags || []).map((g) => `<span class="chip ${esc(g.type)}">${esc(g.name)}</span>`).join('');
       const snip = n.entry_reason || n.memo || '';
-      html += `<div class="trade" data-id="${t.id}">
-        <div class="t1"><span class="side ${t.position === 'BUY' ? 'buy' : 'sell'}" style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:${t.position === 'BUY' ? 'var(--accent-weak)' : 'var(--bad-weak)'};color:${t.position === 'BUY' ? 'var(--up)' : 'var(--down)'}">${esc(t.position)}</span>
+      const canSel = !!t.close_time, isSel = tSel && tSel.has(t.id);
+      html += `<div class="trade${tSel ? (canSel ? (isSel ? ' sel' : '') : ' nosel') : ''}" data-id="${t.id}">
+        <div class="t1">${tSel && canSel ? `<input type="checkbox" class="ck" ${isSel ? 'checked' : ''} tabindex="-1" aria-label="선택">` : ''}<span class="side ${t.position === 'BUY' ? 'buy' : 'sell'}" style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:${t.position === 'BUY' ? 'var(--accent-weak)' : 'var(--bad-weak)'};color:${t.position === 'BUY' ? 'var(--up)' : 'var(--down)'}">${esc(t.position)}</span>
           <span>${esc(t.symbol)}</span><span class="num muted" style="font-weight:400">${fmt(t.volume)} lot</span>${n.time_frame ? `<span class="chip">${TF[n.time_frame] || ''}</span>` : ''}</div>
         <div class="pl">${c ? `<strong class="num ${cls(t.profit)}">${signed(t.profit)}</strong><small class="num">수수료 ${fmt(t.commission)}</small>` : '<strong class="muted" style="font-size:13px">보유 중</strong>'}</div>
         <div class="t2 num">${hmOf(o)}${c ? ' → ' + (dayKey(c) !== dayKey(o) ? dayKey(c).slice(5) + ' ' : '') + hmOf(c) : ''} · ${fmt(t.price_open)}${c ? ' → ' + fmt(t.price_close) : ''}</div>
@@ -1267,7 +1310,75 @@ function renderTrades() {
   }
   $('tList').innerHTML = html;
 }
-$('tList').onclick = (e) => { const r = e.target.closest('.trade'); if (r) openDetail(Number(r.dataset.id)); };
+$('tList').onclick = (e) => {
+  if (tSel) {   // 선택 모드: 거래를 누르면 선택, 날짜 줄을 누르면 그날 청산 거래 전부
+    const day = e.target.closest('.day');
+    if (day) {
+      const ts = trades.filter((t) => t.close_time && dayKey(dt(t.open_time)) === day.dataset.day && (tSym === 'all' || symKeyOf(t.symbol) === tSym));
+      const all = ts.every((t) => tSel.has(t.id));
+      ts.forEach((t) => all ? tSel.delete(t.id) : tSel.set(t.id, t));
+      return tSelChanged();
+    }
+    const r = e.target.closest('.trade'); if (!r) return;
+    const t = trades.find((x) => x.id === Number(r.dataset.id)); if (!t || !t.close_time) return;
+    tSel.has(t.id) ? tSel.delete(t.id) : tSel.set(t.id, t);
+    return tSelChanged();
+  }
+  const r = e.target.closest('.trade'); if (r) openDetail(Number(r.dataset.id));
+};
+
+// ── 거래 골라서 랏 배수 시뮬레이션 ──
+// 선택은 달을 넘겨도 유지 (id → 거래). 청산된 거래만 고를 수 있음 (tSel 은 위에 선언)
+function tSelChanged() {
+  const list = [...tSel.values()];
+  const net = list.reduce((a, t) => a + (t.profit || 0) + (t.commission || 0), 0);
+  $('tSelInfo').innerHTML = list.length ? `<b>${list.length}건</b> · ${fmt(list.reduce((a, t) => a + t.volume, 0))}lot · <span class="num ${cls(net)}">${signed(net)}</span>` : '거래를 눌러 고르세요';
+  $('tSimGo').disabled = !list.length;
+  renderTrades();
+}
+function tSelMode(on) {
+  tSel = on ? new Map() : null;
+  $('tSelBar').hidden = !on;
+  document.body.classList.toggle('tsel', on);
+  $('tSelBtn').textContent = on ? '✕ 선택 끝' : '☑ 선택';
+  on ? tSelChanged() : renderTrades();
+}
+$('tSelBtn').onclick = () => tSelMode(!tSel);
+$('tSelAll').onclick = () => { trades.filter((t) => t.close_time && (tSym === 'all' || symKeyOf(t.symbol) === tSym)).forEach((t) => tSel.set(t.id, t)); tSelChanged(); };
+$('tSelNone').onclick = () => { tSel.clear(); tSelChanged(); };
+$('tSimGo').onclick = () => { $('simModal').hidden = false; runTradeSim(); };
+$('simRun').onclick = () => runTradeSim();
+$('simMults').addEventListener('keydown', (e) => { if (e.key === 'Enter') runTradeSim(); });
+async function runTradeSim() {
+  const ids = [...tSel.keys()];
+  const mults = $('simMults').value.split(/[,\s]+/).map(Number).filter((x) => x > 0);
+  $('simBody').innerHTML = '<div class="empty">계산 중…</div>';
+  try {
+    const r = await api(`/accounts/${encodeURIComponent(acc.account_number)}/simulate-trades`,
+      { method: 'POST', body: JSON.stringify({ trade_ids: ids, mults }) });
+    if (!r.count) { $('simBody').innerHTML = '<div class="empty">청산된 거래가 없습니다.</div>'; return; }
+    const d = (iso) => dayKey(new Date(iso)).slice(2);
+    $('simWhat').textContent = `${r.count}건 (${r.wins}승 ${r.losses}패) · ${r.symbols.join(', ')} · ${d(r.from)} ~ ${d(r.to)}`
+      + (r.balance ? ` · 지금 잔고 ${fmt(r.balance)} 기준` : '');
+    const pct = (v) => v == null ? '' : `<small>${v >= 0 ? '+' : ''}${v.toFixed(1)}%</small>`;
+    const rows = r.results.map((x) => `<tr class="${x.k === 1 ? 'base' : ''}">
+      <td><b>${x.k === 1 ? '실제' : x.k + '배'}</b><small>${fmt(x.lots)}lot</small></td>
+      <td class="num ${cls(x.net)}">${signed(x.net)}${pct(x.pct)}</td>
+      <td class="num down">${fmt(-x.max_dd)}${pct(x.dd_pct == null ? null : -x.dd_pct)}</td>
+      <td class="num ${cls(x.worst)}">${signed(x.worst)}</td>
+      <td class="num">${x.peak_margin == null ? '-' : fmt(x.peak_margin)}<small>${fmt(x.peak_lots)}lot${x.margin_ok === false ? ' ⚠ 부족' : ''}</small></td>
+    </tr>`).join('');
+    const mpl = Object.entries(r.margin_per_lot || {}).filter(([, v]) => v).map(([k, v]) => `${k} 1랏 ${fmt(v)}`).join(' · ');
+    $('simBody').innerHTML = `<div class="simwrap"><table class="simtbl">
+      <tr><th></th><th>순손익</th><th>최대 낙폭</th><th>최대 손실 1건</th><th>최대 동시 증거금</th></tr>${rows}</table></div>
+      <p class="hint2" style="margin-top:8px">수수료 포함 · 최대 낙폭: 고른 거래를 청산 순서로 이었을 때 가장 크게 빠진 폭 ·
+        최대 동시 증거금: 같은 시간에 열려 있던 포지션들의 증거금 합 (고른 거래 평균 진입가로 MT5 가 계산한 1랏 증거금${mpl ? ': ' + esc(mpl) : ''})
+        ${r.margin_free != null ? ` · ⚠ 부족 = 지금 계좌 증거금(사용 ${fmt(r.margin_used || 0)} + 여유 ${fmt(r.margin_free)})보다 큼` : ''}
+        ${r.skipped ? ` · 청산 안 된 ${r.skipped}건은 뺌` : ''}</p>`;
+  } catch (e) {
+    $('simBody').innerHTML = `<div class="empty">계산하지 못했습니다: ${esc(e.message)}</div>`;
+  }
+}
 
 // ── 트레이딩뷰(파인스크립트 input.text_area) 내보내기 ──
 // 앱(플러터)의 generateTradeHistoryForPineInput 과 같은 형식:

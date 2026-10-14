@@ -303,6 +303,23 @@ async def simulate_close(
     return await simulate(db, account, symbol, side, volume, price_open, price_close, hold_min)
 
 
+@router.post("/{account_number}/simulate-trades")
+async def simulate_trades_api(account_number: int, body: dict, db: AsyncSession = Depends(get_db)):
+    """거래내역에서 고른 거래들을 2·5·10배 랏으로 했다면 (services/simulate.py)"""
+    from services.simulate import simulate_trades
+    account = await get_account_or_default(db, account_number)
+    if account is None:
+        raise HTTPException(404, f"account not found: {account_number}")
+    ids = [int(x) for x in (body.get("trade_ids") or [])][:2000]
+    try:
+        mults = [float(x) for x in (body.get("mults") or [2, 5, 10]) if 0 < float(x) <= 1000][:6]
+    except (TypeError, ValueError):
+        raise HTTPException(400, "배수는 숫자로 넣어 주세요.")
+    if not ids:
+        raise HTTPException(400, "거래를 하나 이상 고르세요.")
+    return await simulate_trades(db, account, ids, mults)
+
+
 @router.get("/{account_number}/risk-summary", response_model=RiskSummary)
 async def get_risk_summary(account_number: int, db: AsyncSession = Depends(get_db)):
     account = await get_account_or_default(db, account_number)
