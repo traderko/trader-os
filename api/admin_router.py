@@ -284,6 +284,9 @@ def _public_settings() -> dict:
         "live_enabled": s["telegram"].get("live_enabled", True),
         "live_interval_sec": s["telegram"].get("live_interval_sec", 10),
         "live_position": s["telegram"].get("live_position", "top"),
+        "trade_sim": s["telegram"].get("trade_sim", True),
+        "trade_batch_sec": s["telegram"].get("trade_batch_sec", 3),
+        "trade_sim_mult": s["telegram"].get("trade_sim_mult", [10]),
         "env_fallback": not token and bool(os.getenv("TELEGRAM_BOT_TOKEN")),
     }
     s.pop("admin_remote", None)                       # 관리자 비밀번호 해시 - /api/admin-remote 에서 따로
@@ -317,7 +320,7 @@ async def write_settings(body: dict):
             patch["telegram"]["bot_token"] = ""
         if "chat_id" in tg:
             patch["telegram"]["chat_id"] = tg["chat_id"]
-        for k in ("live_enabled", "live_interval_sec", "live_position"):
+        for k in ("live_enabled", "live_interval_sec", "live_position", "trade_sim", "trade_batch_sec", "trade_sim_mult"):
             if k in tg:
                 patch["telegram"][k] = tg[k]
 

@@ -400,6 +400,11 @@
         <input type="number" id="tgLiveSec" min="5" max="300" style="width:80px"><span class="unit">초마다</span></div>
       <div class="row"><label class="name">현황 위치<small>맨 아래 유지: 다른 알림이 오면 현황을 지우고 맨 아래에 다시 보냄 (안 읽은 숫자가 하나씩 오름)</small></label>
         <select id="tgLivePos"><option value="top">맨 위 고정 (기존)</option><option value="bottom">맨 아래 유지</option></select></div>
+      <div class="row"><label class="name">체결 알림에 랏 배수 시뮬레이션<small>"이 체결을 N배 랏으로 했다면" - 청산: 손익·수수료·잔고 대비 %·필요 증거금·오늘 누적 / 진입: 필요 증거금, SL 닿으면 손익</small></label>
+        <label class="switch"><input type="checkbox" id="tgSim"> 켜기</label>
+        <input type="text" id="tgSimMult" style="width:110px" placeholder="예: 5, 10"><span class="unit">배</span></div>
+      <div class="row"><label class="name">나눠 체결된 알림 묶기<small>이 시간 안에 같은 종목·방향으로 여러 번 체결되면 알림 하나로 (0 = 하나씩 따로)</small></label>
+        <input type="number" id="tgBatch" min="0" max="30" style="width:80px"><span class="unit">초</span></div>
       <div class="actions">
         <button class="btn danger" id="tgClear">토큰 지우기</button>
         <button class="btn" id="tgTest">테스트 전송</button>
@@ -965,12 +970,17 @@ function fillTelegram() {
   $('tgLive').checked = t.live_enabled !== false;
   $('tgLiveSec').value = t.live_interval_sec || 10;
   $('tgLivePos').value = t.live_position === 'bottom' ? 'bottom' : 'top';
+  $('tgSim').checked = t.trade_sim !== false;
+  $('tgSimMult').value = (t.trade_sim_mult || [10]).join(', ');
+  $('tgBatch').value = t.trade_batch_sec ?? 3;
   $('tgTokenNow').textContent = t.has_bot_token ? `저장됨: ${t.bot_token_masked} (바꿀 때만 새로 입력)`
     : t.env_fallback ? '.env 파일의 토큰을 쓰는 중' : '아직 없음';
 }
 async function saveTelegram(extra = {}) {
   const telegram = { chat_id: $('tgChat').value.trim(), live_enabled: $('tgLive').checked,
-    live_interval_sec: Number($('tgLiveSec').value) || 10, live_position: $('tgLivePos').value, ...extra };
+    live_interval_sec: Number($('tgLiveSec').value) || 10, live_position: $('tgLivePos').value,
+    trade_sim: $('tgSim').checked, trade_batch_sec: Math.max(0, Math.round(Number($('tgBatch').value) || 0)),
+    trade_sim_mult: $('tgSimMult').value, ...extra };
   const tok = $('tgToken').value.trim(); if (tok) telegram.bot_token = tok;
   settings = await api('settings', { method: 'PUT', body: JSON.stringify({ telegram }) });
   fillTelegram();

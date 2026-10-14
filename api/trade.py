@@ -276,17 +276,170 @@ async def create_trade(
 _bg: set = set()
 
 
+_batches: dict[tuple, dict] = {}    # (계좌, 종목, 진입/청산, 방향) → 묶는 중인 체결들
+
+
 async def _notify_trade(account_id: int, account_number: str, trade_id: int, data: TradeCreate,
                         kst_time: datetime, fcm: FCMService, payload: dict) -> None:
+    """체결 알림. 같은 종목·방향으로 몇 초 안에 나눠 체결되면 하나로 묶고(trade_batch_sec),
+    아래에 랏 배수 시뮬레이션('N배였다면')을 붙인다(trade_sim, trade_sim_mult). 설정: 관리 화면 텔레그램 탭"""
+    import asyncio
+    import time as _t
     from db.session import AsyncSessionLocal
+    from services.settings_service import telegram_cfg
+    cfg = telegram_cfg()
+    items = [(trade_id, data, kst_time)]
+    wait = cfg.get("trade_batch_sec", 0)
+    if wait > 0:
+        key = (account_id, data.symbol, data.entry_type, data.position)
+        b = _batches.get(key)
+        if b is not None:                 # 이미 모으는 중 - 거기에 넣고 끝 (먼저 온 쪽이 보냄)
+            b["items"].append((trade_id, data, kst_time))
+            b["last"] = _t.time()
+            return
+        _batches[key] = b = {"items": items, "last": _t.time()}
+        start = _t.time()
+        while _t.time() - b["last"] < wait and _t.time() - start < wait * 3:
+            await asyncio.sleep(0.3)
+        items = _batches.pop(key)["items"]
     try:
         async with AsyncSessionLocal() as db:
-            trade = await db.get(Trade, trade_id)
-            title, body, buttons = await _trade_message(db, account_id, account_number, trade, data, kst_time)
+            if len(items) == 1:
+                trade = await db.get(Trade, trade_id)
+                title, body, buttons = await _trade_message(db, account_id, account_number, trade, data, kst_time)
+            else:
+                title, body, buttons = await _group_message(db, account_id, account_number, items)
+            if cfg.get("trade_sim", True) and cfg.get("trade_sim_mult"):
+                sim = await _mult_lines(db, account_id, items, cfg["trade_sim_mult"])
+                if sim:
+                    body += "\n\n" + "\n".join(sim)
     except Exception as e:
         print(f"[trade] 알림 문구 만들기 실패: {e}")
         title, body, buttons = f"[{data.entry_type}] {data.symbol}", f"{data.position} {data.volume:g}lot @{data.price}", None
     fcm.send(title, body, json.dumps(payload), buttons=buttons)
+
+
+async def _group_message(db: AsyncSession, account_id: int, account_number: str, items: list) -> tuple[str, str, list | None]:
+    """나눠 체결된 여러 건을 알림 하나로. 버튼·오늘 누적 등은 마지막 건의 알림에서 가져옴"""
+    last_id, last_data, last_time = items[-1]
+    last_trade = await db.get(Trade, last_id)
+    _, last_body, buttons = await _trade_message(db, account_id, account_number, last_trade, last_data, last_time)
+    trades = [(await db.get(Trade, tid), d, t) for tid, d, t in items]
+    n, symbol = len(items), last_data.symbol
+    vol = sum(d.volume for _, d, _ in trades)
+    when = last_time.strftime("%H:%M")
+    keep = [l for l in last_body.split("\n")[1:] if not l.startswith("손익 ")]
+
+    if last_data.entry_type == "OPEN":
+        prices = [d.price for _, d, _ in trades]
+        avg = sum(d.price * d.volume for _, d, _ in trades) / vol
+        title = f"🟢 진입 · {symbol} {last_data.position} {vol:g}lot ({n}건)"
+        rng = f" ({_price(min(prices))}~{_price(max(prices))})" if max(prices) != min(prices) else ""
+        return title, "\n".join([f"평균가 {_price(avg)}{rng} · {when} · 계좌 {account_number}"] + keep), buttons
+
+    side = next((tr.position for tr, _, _ in trades if tr and tr.price_open is not None),
+                "BUY" if last_data.position == "SELL" else "SELL")
+    profit = sum(d.profit or 0 for _, d, _ in trades)
+    fee = sum((tr.commission if tr and tr.commission is not None else d.commission) or 0 for tr, d, _ in trades)
+    net = profit + fee
+    nets = [(d.profit or 0) + ((tr.commission if tr and tr.commission is not None else d.commission) or 0) for tr, d, _ in trades]
+    wins, losses = sum(1 for x in nets if x > 0), sum(1 for x in nets if x < 0)
+    icon, word = ("✅", "익절") if net > 0 else ("🔴", "손절") if net < 0 else ("⚪", "본전")
+    mix = f" · 익절 {wins} 손절 {losses}" if wins and losses else ""
+    title = f"{icon} {word} · {symbol} {side} {vol:g}lot ({n}건{mix})  {net:+,.2f}"
+    opened = [(tr, d, t) for tr, d, t in trades if tr and tr.price_open is not None]
+    lines = []
+    if opened:
+        ov = sum(d.volume for _, d, _ in opened)
+        ao = sum(tr.price_open * d.volume for tr, d, _ in opened) / ov
+        ac = sum(d.price * d.volume for _, d, _ in opened) / ov
+        move = (ac - ao) if side == "BUY" else (ao - ac)
+        holds = [(t - tr.open_time).total_seconds() for tr, _, t in opened if tr.open_time]
+        hold = ""
+        if holds:
+            a, b = _hold(min(holds)), _hold(max(holds))
+            hold = f" · 보유 {a}" if a == b else f" · 보유 {a}~{b}"
+        lines.append(f"평균 {_price(ao)} → {_price(ac)} ({move:+,.2f}){hold}")
+    lines.append(f"손익 {profit:+,.2f} · 수수료 {fee:+,.2f} · {when} · 계좌 {account_number}")
+    return title, "\n".join(lines + [l for l in keep if not l.startswith(("청산가", "평균"))
+                                       and "→" not in l]), buttons
+
+
+async def _mult_lines(db: AsyncSession, account_id: int, items: list, mults: list[float]) -> list[str]:
+    """랏 배수 시뮬레이션 - '이 체결을 N배 랏으로 했다면'
+    청산: 손익·수수료·잔고 대비 %·필요 증거금·오늘 누적(오늘 거래 전부 N배였다면)
+    진입: 필요 증거금·여유 증거금, SL 이 있으면 닿을 때 손익"""
+    import asyncio
+    rows = [(await db.get(Trade, tid), d, t) for tid, d, t in items]
+    d0, t0 = items[-1][1], items[-1][2]
+    symbol, vol = d0.symbol, sum(d.volume for _, d, _ in rows)
+    try:
+        info = await asyncio.wait_for(worker_get(account_id, "/account-info"), 3)
+    except Exception:
+        info = {}
+    bal, free = info.get("balance"), info.get("margin_free")
+
+    async def margin(side: str, lots: float, price: float):
+        try:
+            c = await asyncio.wait_for(worker_get(account_id, "/calc", {
+                "symbol": symbol, "side": side, "volume": lots, "price_open": price}), 3)
+            return c.get("margin")
+        except Exception:
+            return None
+
+    out = []
+    if d0.entry_type == "CLOSE":
+        side = next((tr.position for tr, _, _ in rows if tr and tr.price_open is not None),
+                    "BUY" if d0.position == "SELL" else "SELL")
+        profit = sum(d.profit or 0 for _, d, _ in rows)
+        fee = sum((tr.commission if tr and tr.commission is not None else d.commission) or 0 for tr, d, _ in rows)
+        net = profit + fee
+        opened = [(tr, d) for tr, d, _ in rows if tr and tr.price_open is not None]
+        ao = (sum(tr.price_open * d.volume for tr, d in opened) / sum(d.volume for _, d in opened)) if opened else d0.price
+        base = (bal - net) if bal else None              # 이 청산 전 잔고
+        today = None
+        try:
+            from services.loss_limit import day_start
+            r = (await db.execute(select(Trade.profit, Trade.commission).where(
+                Trade.account_id == account_id, Trade.close_time != None, Trade.close_time >= day_start(t0)))).all()
+            today = sum((p or 0) + (c or 0) for p, c in r)
+        except Exception:
+            pass
+        for k in mults:
+            lots = vol * k
+            m = await margin(side, lots, ao)
+            pct = f" (잔고 {net * k / base * 100:+.2f}%)" if base else ""
+            out.append(f"🧪 {k:g}배였다면 {lots:g}lot: {net * k:+,.2f}{pct}")
+            sub = [f"손익 {profit * k:+,.2f} · 수수료 {fee * k:+,.2f}"]
+            if m is not None:
+                sub.append(f"필요 증거금 {m:,.2f}" + (" ⚠ 지금 여유 증거금보다 큼" if free is not None and m > free + (m / k) else ""))
+            if today is not None:
+                sub.append(f"오늘 누적 {today * k:+,.2f}")
+            out.append("   " + " · ".join(sub))
+    else:
+        side = d0.position
+        avg = sum(d.price * d.volume for _, d, _ in rows) / vol
+        try:
+            ps = await asyncio.wait_for(worker_get(account_id, "/positions-all"), 3)
+        except Exception:
+            ps = []
+        tickets = {d.ticket for _, d, _ in rows}
+        mine = [p for p in ps if p.get("ticket") in tickets]
+        for k in mults:
+            lots = vol * k
+            m = await margin(side, lots, avg)
+            line = f"🧪 {k:g}배였다면 {lots:g}lot"
+            if m is not None:
+                line += f": 필요 증거금 {m:,.2f}" + (f" · 여유 {free:,.2f}" if free is not None else "")
+                if free is not None and m > free + m / k:
+                    line += " ⚠ 증거금 부족"
+            w = [p for p in mine if p.get("sl")]
+            if w:
+                d = 1 if side == "BUY" else -1
+                v = sum((p["sl"] - p["price_open"]) * d * p["volume"] * (p.get("contract_size") or 1) for p in w) * k
+                line += f"\n   SL 닿으면 {v:+,.2f}" + (f" (잔고 {v / bal * 100:+.2f}%)" if bal else "")
+            out.append(line)
+    return out
 
 
 # ── 진입·청산 알림 문구 ──────────────────────────────────────────

@@ -69,6 +69,10 @@ DEFAULTS: dict = {
         "live_enabled": True,
         "live_interval_sec": 10,
         "live_position": "top",      # top: 맨 위 고정 / bottom: 항상 마지막 메시지로 유지
+        # 진입·청산 알림 (api/trade.py)
+        "trade_sim": True,           # 알림 아래에 랏 배수 시뮬레이션 ("10배였다면" 손익·증거금·오늘 누적)
+        "trade_sim_mult": [10],      # 몇 배로 볼지 (여러 개 가능, 예: [5, 10])
+        "trade_batch_sec": 3,        # 이 초 안에 같은 종목·방향으로 나눠 체결된 건 알림 하나로 (0 = 하나씩)
     },
     # 바깥(폰 등)에서 웹 화면·API 접속 (services/access_service.py)
     #   open      : 제한 없음 (예전 동작)
@@ -239,6 +243,9 @@ def telegram_cfg() -> dict:
         "live_enabled": bool(t.get("live_enabled", True)),
         "live_interval_sec": int(t.get("live_interval_sec") or 10),
         "live_position": "bottom" if t.get("live_position") == "bottom" else "top",
+        "trade_sim": bool(t.get("trade_sim", True)),
+        "trade_batch_sec": int(t.get("trade_batch_sec", 3) or 0),
+        "trade_sim_mult": [float(x) for x in (t.get("trade_sim_mult") or []) if isinstance(x, (int, float))],
     }
 
 
@@ -269,6 +276,20 @@ def _validate(settings: dict) -> None:
         raise SettingsError(f"실시간 현황 갱신 간격은 5~300초 사이 정수여야 합니다. (입력: {iv})")
     if tg.get("live_position", "top") not in ("top", "bottom"):
         raise SettingsError("실시간 현황 위치는 top 또는 bottom 이어야 합니다.")
+    tg["trade_sim"] = bool(tg.get("trade_sim", True))
+    mult = tg.get("trade_sim_mult", [10])
+    if isinstance(mult, str):
+        mult = [x for x in mult.replace("배", "").replace("x", "").replace("×", "").replace(" ", "").split(",") if x]
+    try:
+        mult = [float(x) for x in (mult or [])]
+    except (TypeError, ValueError):
+        raise SettingsError("시뮬레이션 배수는 숫자로 넣어 주세요. (예: 5, 10)")
+    if len(mult) > 5 or any(not (0.01 <= x <= 1000) for x in mult):
+        raise SettingsError("시뮬레이션 배수는 0.01~1000 사이로 5개까지 넣을 수 있습니다.")
+    tg["trade_sim_mult"] = [int(x) if x == int(x) else x for x in mult]
+    bs = tg.get("trade_batch_sec", 3)
+    if not _int(bs) or not (0 <= bs <= 30):
+        raise SettingsError(f"나눠 체결된 알림 묶기는 0~30초여야 합니다. (입력: {bs})")
 
     ac = settings["access"]
     if ac.get("mode") not in ("open", "tailscale", "lan", "public"):
