@@ -230,12 +230,18 @@
   .trade.sel { background: var(--accent-weak); }
   .trade.nosel { opacity: .5; }
   body.tsel .day { cursor: pointer; }
-  #tSelBar { position: fixed; left: 0; right: 0; bottom: calc(60px + env(safe-area-inset-bottom)); z-index: 15; display: flex; align-items: center; gap: 6px;
+  #tSelBar { position: fixed; left: 0; right: 0; bottom: calc(60px + env(safe-area-inset-bottom)); z-index: 15; display: flex; flex-direction: column; gap: 6px;
     padding: 8px 12px; background: var(--panel); border-top: 1px solid var(--line); box-shadow: 0 -4px 14px rgba(0,0,0,.08); font-size: 13px; }
   #tSelBar[hidden] { display: none; }
   #tSelBar .sp { flex: 1; }
+  #tSelBar .r1, #tSelBar .r2 { display: flex; align-items: center; gap: 6px; }
+  #tPick { margin: 0; flex: 1; } #tPick button { padding: 5px 10px; font-size: 12.5px; }
+  #tGap { font: inherit; font-size: 12.5px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text, inherit); }
+  #tGap[hidden] { display: none; }
+  .trade .chain { font-size: 11px; color: var(--accent); font-weight: 600; }
+  .trade.anchor { outline: 2px dashed var(--accent); outline-offset: -2px; }
   @media (min-width: 900px) { #tSelBar { bottom: 0; } }
-  body.tsel { padding-bottom: calc(120px + env(safe-area-inset-bottom)); }
+  body.tsel { padding-bottom: calc(160px + env(safe-area-inset-bottom)); }
   .simtbl { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
   .simtbl th { font-weight: 500; color: var(--muted); font-size: 11.5px; text-align: right; padding: 6px 4px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   .simtbl th:first-child, .simtbl td:first-child { text-align: left; }
@@ -580,11 +586,19 @@
 
 <!-- 거래 선택 막대 (거래내역 → ☑ 선택) -->
 <div id="tSelBar" hidden>
-  <span id="tSelInfo">0건 선택</span>
-  <span class="sp"></span>
-  <button class="btn small ghost" id="tSelAll">이 달 전체</button>
-  <button class="btn small ghost" id="tSelNone">해제</button>
-  <button class="btn small primary" id="tSimGo" disabled>시뮬레이션 돌리기</button>
+  <div class="r1">
+    <div class="seg" id="tPick"><button data-p="chain">묶음</button><button data-p="range">범위</button><button data-p="one">하나씩</button></div>
+    <select id="tGap" title="같은 종목·방향으로 이 시간 안에 다시 들어간 거래까지 한 묶음">
+      <option value="0">겹칠 때만</option><option value="10">10분 안</option><option value="30">30분 안</option><option value="60">1시간 안</option><option value="240">4시간 안</option>
+    </select>
+  </div>
+  <div class="r2">
+    <span id="tSelInfo">0건 선택</span>
+    <span class="sp"></span>
+    <button class="btn small ghost" id="tSelAll">이 달 전체</button>
+    <button class="btn small ghost" id="tSelNone">해제</button>
+    <button class="btn small primary" id="tSimGo" disabled>시뮬레이션 돌리기</button>
+  </div>
 </div>
 
 <!-- 선택한 거래 랏 배수 시뮬레이션 -->
@@ -1236,6 +1250,9 @@ const TF = { 1: '1m', 2: '2m', 5: '5m', 10: '10m', 60: '1h', 120: '2h', 240: '4h
 const TAG_TYPES = [['entry', '진입'], ['exit', '청산'], ['loss', '손실']];
 let trades = [];
 let tSel = null;   // 거래 선택 모드 (아래 '거래 골라서 랏 배수 시뮬레이션')
+const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
+const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
+let tPick = lsGet('traderos:tpick', 'chain'), tGap = Number(lsGet('traderos:tgap', '10')), tAnchor = null, tChainMap = null;
 let tYm = (() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 }; })();
 let tSym = 'all';
 let allTags = null;
@@ -1283,6 +1300,7 @@ function renderTrades() {
   $('tCount').textContent = closed.length ? `${closed.length}건 · ${Math.round(wins / closed.length * 100)}%` : (list.length ? `보유 ${list.length}건` : '-');
   $('tFee').textContent = fmt(fee);
   if (!list.length) { $('tList').innerHTML = '<div class="empty">이 달 거래가 없습니다.</div>'; return; }
+  tChainMap = tSel && tPick === 'chain' ? tChains() : null;
 
   const groups = new Map();
   for (const t of list) {
@@ -1298,10 +1316,10 @@ function renderTrades() {
       const o = dt(t.open_time), c = dt(t.close_time), n = t.note || {};
       const tags = (t.tags || []).map((g) => `<span class="chip ${esc(g.type)}">${esc(g.name)}</span>`).join('');
       const snip = n.entry_reason || n.memo || '';
-      const canSel = !!t.close_time, isSel = tSel && tSel.has(t.id);
-      html += `<div class="trade${tSel ? (canSel ? (isSel ? ' sel' : '') : ' nosel') : ''}" data-id="${t.id}">
+      const canSel = !!t.close_time, isSel = tSel && tSel.has(t.id), ch = tChainMap && tChainMap.get(t.id);
+      html += `<div class="trade${tSel ? (canSel ? (isSel ? ' sel' : '') + (tAnchor === t.id ? ' anchor' : '') : ' nosel') : ''}" data-id="${t.id}">
         <div class="t1">${tSel && canSel ? `<input type="checkbox" class="ck" ${isSel ? 'checked' : ''} tabindex="-1" aria-label="선택">` : ''}<span class="side ${t.position === 'BUY' ? 'buy' : 'sell'}" style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:${t.position === 'BUY' ? 'var(--accent-weak)' : 'var(--bad-weak)'};color:${t.position === 'BUY' ? 'var(--up)' : 'var(--down)'}">${esc(t.position)}</span>
-          <span>${esc(t.symbol)}</span><span class="num muted" style="font-weight:400">${fmt(t.volume)} lot</span>${n.time_frame ? `<span class="chip">${TF[n.time_frame] || ''}</span>` : ''}</div>
+          <span>${esc(t.symbol)}</span><span class="num muted" style="font-weight:400">${fmt(t.volume)} lot</span>${ch && ch.length > 1 ? `<span class="chain" title="이어서 들어간 거래 묶음">🔗${ch.length}</span>` : ''}${n.time_frame ? `<span class="chip">${TF[n.time_frame] || ''}</span>` : ''}</div>
         <div class="pl">${c ? `<strong class="num ${cls(t.profit)}">${signed(t.profit)}</strong><small class="num">수수료 ${fmt(t.commission)}</small>` : '<strong class="muted" style="font-size:13px">보유 중</strong>'}</div>
         <div class="t2 num">${hmOf(o)}${c ? ' → ' + (dayKey(c) !== dayKey(o) ? dayKey(c).slice(5) + ' ' : '') + hmOf(c) : ''} · ${fmt(t.price_open)}${c ? ' → ' + fmt(t.price_close) : ''}</div>
         ${tags || snip || (t.images || []).length ? `<div class="t3">${tags}${(t.images || []).length ? `<span>📷 ${t.images.length}</span>` : ''}${snip ? `<span class="snip">${esc(snip)}</span>` : ''}</div>` : ''}
@@ -1321,7 +1339,20 @@ $('tList').onclick = (e) => {
     }
     const r = e.target.closest('.trade'); if (!r) return;
     const t = trades.find((x) => x.id === Number(r.dataset.id)); if (!t || !t.close_time) return;
-    tSel.has(t.id) ? tSel.delete(t.id) : tSel.set(t.id, t);
+    if (tPick === 'chain') {                 // 그 거래가 속한 묶음 전부
+      const g = (tChainMap && tChainMap.get(t.id)) || [t], all = g.every((x) => tSel.has(x.id));
+      g.forEach((x) => all ? tSel.delete(x.id) : tSel.set(x.id, x));
+    } else if (tPick === 'range') {          // 시작 → 끝: 사이에 진입한 거래 전부 (지금 보는 종목만)
+      if (tAnchor == null) { tAnchor = t.id; tSel.set(t.id, t); }
+      else if (tAnchor === t.id) { tAnchor = null; tSel.delete(t.id); }
+      else {
+        const a = trades.find((x) => x.id === tAnchor), ta = +dt(a.open_time), tb = +dt(t.open_time);
+        const lo = Math.min(ta, tb), hi = Math.max(ta, tb);
+        trades.filter((x) => x.close_time && (tSym === 'all' || symKeyOf(x.symbol) === tSym) && +dt(x.open_time) >= lo && +dt(x.open_time) <= hi)
+          .forEach((x) => tSel.set(x.id, x));
+        tAnchor = null;
+      }
+    } else tSel.has(t.id) ? tSel.delete(t.id) : tSel.set(t.id, t);
     return tSelChanged();
   }
   const r = e.target.closest('.trade'); if (r) openDetail(Number(r.dataset.id));
@@ -1329,15 +1360,46 @@ $('tList').onclick = (e) => {
 
 // ── 거래 골라서 랏 배수 시뮬레이션 ──
 // 선택은 달을 넘겨도 유지 (id → 거래). 청산된 거래만 고를 수 있음 (tSel 은 위에 선언)
+// 묶음: 같은 종목·같은 방향으로, 앞 거래들이 다 닫히기 전(또는 간격 안)에 다시 들어간 거래들 = 한 구간 (분할 진입·청산, 구간 타기)
+function tChains() {
+  const by = new Map(), map = new Map();
+  for (const t of trades) if (t.close_time) {
+    const k = t.symbol + '|' + t.position;
+    if (!by.has(k)) by.set(k, []);
+    by.get(k).push(t);
+  }
+  for (const arr of by.values()) {
+    arr.sort((a, b) => dt(a.open_time) - dt(b.open_time));
+    let cur = null, end = 0;
+    for (const t of arr) {
+      const o = +dt(t.open_time), c = +dt(t.close_time);
+      if (cur && o <= end + tGap * 60000) { cur.push(t); end = Math.max(end, c); }
+      else { cur = [t]; end = c; }
+      map.set(t.id, cur);
+    }
+  }
+  return map;
+}
+function tPickShow() {
+  document.querySelectorAll('#tPick button').forEach((b) => b.classList.toggle('on', b.dataset.p === tPick));
+  $('tGap').value = String(tGap); $('tGap').hidden = tPick !== 'chain';
+}
+document.querySelectorAll('#tPick button').forEach((b) => b.onclick = () => {
+  tPick = b.dataset.p; tAnchor = null; lsSet('traderos:tpick', tPick); tPickShow(); tSelChanged();
+});
+$('tGap').onchange = () => { tGap = Number($('tGap').value); lsSet('traderos:tgap', String(tGap)); tSelChanged(); };
+const PICK_HINT = { chain: '거래를 누르면 🔗 묶음 전체', range: '처음 거래 → 끝 거래 순서로 누르세요', one: '거래를 눌러 고르세요' };
 function tSelChanged() {
   const list = [...tSel.values()];
   const net = list.reduce((a, t) => a + (t.profit || 0) + (t.commission || 0), 0);
-  $('tSelInfo').innerHTML = list.length ? `<b>${list.length}건</b> · ${fmt(list.reduce((a, t) => a + t.volume, 0))}lot · <span class="num ${cls(net)}">${signed(net)}</span>` : '거래를 눌러 고르세요';
+  $('tSelInfo').innerHTML = tAnchor != null ? '이제 <b>끝 거래</b>를 누르세요'
+    : list.length ? `<b>${list.length}건</b> · ${fmt(list.reduce((a, t) => a + t.volume, 0))}lot · <span class="num ${cls(net)}">${signed(net)}</span>` : PICK_HINT[tPick];
   $('tSimGo').disabled = !list.length;
   renderTrades();
 }
 function tSelMode(on) {
-  tSel = on ? new Map() : null;
+  tSel = on ? new Map() : null; tAnchor = null;
+  if (on) tPickShow();
   $('tSelBar').hidden = !on;
   document.body.classList.toggle('tsel', on);
   $('tSelBtn').textContent = on ? '✕ 선택 끝' : '☑ 선택';
@@ -1345,7 +1407,7 @@ function tSelMode(on) {
 }
 $('tSelBtn').onclick = () => tSelMode(!tSel);
 $('tSelAll').onclick = () => { trades.filter((t) => t.close_time && (tSym === 'all' || symKeyOf(t.symbol) === tSym)).forEach((t) => tSel.set(t.id, t)); tSelChanged(); };
-$('tSelNone').onclick = () => { tSel.clear(); tSelChanged(); };
+$('tSelNone').onclick = () => { tSel.clear(); tAnchor = null; tSelChanged(); };
 $('tSimGo').onclick = () => { $('simModal').hidden = false; runTradeSim(); };
 $('simRun').onclick = () => runTradeSim();
 $('simMults').addEventListener('keydown', (e) => { if (e.key === 'Enter') runTradeSim(); });
