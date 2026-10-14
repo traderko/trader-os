@@ -51,6 +51,52 @@ async def get_all_positions(request: Request):
     ]
 
 
+def _resolve_symbol(mt5, s: str) -> str | None:
+    """브로커 심볼 그대로, 또는 종목 묶음 key(gold, nasdaq…)면 이 브로커의 실제 심볼로"""
+    if s and mt5.symbol_info(s) is not None:
+        return s
+    from services import symbols
+    g = symbols.group_by_key(s) or symbols.group_of(s)
+    if not g:
+        return None
+    names = [symbols.norm(n) for n in g["names"]]
+    cands = [x for x in (mt5.symbols_get() or []) if any(symbols.norm(x.name).startswith(n) for n in names)]
+    # 시장 감시 창에 있는 것, 거래 가능한 것(trade_mode 4 = FULL), 이름이 짧은 것 순
+    cands.sort(key=lambda x: (not getattr(x, "visible", False), getattr(x, "trade_mode", 4) != 4, len(x.name)))
+    return cands[0].name if cands else None
+
+
+@router.get("/calc")
+async def calc_trade(request: Request, symbol: str, side: str, volume: float, price_open: float,
+                     price_close: float | None = None):
+    """MT5 로 직접 계산한 증거금·손익 (환율·계약 크기 포함) - 청산 시뮬레이션·계산기용"""
+    state = _require_connection(request)
+    mt5 = state.mt5
+
+    def run():
+        name = _resolve_symbol(mt5, symbol)
+        if not name:
+            raise HTTPException(404, f"종목을 찾지 못했습니다: {symbol}")
+        mt5.symbol_select(name, True)
+        info = mt5.symbol_info(name)
+        t = mt5.ORDER_TYPE_BUY if side.upper().startswith("B") else mt5.ORDER_TYPE_SELL
+        margin = mt5.order_calc_margin(t, name, volume, price_open)
+        profit = mt5.order_calc_profit(t, name, volume, price_open, price_close) if price_close else None
+        acc = mt5.account_info()
+        tick = mt5.symbol_info_tick(name)
+        return {
+            "symbol": name, "digits": info.digits, "contract_size": info.trade_contract_size,
+            "volume_min": info.volume_min, "volume_max": info.volume_max, "volume_step": info.volume_step,
+            "margin": margin, "profit": profit,
+            "bid": getattr(tick, "bid", None), "ask": getattr(tick, "ask", None),
+            "balance": acc.balance if acc else None, "equity": acc.equity if acc else None,
+            "margin_used": acc.margin if acc else None, "margin_free": acc.margin_free if acc else None,
+            "leverage": acc.leverage if acc else None, "currency": acc.currency if acc else None,
+        }
+
+    return await asyncio.to_thread(run)
+
+
 @router.get("/account-info")
 async def get_account_info(request: Request):
     state = _require_connection(request)

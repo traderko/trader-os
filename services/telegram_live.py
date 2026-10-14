@@ -72,6 +72,29 @@ def _sym_info(symbol: str):
     return (g.get("icon") or "•", g.get("point")) if g else ("•", None)
 
 
+def _point_value(p: dict) -> float:
+    """1랏이 가격 1 움직일 때 손익 (계약 크기, 없으면 종목 묶음 기본값)"""
+    return p.get("contract_size") or _sym_info(p.get("symbol", ""))[1] or 1
+
+
+def _proj(p: dict, price: float) -> float:
+    """이 포지션이 price 에 닿으면 손익 (수수료·스왑 제외)"""
+    d = 1 if p.get("type") == 0 else -1
+    return (price - p["price_open"]) * d * p["volume"] * _point_value(p)
+
+
+async def _balance(aid: int) -> float | None:
+    try:
+        info = await asyncio.wait_for(worker_get(aid, "/account-info"), 5)
+        return float(info.get("balance") or 0) or None
+    except Exception:
+        return None
+
+
+def _pct(v: float, bal: float | None) -> str:
+    return f" (잔고 {v / bal * 100:+.2f}%)" if bal else ""
+
+
 def _f(v: float, d: int = 2) -> str:
     return f"{v:,.{d}f}"
 
@@ -467,6 +490,10 @@ class TelegramLive:
         okn, failed = len(res.get("success") or []), res.get("failed") or []
         what = "해제" if not price else self._fmt_price(price, me.get("digits"))
         msg = f"{'✅' if not failed else '⚠️'} {self._describe(me, targets)}\n{label} {what} · {okn}/{len(targets)}개 적용"
+        if price:
+            t = sum(_proj(p, price) for p in targets)
+            now = sum((p.get("profit") or 0) + (p.get("swap") or 0) for p in targets)
+            msg += f"\n닿으면 <b>{_s(t)}</b>{_pct(t, await _balance(aid))} · 지금 대비 {_s(t - now)}"
         if failed:
             reasons = {f.get("reason", "") for f in failed}
             msg += "\n실패: " + html.escape(", ".join(sorted(reasons))[:200])
@@ -474,6 +501,198 @@ class TelegramLive:
                 msg += "\n(가격이 현재가에 너무 가깝거나 방향이 맞지 않습니다)"
         await self._send(client, token, chat_id, msg)
         self.force.set()     # 실시간 현황의 SL/TP 예상 손익도 바로 갱신
+
+    # ── /calc : SL·TP 예상 손익 ──
+    CALC_HELP = ("<b>/calc 사용법</b>\n"
+                 "• <code>/calc 2640</code> - 지금 포지션이 2640 에 닿으면 손익 (가격이 비슷한 종목 자동)\n"
+                 "• <code>/calc 골드 2640</code> - 종목을 정해서\n"
+                 "• <code>/calc buy 2650 sl 2640 tp 2670 0.1</code> - 새로 들어갈 때 예상 손익·손익비\n"
+                 "  (sl 대신 <code>risk 100</code> 또는 <code>risk 1%</code> 를 넣으면 맞는 랏을 계산)")
+
+    async def calc(self, client, token, chat_id: str, args: str) -> None:
+        parts = args.replace(",", "").split()
+        if not parts:
+            await self._send(client, token, chat_id, self.CALC_HELP)
+            return
+        if parts[0].lower() in ("buy", "sell", "b", "s", "매수", "매도", "롱", "숏", "long", "short"):
+            await self._calc_new(client, token, chat_id, parts)
+            return
+        try:
+            price = float(parts[-1])
+        except ValueError:
+            await self._send(client, token, chat_id, self.CALC_HELP)
+            return
+        want = " ".join(parts[:-1]).strip().lower()
+
+        async with AsyncSessionLocal() as db:
+            accounts = (await db.execute(select(Account).where(Account.lock_enabled == True))).scalars().all()
+        lines = []
+        for a in accounts:
+            try:
+                rows = await asyncio.wait_for(worker_get(a.id, "/positions-all"), 5)
+            except Exception:
+                continue
+            by_sym: dict[str, list] = {}
+            for p in rows:
+                g = symbols.group_of(p["symbol"]) or {}
+                if want:
+                    names = [g.get("key", ""), g.get("label", ""), p["symbol"]] + list(g.get("names") or [])
+                    if not any(want in str(x).lower() for x in names if x):
+                        continue
+                elif not p.get("price_current") or abs(price - p["price_current"]) / p["price_current"] > 0.25:
+                    continue                 # 종목을 안 정했으면 가격이 비슷한 종목만
+                by_sym.setdefault(p["symbol"], []).append(p)
+            if not by_sym:
+                continue
+            bal = await _balance(a.id)
+            for sym, ps in by_sym.items():
+                d = ps[0].get("digits")
+                t = sum(_proj(p, price) for p in ps)
+                now = sum((p.get("profit") or 0) + (p.get("swap") or 0) for p in ps)
+                sides = []
+                for typ, name in ((0, "BUY"), (1, "SELL")):
+                    sp = [p for p in ps if p["type"] == typ]
+                    if sp:
+                        vol = sum(p["volume"] for p in sp)
+                        avg = sum(p["price_open"] * p["volume"] for p in sp) / vol
+                        sides.append(f"{name} {vol:g}lot 평단 {self._fmt_price(avg, d)}")
+                lines.append(f"<b>{html.escape(sym)}</b> · 계좌 {html.escape(str(a.account_number))} · 지금 {self._fmt_price(ps[0].get('price_current'), d)}\n"
+                             f"{' / '.join(sides)}\n"
+                             f"{self._fmt_price(price, d)} 닿으면 <b>{_s(t)}</b>{_pct(t, bal)} · 지금 대비 {_s(t - now)}")
+        if not lines:
+            await self._send(client, token, chat_id,
+                             f"{self._fmt_price(price, None)} 근처 가격의 보유 포지션이 없습니다."
+                             + (" (종목 이름을 확인하세요)" if want else " 종목을 정하려면 예: <code>/calc 골드 2640</code>"))
+            return
+        await self._send(client, token, chat_id, "🧮 <b>예상 손익</b> (수수료·스왑 제외)\n\n" + "\n\n".join(lines))
+
+    async def _calc_new(self, client, token, chat_id: str, parts: list[str]) -> None:
+        """/calc buy 2650 sl 2640 tp 2670 0.1 [골드]  ·  sl 대신 risk 100 / risk 1%"""
+        side = 1 if parts[0].lower() in ("buy", "b", "매수", "롱", "long") else -1
+        vals: dict = {}
+        rest = parts[1:]
+        try:
+            entry = float(rest[0]); rest = rest[1:]
+        except (ValueError, IndexError):
+            await self._send(client, token, chat_id, self.CALC_HELP)
+            return
+        want = ""
+        i = 0
+        while i < len(rest):
+            k = rest[i].lower()
+            if k in ("sl", "tp", "risk", "rr", "lot") and i + 1 < len(rest):
+                vals[k] = rest[i + 1]; i += 2; continue
+            try:
+                vals.setdefault("lot", str(float(k)))
+            except ValueError:
+                want = k
+            i += 1
+        num = lambda k: float(vals[k].rstrip("%")) if k in vals else None
+        try:
+            sl, tp, lot, rr = num("sl"), num("tp"), num("lot"), num("rr")
+            risk = num("risk")
+        except ValueError:
+            await self._send(client, token, chat_id, self.CALC_HELP)
+            return
+        # 종목: 정했으면 그 묶음, 아니면 진입가가 비슷한 보유 종목, 그것도 없으면 골드
+        g = None
+        if want:
+            g = next((x for x in symbols.groups() if want in (x["key"], x.get("label", "").lower()) or any(want in n.lower() for n in x["names"])), None)
+        pv, bal, sym_name = None, None, (g or {}).get("label")
+        async with AsyncSessionLocal() as db:
+            accounts = (await db.execute(select(Account).where(Account.lock_enabled == True))).scalars().all()
+        for a in accounts:
+            try:
+                rows = await asyncio.wait_for(worker_get(a.id, "/positions-all"), 5)
+            except Exception:
+                continue
+            for p in rows:
+                pg = symbols.group_of(p["symbol"])
+                if (g and pg and pg["key"] == g["key"]) or (not g and p.get("price_current") and abs(entry - p["price_current"]) / p["price_current"] < 0.25):
+                    pv, sym_name = _point_value(p), p["symbol"]
+                    break
+            if bal is None:
+                bal = await _balance(a.id)
+            if pv:
+                break
+        if not pv:
+            g = g or symbols.group_by_key("gold")
+            pv, sym_name = (g or {}).get("point") or 1, (g or {}).get("label", "?")
+        if risk is not None and vals.get("risk", "").endswith("%"):
+            risk = bal * risk / 100 if bal else None
+        out = [f"🧮 <b>{'BUY' if side > 0 else 'SELL'} {html.escape(str(sym_name))} @ {entry:g}</b> (1랏 1포인트 = {pv:g})"]
+        if sl is not None and risk and not lot:
+            lot = int(risk / (abs(entry - sl) * pv) * 100) / 100 if entry != sl else None
+            if lot:
+                out.append(f"손실 {_f(risk)} 맞추는 랏: <b>{lot:.2f}</b>")
+        if sl is None and risk and lot:
+            sl = entry - side * risk / (lot * pv)
+            out.append(f"손실 {_f(risk)} 되는 SL: <b>{sl:,.2f}</b>")
+        if sl is not None and lot:
+            v = (sl - entry) * side * lot * pv
+            out.append(f"SL {sl:,.2f} 닿으면 <b>{_s(v)}</b>{_pct(v, bal)}")
+        if tp is None and rr and sl is not None:
+            tp = entry + side * rr * abs(entry - sl)
+            out.append(f"손익비 1:{rr:g} TP: <b>{tp:,.2f}</b>")
+        if tp is not None and lot:
+            v = (tp - entry) * side * lot * pv
+            out.append(f"TP {tp:,.2f} 닿으면 <b>{_s(v)}</b>{_pct(v, bal)}")
+        if sl is not None and tp is not None and sl != entry:
+            out.append(f"손익비 <b>1 : {abs(tp - entry) / abs(entry - sl):.2f}</b>")
+        if len(out) == 1:
+            out.append("랏과 SL(또는 risk)을 넣어 주세요.\n" + self.CALC_HELP)
+        await self._send(client, token, chat_id, "\n".join(out))
+
+    # ── /sim : 청산 시뮬레이션 (청산 알림과 같은 모양) ──
+    SIM_HELP = ("<b>/sim 사용법</b> - 이 가격에 청산하면 오는 알림을 미리 봅니다\n"
+                "• <code>/sim sell 30673 30589 0.2</code> - 방향 진입가 청산가 랏\n"
+                "• <code>/sim buy 2650 2670 0.5 골드</code> - 종목을 정해서 (안 정하면 가격이 비슷한 보유 종목, 없으면 골드)\n"
+                "증거금·여유 증거금·최대 랏도 같이 보여 줍니다.")
+
+    async def sim(self, client, token, chat_id: str, args: str) -> None:
+        from services.simulate import simulate
+        parts = args.replace(",", "").split()
+        if len(parts) < 4 or parts[0].lower() not in ("buy", "sell", "b", "s", "매수", "매도", "롱", "숏", "long", "short"):
+            await self._send(client, token, chat_id, self.SIM_HELP)
+            return
+        side = "BUY" if parts[0].lower() in ("buy", "b", "매수", "롱", "long") else "SELL"
+        try:
+            entry, close, lot = float(parts[1]), float(parts[2]), float(parts[3])
+        except ValueError:
+            await self._send(client, token, chat_id, self.SIM_HELP)
+            return
+        want = " ".join(parts[4:]).strip().lower()
+        async with AsyncSessionLocal() as db:
+            accounts = (await db.execute(select(Account).where(Account.lock_enabled == True)
+                                         .order_by(Account.is_default.desc(), Account.id))).scalars().all()
+            if not accounts:
+                await self._send(client, token, chat_id, "MT5 가 켜진 계좌가 없습니다.")
+                return
+            acc = accounts[0]
+            # 종목: 정했으면 그 묶음 key, 아니면 진입가가 비슷한 보유 종목, 없으면 골드
+            symbol = None
+            if want:
+                g = next((x for x in symbols.groups() if want in (x["key"], x.get("label", "").lower())
+                          or any(want in n.lower() for n in x["names"])), None)
+                symbol = g["key"] if g else want.upper()
+            else:
+                try:
+                    rows = await asyncio.wait_for(worker_get(acc.id, "/positions-all"), 5)
+                except Exception:
+                    rows = []
+                near = next((p for p in rows if p.get("price_current") and abs(entry - p["price_current"]) / p["price_current"] < 0.25), None)
+                symbol = near["symbol"] if near else "gold"
+            try:
+                r = await simulate(db, acc, symbol, side, lot, entry, close)
+            except Exception as e:
+                await self._send(client, token, chat_id, f"⚠️ 시뮬레이션 실패: {html.escape(str(getattr(e, 'detail', e)))[:200]}")
+                return
+        body = "\n".join(html.escape(x) for x in r["lines"])
+        extra = "\n".join(html.escape(x) for x in r["extra"])
+        await self._send(client, token, chat_id,
+                         f"🧪 <i>시뮬레이션</i>\n<b>{html.escape(r['title'])}</b>\n{body}"
+                         + (f"\n\n{extra}" if extra else "")
+                         + f"\n<i>수수료는 최근 평균(랏당 {r['fee_per_lot']:+,.2f}) 추정 · 스왑·스프레드 제외</i>")
 
     async def show_positions(self, client, token, chat_id: str) -> None:
         """/pos - 종목·방향별로 SL/TP 버튼"""
@@ -621,6 +840,10 @@ class TelegramLive:
                     await self.start_unlock(client, token, cid, None)
                 elif mine and text.startswith("/update"):
                     await self.show_update(client, token, cid)
+                elif mine and text.startswith("/sim"):
+                    await self.sim(client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                elif mine and text.startswith("/calc"):
+                    await self.calc(client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                 elif mine and text.startswith("/pos"):
                     await self.show_positions(client, token, cid)
                 elif mine and text.startswith("/cancel"):
@@ -696,6 +919,8 @@ class TelegramLive:
                             await self._call(client, token, "setMyCommands", commands=[
                                 {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
                                 {"command": "pos", "description": "포지션 SL/TP 설정"},
+                                {"command": "calc", "description": "SL·TP 예상 손익 계산"},
+                                {"command": "sim", "description": "청산 시뮬레이션 (알림 미리보기)"},
                                 {"command": "update", "description": "새 버전 확인·업데이트"},
                                 {"command": "cancel", "description": "잠금 풀기 그만두기"},
                                 {"command": "id", "description": "이 대화의 chat id 보기"},

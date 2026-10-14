@@ -123,6 +123,25 @@
   .ctl label { font-size: 12.5px; color: var(--muted); }
   .ctl.range { grid-template-columns: 54px 1fr 14px 1fr auto; }
   .ctl input { width: 100%; }
+  .lvprev { font-size: 12.5px; margin: 4px 0 0 62px; line-height: 1.5; }
+  .lvprev .warn, .cout .warn { color: var(--warn, #c77700); }
+  details.calc summary { cursor: pointer; font-weight: 600; list-style: none; }
+  details.calc summary::-webkit-details-marker { display: none; }
+  details.calc summary .muted { font-weight: 400; font-size: 12px; margin-left: 6px; }
+  .cgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 10px; margin-top: 6px; }
+  .cgrid label { font-size: 12px; color: var(--muted); display: flex; flex-direction: column; gap: 3px; }
+  .cgrid input { width: 100%; }
+  .cbtns { display: flex; gap: 6px; align-items: flex-end; }
+  .cout { margin-top: 12px; display: grid; gap: 6px; font-size: 14px; }
+  .cout .row { display: flex; justify-content: space-between; gap: 8px; align-items: center; border-top: 1px solid var(--line); padding-top: 6px; }
+  .cout .row small { color: var(--muted); }
+  .cout .use { padding: 2px 8px; font-size: 11.5px; }
+  .lotbox { display: flex; gap: 4px; } .lotbox input { flex: 1; min-width: 0; text-align: center; } .lotbox .btn { padding: 4px 10px; }
+  .csim { display: grid; gap: 10px; margin-top: 12px; }
+  .csim h4 { margin: 0; font-size: 12px; color: var(--muted); font-weight: 500; }
+  .tgmsg { background: var(--code, var(--bg)); border: 1px solid var(--line); border-radius: 12px 12px 12px 4px; padding: 10px 12px;
+    font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; word-break: break-word; }
+  .tgmsg b { font-size: 14px; } .tgmsg .ex { color: var(--muted); font-size: 12.5px; display: block; margin-top: 6px; border-top: 1px dashed var(--line); padding-top: 6px; }
 
   /* 포지션 목록 */
   .list { padding: 4px 0; }
@@ -400,12 +419,15 @@
       <button class="btn small ghost" data-fill="slIn" title="평균 진입가(본전)로 채우기">평단</button>
       <button class="btn small primary" id="slGo" disabled>적용</button>
     </div>
+    <div class="lvprev" id="slPrev" hidden></div>
     <div class="ctl">
       <label for="tpIn">TP</label>
       <input id="tpIn" inputmode="decimal" placeholder="익절 가격" autocomplete="off">
       <button class="btn small ghost" data-fill="tpIn" title="평균 진입가(본전)로 채우기">평단</button>
       <button class="btn small primary" id="tpGo" disabled>적용</button>
     </div>
+    <div class="lvprev" id="tpPrev" hidden></div>
+    <div class="lvprev" id="rrPrev" hidden></div>
     <div class="ctl range">
       <label>범위</label>
       <input id="loIn" inputmode="decimal" placeholder="진입가 시작" autocomplete="off">
@@ -414,6 +436,26 @@
       <button class="btn small ghost" id="rangeClear" hidden>지우기</button>
     </div>
   </section>
+
+  <!-- SL·TP 계산기 -->
+  <details class="panel calc" id="calc">
+    <summary>🧮 SL·TP 계산기 <span class="muted">가격·손실 한도·손익비로 계산</span></summary>
+    <div class="seg" id="cSide" style="margin-top:10px"><button data-side="buy" class="on">BUY</button><button data-side="sell">SELL</button></div>
+    <div class="cgrid">
+      <label>진입가<input id="cEntry" inputmode="decimal" autocomplete="off"></label>
+      <label>랏<span class="lotbox"><button class="btn small ghost" data-lot="-1">−</button><input id="cLot" inputmode="decimal" autocomplete="off"><button class="btn small ghost" data-lot="1">+</button></span></label>
+      <label>SL 가격<input id="cSl" inputmode="decimal" autocomplete="off"></label>
+      <label>TP 가격<input id="cTp" inputmode="decimal" autocomplete="off"></label>
+      <label>손실 한도 (금액)<input id="cRiskAmt" inputmode="decimal" autocomplete="off" placeholder="예: 100"></label>
+      <label>손실 한도 (잔고 %)<input id="cRiskPct" inputmode="decimal" autocomplete="off" placeholder="예: 1"></label>
+      <label>손익비 (1 : ?)<input id="cRR" inputmode="decimal" autocomplete="off" placeholder="예: 2"></label>
+      <label>청산가 (시뮬레이션)<input id="cClose" inputmode="decimal" autocomplete="off" placeholder="비우면 SL·TP로"></label>
+      <label>보유 시간 (분)<input id="cHold" inputmode="decimal" autocomplete="off" placeholder="선택"></label>
+      <div class="cbtns"><button class="btn small" id="cFill">포지션에서 채우기</button><button class="btn small ghost" id="cClear">지우기</button></div>
+    </div>
+    <div id="cOut" class="cout"></div>
+    <div id="cSim" class="csim"></div>
+  </details>
 
   <div class="updated" id="updated"></div>
 
@@ -847,6 +889,7 @@ async function loadRisk() {
   if (!acc || viewOnly()) return;
   try {
     const r = await api(`/accounts/${encodeURIComponent(acc.account_number)}/risk-summary`);
+    riskBal = r.balance;
     $('rEquity').textContent = fmt(r.equity);
     $('rBalance').textContent = fmt(r.balance);
     $('rProfit').textContent = signed(r.profit); $('rProfit').className = 'num ' + cls(r.profit);
@@ -927,6 +970,7 @@ function renderPositions() {
   $('slGo').disabled = $('tpGo').disabled = selected.size === 0;
   $('slGo').textContent = $('tpGo').textContent = selected.size ? `적용 (${selected.size})` : '적용';
 
+  previewLevels();
   if (!positions.length) { $('posList').innerHTML = '<div class="empty">보유 포지션이 없습니다.</div>'; return; }
   if (!list.length) { $('posList').innerHTML = '<div class="empty">이 가격 범위에 포지션이 없습니다.</div>'; return; }
   $('posList').innerHTML = list.map((p) => {
@@ -962,6 +1006,140 @@ document.querySelectorAll('[data-fill]').forEach((b) => b.onclick = () => {
   $(b.dataset.fill).value = (base.reduce((s, p) => s + p.price_open * p.volume, 0) / lots).toFixed(2);
 });
 $('reload').onclick = () => refreshAll();
+
+// ── SL·TP 미리보기: 입력하는 동안 '닿으면 얼마' (선택한 포지션, 없으면 보이는 포지션 전부) ──
+let riskBal = null;
+const pctOfBal = (v) => riskBal ? ` (잔고 ${v >= 0 ? '+' : ''}${(v / riskBal * 100).toFixed(2)}%)` : '';
+function previewLevels() {
+  const base = selected.size ? positions.filter((p) => selected.has(p.ticket)) : filtered();
+  const who = selected.size ? `선택 ${base.length}건` : `보이는 ${base.length}건`;
+  const now = base.reduce((a, p) => a + p.profit + (p.swap || 0), 0);
+  const res = {};
+  for (const [k, inId, outId] of [['sl', 'slIn', 'slPrev'], ['tp', 'tpIn', 'tpPrev']]) {
+    const price = num(inId), el = $(outId);
+    if (price == null || !base.length) { el.hidden = true; continue; }
+    const t = base.reduce((a, p) => a + projected(p, price), 0);
+    res[k] = t;
+    // 방향 확인: BUY 의 SL 은 현재가 아래·TP 는 위, SELL 은 반대
+    const wrong = base.filter((p) => { const below = price < p.price_current; return k === 'sl' ? (isBuy(p) ? !below : below) : (isBuy(p) ? below : !below); });
+    el.hidden = false;
+    el.innerHTML = `${who} · ${k.toUpperCase()} ${fmt(price)} 닿으면 <b class="num ${cls(t)}">${signed(t)}</b>${pctOfBal(t)}`
+      + ` · 지금 대비 <span class="num ${cls(t - now)}">${signed(t - now)}</span>`
+      + (wrong.length ? `<br><span class="warn">⚠ ${wrong.length}건은 ${k === 'sl' ? '손절' : '익절'} 방향이 아닙니다 (현재가 기준) - MT5가 거부할 수 있음</span>` : '');
+  }
+  const rr = $('rrPrev');
+  if (res.sl != null && res.tp != null && res.sl < 0 && res.tp > 0) {
+    rr.hidden = false;
+    rr.innerHTML = `손익비 <b class="num">1 : ${(res.tp / -res.sl).toFixed(2)}</b> <span class="muted">(손실 ${fmt(-res.sl)} · 수익 ${fmt(res.tp)})</span>`;
+  } else rr.hidden = true;
+}
+['slIn', 'tpIn'].forEach((id) => $(id).addEventListener('input', previewLevels));
+
+// ── 계산기 ──
+let cSide = 'buy';
+const cNum = (id) => { const v = parseFloat(String($(id).value).replace(/,/g, '')); return isFinite(v) ? v : null; };
+// 1랏이 1포인트(가격 1) 움직일 때 손익 - 그 종목 포지션의 계약 크기, 없으면 종목 묶음 기본값
+const pointValue = () => (positions.find((p) => p.contract_size) || {}).contract_size || sym().point || 1;
+const pfmt = (v) => Math.abs(v) >= 100 ? v.toFixed(2) : v.toFixed(5).replace(/0+$/, '').replace(/\.$/, '');
+function calcRender() {
+  const dir = cSide === 'buy' ? 1 : -1, pv = pointValue();
+  const e = cNum('cEntry'), lot = cNum('cLot'), sl = cNum('cSl'), tp = cNum('cTp'), rr = cNum('cRR');
+  const riskAmt = cNum('cRiskAmt') ?? (cNum('cRiskPct') != null && riskBal ? riskBal * cNum('cRiskPct') / 100 : null);
+  const rows = [];
+  const row = (label, val, sub = '', use = '') => rows.push(`<div class="row"><span>${label}${sub ? `<br><small>${sub}</small>` : ''}</span><span class="num">${val}${use}</span></div>`);
+  const useBtn = (id, v) => ` <button class="btn small ghost use" data-put="${id}" data-v="${pfmt(v)}">${id === 'slIn' ? 'SL칸에' : 'TP칸에'}</button>`;
+  if (e != null && lot && sl != null) {
+    const loss = (sl - e) * dir * lot * pv;
+    row('SL 닿으면', `<b class="${cls(loss)}">${signed(loss)}</b>${pctOfBal(loss)}`, `${fmt(Math.abs(sl - e))} 차이 × ${lot}랏`);
+    if (dir * (sl - e) > 0) row('⚠', '<span class="warn">SL이 진입가보다 이익 쪽에 있습니다</span>');
+  }
+  if (e != null && lot && tp != null) {
+    const prof = (tp - e) * dir * lot * pv;
+    row('TP 닿으면', `<b class="${cls(prof)}">${signed(prof)}</b>${pctOfBal(prof)}`, `${fmt(Math.abs(tp - e))} 차이 × ${lot}랏`);
+  }
+  if (e != null && sl != null && tp != null && sl !== e) row('손익비', `<b>1 : ${(Math.abs(tp - e) / Math.abs(e - sl)).toFixed(2)}</b>`);
+  let slEff = sl;   // SL 을 안 넣고 손실 한도로 계산했으면 그 SL 로 손익비 TP 까지 이어서
+  if (riskAmt) {
+    if (e != null && sl != null && sl !== e) {
+      const l = Math.floor(riskAmt / (Math.abs(e - sl) * pv) * 100) / 100;
+      row(`손실 ${fmt(riskAmt)} 맞추는 랏`, `<b>${l.toFixed(2)} lot</b>`, `SL까지 ${fmt(Math.abs(e - sl))} 기준 · 0.01 단위 내림`);
+    }
+    if (e != null && lot && sl == null) {
+      slEff = e - dir * riskAmt / (lot * pv);
+      row(`손실 ${fmt(riskAmt)} 되는 SL`, `<b>${pfmt(slEff)}</b>`, `${lot}랏 · 진입가에서 ${fmt(riskAmt / (lot * pv))}`, useBtn('slIn', slEff));
+    }
+  }
+  let tpEff = tp;
+  if (e != null && slEff != null && rr && slEff !== e) {
+    const t = e + dir * rr * Math.abs(e - slEff);
+    tpEff = tpEff ?? t;
+    row(`손익비 1 : ${rr} TP`, `<b>${pfmt(t)}</b>`, lot ? `닿으면 ${signed(rr * Math.abs(e - slEff) * lot * pv)}` : '', useBtn('tpIn', t));
+  }
+  if (e != null && lot && slEff != null && slEff !== e && !rr && tp == null) {
+    // 손익비를 안 넣었어도 SL 거리의 1·2·3배 TP 를 참고로
+    for (const k of [1, 2, 3]) row(`1 : ${k} TP`, pfmt(e + dir * k * Math.abs(e - slEff)), `닿으면 ${signed(k * Math.abs(e - slEff) * lot * pv)}`, useBtn('tpIn', e + dir * k * Math.abs(e - slEff)));
+  }
+  $('cOut').innerHTML = rows.length ? rows.join('')
+    + `<p class="hint2" style="margin:4px 0 0">1랏 1포인트 = ${fmt(pv)} · 수수료·스왑·스프레드 제외 예상치${riskBal ? ` · 잔고 ${fmt(riskBal)}` : ''}</p>`
+    : '<p class="hint2">진입가·랏과 SL(또는 손실 한도)을 넣으면 계산합니다. 손익비를 넣으면 TP 가격도 계산합니다.</p>';
+  scheduleSim(e, lot, slEff, tpEff);
+}
+
+// ── 청산 시뮬레이션: 텔레그램 청산 알림과 같은 모양 (서버가 MT5 로 손익·증거금 계산) ──
+let simTimer = 0, simSeq = 0, volStep = 0.01;
+function scheduleSim(e, lot, sl, tp) {
+  clearTimeout(simTimer);
+  const close = cNum('cClose');
+  const targets = close != null ? [['청산가', close]] : [['TP에서 청산하면', tp], ['SL에서 청산하면', sl]].filter(([, v]) => v != null);
+  if (e == null || !lot || !targets.length || !acc || viewOnly()) { $('cSim').innerHTML = ''; return; }
+  simTimer = setTimeout(() => runSim(e, lot, targets), 350);
+}
+async function runSim(e, lot, targets) {
+  const seq = ++simSeq, an = encodeURIComponent(acc.account_number), hold = cNum('cHold');
+  const symName = (positions.find((p) => p.symbol) || {}).symbol || ticker();
+  try {
+    const res = await Promise.all(targets.map(([, px]) => api(`/accounts/${an}/simulate?symbol=${encodeURIComponent(symName)}`
+      + `&side=${cSide}&volume=${lot}&price_open=${e}&price_close=${px}${hold ? `&hold_min=${hold}` : ''}`)));
+    if (seq !== simSeq) return;
+    if (res[0] && res[0].volume_step) volStep = res[0].volume_step;
+    $('cSim').innerHTML = res.map((r, i) => `<div><h4>📨 ${targets[i][0]} - 텔레그램에 이렇게 옵니다</h4>
+      <div class="tgmsg"><b>${esc(r.title)}</b>\n${r.lines.map(esc).join('\n')}${r.extra.length ? `<span class="ex">${r.extra.map(esc).join('\n')}</span>` : ''}</div></div>`).join('')
+      + `<p class="hint2" style="margin:0">수수료는 이 종목 최근 청산의 랏당 평균(${fmt(res[0].fee_per_lot)})으로 추정 · 손익·증거금은 MT5 계산 · 스왑·스프레드 제외</p>`;
+  } catch (err) {
+    if (seq !== simSeq) return;
+    $('cSim').innerHTML = `<p class="hint2">시뮬레이션을 못 했습니다: ${esc(err.message)}</p>`;
+  }
+}
+// 랏 −/+ (브로커 최소 단위, 기본 0.01)
+document.querySelectorAll('[data-lot]').forEach((b) => b.onclick = (ev) => {
+  ev.preventDefault();
+  const cur = cNum('cLot') || 0, next = Math.max(volStep, +(cur + Number(b.dataset.lot) * volStep).toFixed(2));
+  $('cLot').value = next; calcRender();
+});
+$('calc').addEventListener('input', calcRender);
+$('calc').addEventListener('toggle', () => { if ($('calc').open && !cNum('cEntry')) calcFill(); calcRender(); });
+$('cSide').onclick = (e) => { const b = e.target.closest('button[data-side]'); if (!b) return; cSide = b.dataset.side;
+  document.querySelectorAll('#cSide button').forEach((x) => x.classList.toggle('on', x === b)); calcRender(); };
+function calcFill() {
+  // 선택한(없으면 보이는) 포지션의 평단·합계 랏·방향·SL·TP
+  const base = selected.size ? positions.filter((p) => selected.has(p.ticket)) : filtered();
+  if (!base.length) { const c = positions[0]; if (c) $('cEntry').value = pfmt(c.price_current); return; }
+  const lots = base.reduce((a, p) => a + p.volume, 0);
+  $('cEntry').value = pfmt(base.reduce((a, p) => a + p.price_open * p.volume, 0) / lots);
+  $('cLot').value = +lots.toFixed(2);
+  cSide = base.filter(isBuy).length >= base.length / 2 ? 'buy' : 'sell';
+  document.querySelectorAll('#cSide button').forEach((x) => x.classList.toggle('on', x.dataset.side === cSide));
+  const sl = base.find((p) => p.sl), tp = base.find((p) => p.tp);
+  $('cSl').value = sl ? pfmt(sl.sl) : ''; $('cTp').value = tp ? pfmt(tp.tp) : '';
+}
+$('cFill').onclick = () => { calcFill(); calcRender(); };
+$('cClear').onclick = () => { ['cEntry', 'cLot', 'cSl', 'cTp', 'cRiskAmt', 'cRiskPct', 'cRR', 'cClose', 'cHold'].forEach((id) => $(id).value = ''); calcRender(); };
+$('cOut').onclick = (e) => {
+  const b = e.target.closest('[data-put]'); if (!b) return;
+  $(b.dataset.put).value = b.dataset.v; previewLevels();
+  $(b.dataset.put).scrollIntoView({ behavior: 'smooth', block: 'center' });
+  toast(`${b.dataset.put === 'slIn' ? 'SL' : 'TP'} 칸에 넣었습니다. 포지션을 고르고 [적용]을 누르세요.`);
+};
 
 async function applyLevel(kind) {
   const price = num(kind === 'sl' ? 'slIn' : 'tpIn');

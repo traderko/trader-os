@@ -284,6 +284,25 @@ def _classify_risk(margin_utilization_pct: float) -> str:
     return "danger"
  
  
+@router.get("/{account_number}/simulate")
+async def simulate_close(
+    account_number: int,
+    symbol: str = Query(..., description="브로커 심볼 또는 종목 묶음 key (gold, nasdaq ...)"),
+    side: str = Query(..., description="BUY / SELL"),
+    volume: float = Query(..., gt=0),
+    price_open: float = Query(..., gt=0),
+    price_close: float = Query(..., gt=0),
+    hold_min: float | None = None,
+    db: AsyncSession = Depends(get_db),
+):
+    """청산 시뮬레이션 - 텔레그램 청산 알림과 같은 모양 + 증거금 (services/simulate.py)"""
+    from services.simulate import simulate
+    account = await get_account_or_default(db, account_number)
+    if account is None:
+        raise HTTPException(404, f"account not found: {account_number}")
+    return await simulate(db, account, symbol, side, volume, price_open, price_close, hold_min)
+
+
 @router.get("/{account_number}/risk-summary", response_model=RiskSummary)
 async def get_risk_summary(account_number: int, db: AsyncSession = Depends(get_db)):
     account = await get_account_or_default(db, account_number)
