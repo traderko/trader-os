@@ -301,6 +301,18 @@ async def read_settings():
     return _public_settings()
 
 
+@router.get("/api/settings/defaults")
+async def read_setting_defaults():
+    """관리 화면의 '기본값' 표시·버튼용. 토큰·chat id·비밀번호·접속 방식은 기본값으로 되돌리지 않으므로 빼고 보냄"""
+    import copy
+    from services.settings_service import DEFAULTS
+    d = copy.deepcopy(DEFAULTS)
+    tg = {k: v for k, v in d["telegram"].items() if k not in ("bot_token", "chat_id")}
+    return {"lock": d["lock"], "telegram": tg, "guidelines": d["guidelines"],
+            "access": {"session_days": d["access"]["session_days"]},
+            "admin_remote": {"session_days": d["admin_remote"]["session_days"]}}
+
+
 @router.put("/api/settings")
 async def write_settings(body: dict):
     patch: dict = {}

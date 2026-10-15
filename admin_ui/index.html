@@ -121,6 +121,10 @@
   .days input { display: none; }
   .days label:has(input:checked) { background: var(--accent-weak); border-color: var(--accent); color: var(--accent); font-weight: 600; }
   .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+  .defv { border: 1px dashed var(--line); background: none; color: var(--muted); font: inherit; font-size: 11.5px;
+    padding: 2px 8px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
+  .defv:hover { color: var(--text, inherit); border-style: solid; }
+  .defv.same { opacity: .45; }
   .gdrule { border-top: 1px solid var(--line); padding: 12px 0; }
   .gdrule .hd { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .gdrule .hd b { font-size: 14px; }
@@ -275,6 +279,7 @@
           <option value="custom">직접 설정</option>
         </select>
         <button class="btn" id="ckAdd">+ 규칙 추가</button>
+        <button class="btn" id="ckDef" title="정기 재확인 규칙과 '그 밖의 시간'을 처음 값으로 (저장해야 적용)">기본값으로</button>
       </div>
       <div class="row"><label class="name">그 밖의 시간<small>위 규칙에 해당하지 않는 시간의 재확인 간격</small></label>
         <span id="ckDefault"></span></div>
@@ -293,6 +298,7 @@
           <option value="custom">직접 설정</option>
         </select>
         <button class="btn" id="sessAdd">+ 구간 추가</button>
+        <button class="btn" id="sessDef" title="집중 구간 목록을 처음 값(아시아장 하나)으로 (저장해야 적용)">기본값으로</button>
       </div>
     </div>
 
@@ -318,6 +324,7 @@
     </div>
 
     <div class="actions">
+      <button class="btn" id="rulesDef" title="이 탭의 모든 값을 기본값으로 (저장해야 적용)">전체 기본값</button>
       <button class="btn" id="rulesReset">되돌리기</button>
       <button class="btn primary" id="rulesSave">저장</button>
     </div>
@@ -407,6 +414,7 @@
         <input type="number" id="tgBatch" min="0" max="30" style="width:80px"><span class="unit">초</span></div>
       <div class="actions">
         <button class="btn danger" id="tgClear">토큰 지우기</button>
+        <button class="btn" id="tgDef" title="토큰·chat id 를 뺀 알림 설정을 기본값으로 (저장해야 적용)">기본값</button>
         <button class="btn" id="tgTest">테스트 전송</button>
         <button class="btn primary" id="tgSave">저장</button>
       </div>
@@ -877,7 +885,72 @@ $('sessAdd').onclick = () => {
 async function loadSettings() {
   settings = await api('settings');
   fillRules(); fillTelegram();
+  loadDefaults();
 }
+
+// ── 기본값: 칸마다 '기본 N' (누르면 그 값으로 채움, 저장해야 적용) + 패널별 '기본값' 버튼 ──
+let defaults = null;
+const DEF_FIELDS = [   // [칸, 기본값 가져오기]
+  ...['consec_loss_threshold', 'consec_loss_lookback_hours', 'consec_loss_unlock_minutes', 'daily_loss_enabled',
+      'daily_loss_warn_pct', 'daily_loss_block_pct', 'daily_loss_close_pct', 'manual_lock_max_minutes']
+    .map((k) => [`#rules [data-k="${k}"]`, (d) => d.lock[k]]),
+  ['#tgLive', (d) => d.telegram.live_enabled], ['#tgLiveSec', (d) => d.telegram.live_interval_sec],
+  ['#tgLivePos', (d) => d.telegram.live_position], ['#tgSim', (d) => d.telegram.trade_sim],
+  ['#tgSimMult', (d) => (d.telegram.trade_sim_mult || []).join(', ')], ['#tgBatch', (d) => d.telegram.trade_batch_sec],
+  ['#acDays', (d) => d.access.session_days], ['#arDays', (d) => d.admin_remote.session_days],
+  ['#gdCooldown', (d) => d.guidelines.cooldown_min],
+];
+const defText = (el, v) => el.type === 'checkbox' ? (v ? '켜기' : '끄기')
+  : el.tagName === 'SELECT' ? ([...el.options].find((o) => o.value === String(v)) || {}).text || v : String(v);
+const curVal = (el) => el.type === 'checkbox' ? el.checked : el.value;
+function setVal(el, v) {
+  if (el.type === 'checkbox') el.checked = !!v; else el.value = v;
+  el.dispatchEvent(new Event('change', { bubbles: true }));
+}
+async function loadDefaults() {
+  if (!defaults) { try { defaults = await api('settings/defaults'); } catch { return; } }   // 재시작 전 서버면 조용히 넘어감
+  for (const [sel, get] of DEF_FIELDS) {
+    const el = document.querySelector(sel); if (!el) continue;
+    const v = get(defaults); if (v === undefined) continue;
+    let chip = el._defChip;
+    if (!chip) {
+      chip = el._defChip = document.createElement('button');
+      chip.type = 'button'; chip.className = 'defv'; chip.title = '누르면 기본값으로 채웁니다 (저장해야 적용)';
+      chip.onclick = () => { setVal(el, chip._v); refreshDefChips(); };
+      (el.closest('.row') || el.parentElement).appendChild(chip);
+    }
+    chip._v = v; chip._el = el; chip.textContent = '기본 ' + defText(el, v);
+  }
+  refreshDefChips();
+}
+function refreshDefChips() {
+  document.querySelectorAll('.defv').forEach((c) => c._el && c.classList.toggle('same', String(curVal(c._el)) === String(c._v)));
+}
+document.addEventListener('input', refreshDefChips);
+document.addEventListener('change', refreshDefChips);
+const needDefaults = () => { if (!defaults) toast('서버를 재시작하면 기본값을 쓸 수 있습니다.', true); return !!defaults; };
+const clone = (x) => JSON.parse(JSON.stringify(x));
+$('ckDef').onclick = () => {
+  if (!needDefaults() || !confirm('정기 재확인 규칙을 기본값으로 바꿀까요? (지금 규칙은 사라집니다)')) return;
+  ckDraft = clone(defaults.lock.checkin_rules); ckDefault = clone(defaults.lock.checkin_default);
+  renderCheckins(); toast('기본값으로 채웠습니다. 저장을 눌러야 적용됩니다.');
+};
+$('sessDef').onclick = () => {
+  if (!needDefaults() || !confirm('집중 구간 목록을 기본값(아시아장)으로 바꿀까요? (지금 구간은 사라집니다)')) return;
+  sessDraft = clone(defaults.lock.sessions); renderSessions(); toast('기본값으로 채웠습니다. 저장을 눌러야 적용됩니다.');
+};
+$('rulesDef').onclick = () => {
+  if (!needDefaults() || !confirm('잠금 규칙 탭의 모든 값(재확인 규칙·집중 구간 포함)을 기본값으로 바꿀까요?')) return;
+  document.querySelectorAll('#rules [data-k]').forEach((el) => { if (defaults.lock[el.dataset.k] !== undefined) setVal(el, defaults.lock[el.dataset.k]); });
+  ckDraft = clone(defaults.lock.checkin_rules); ckDefault = clone(defaults.lock.checkin_default); renderCheckins();
+  sessDraft = clone(defaults.lock.sessions); renderSessions();
+  refreshDefChips(); toast('모두 기본값으로 채웠습니다. 저장을 눌러야 적용됩니다.');
+};
+$('tgDef').onclick = () => {
+  if (!needDefaults()) return;
+  for (const [sel, get] of DEF_FIELDS) if (sel.startsWith('#tg')) setVal(document.querySelector(sel), get(defaults));
+  refreshDefChips(); toast('알림 설정을 기본값으로 채웠습니다 (토큰·chat id 는 그대로). 저장을 눌러야 적용됩니다.');
+};
 
 $('rulesReset').onclick = fillRules;
 $('rulesSave').onclick = async () => {
@@ -1026,7 +1099,7 @@ async function loadAccess() {
   $('acTsUrl').textContent = `http://${ip || '(Tailscale 주소)'}:${access.port}/app/`;
   $('acTsNow').textContent = ip ? `이 PC의 Tailscale 주소: ${access.tailscale_ips.join(', ')}`
     : '이 PC에서 Tailscale 주소를 찾지 못했습니다. Tailscale을 설치·로그인했는지 확인하세요.';
-  showAcGuide();
+  showAcGuide(); refreshDefChips();
 }
 $('acModes').addEventListener('change', showAcGuide);
 $('acSave').onclick = async () => {
@@ -1069,6 +1142,7 @@ async function loadAdminRemote() {
   $('arUrls').textContent = (ips.length ? ips : ['(이 PC의 주소)']).map((ip) => `http://${ip}:${r.main_port}/admin/`).join('  또는  ')
     + `   (포트를 직접: :${r.port}/)`;
   $('arGuide').hidden = !r.enabled;
+  refreshDefChips();
 }
 $('arSave').onclick = async () => {
   const pw = $('arPw').value, on = $('arOn').checked;
@@ -1094,7 +1168,7 @@ let guides = null;
 const WD = ['월', '화', '수', '목', '금', '토', '일'];
 function renderGuides() {
   const { settings: g, rules } = guides;
-  $('gdOn').checked = g.enabled; $('gdCooldown').value = g.cooldown_min;
+  $('gdOn').checked = g.enabled; $('gdCooldown').value = g.cooldown_min; refreshDefChips();
   $('gdItems').value = (g.items || []).join('\n');
   $('gdRules').innerHTML = rules.map((m) => {
     const r = g.rules[m.key] || {};
