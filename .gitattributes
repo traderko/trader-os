@@ -1,0 +1,5 @@
+# Developer tools - not included in the release zip (git archive)
+publish.bat export-ignore
+release.bat export-ignore
+tools/ export-ignore
+.gitattributes export-ignore

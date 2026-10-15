@@ -111,7 +111,7 @@ DEFAULTS: dict = {
             "revenge":      {"enabled": True, "text": "도파민 뇌동매매, 복수매매를 하고 있는가?", "minutes": 10},
             "overtrade":    {"enabled": True, "text": "시간 당 수십 번의 거래를 하고 있는가?", "count": 5, "minutes": 60},
             "no_sl":        {"enabled": True, "text": "자기확신과 욕심으로 손절 세팅을 하지 않았는가?", "seconds": 60},
-            "event_hold":   {"enabled": True, "text": "장 시작(아시아·유로·미장) 직전, 지표발표를 앞두고 포지션 정리를 하였는가?", "minutes": 30,
+            "event_hold":   {"enabled": True, "text": "장 시작(아시아·유로·미장) 직전, 지표발표를 앞두고 포지션 정리를 하였는가?", "minutes": 30, "repeat": 10,
                              "asia_open": True, "euro_open": True, "us_open": True},
             "loss_warn":    {"enabled": True, "text": "나의 최대손실 비율을 허용하였는가?\n너무 많은 손실을 감내하고 있는가?"},
             "size_jump":    {"enabled": True, "text": "되돌리지 않고, 바로 가지 않는 곳에서 비중을 키웠는가?", "ratio": 2.0, "lookback": 20},
@@ -314,7 +314,7 @@ def _validate(settings: dict) -> None:
 
 # 지침 규칙별 숫자 범위 (key → (최소, 최대))
 _GUIDE_RANGES = {
-    "minutes": (1, 240), "count": (1, 100), "seconds": (10, 3600), "lookback": (5, 200), "ratio": (1.2, 20),
+    "minutes": (1, 240), "repeat": (0, 240), "count": (1, 100), "seconds": (10, 3600), "lookback": (5, 200), "ratio": (1.2, 20),
 }
 
 

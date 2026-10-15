@@ -46,7 +46,9 @@ RULES = [
     {"key": "event_hold", "label": "지표·장 시작 전 포지션 보유",
      "desc": "고영향 지표 발표(또는 체크한 장 시작) 정한 시간 전인데 포지션을 들고 있으면 · 장 시작은 서머타임 자동 "
              "(아시아 07:00/08:00 · 유로 16:00/17:00 · 미국 22:30/23:30, 서머타임/아닐 때)",
-     "params": [{"k": "minutes", "label": "분 전", "type": "int"}, {"k": "asia_open", "label": "아시아장 시작", "type": "bool"},
+     "params": [{"k": "minutes", "label": "분 전", "type": "int"},
+                {"k": "repeat", "label": "분마다 다시 (정리할 때까지 · 0 = 한 번만)", "type": "int"},
+                {"k": "asia_open", "label": "아시아장 시작", "type": "bool"},
                 {"k": "euro_open", "label": "유로장 시작", "type": "bool"}, {"k": "us_open", "label": "미국장 개장", "type": "bool"}]},
     {"key": "loss_warn", "label": "일일 손실 경고", "desc": "일일 손실 한도 '경고' 단계 알림에 덧붙임 (잠금 규칙 탭의 일일 손실 한도가 켜져 있어야 함)",
      "params": []},
@@ -56,6 +58,7 @@ RULES = [
 
 _sent: dict[tuple, float] = {}        # (규칙, 계좌, 세부) → 마지막으로 보낸 시각
 _first_seen: dict[tuple, float] = {}  # (계좌, 티켓) → 처음 본 시각 (no_sl)
+_hold_count: dict[tuple, int] = {}    # (계좌, 지표·장|시각) → 보낸 횟수 (event_hold 반복)
 
 
 def cfg() -> dict:
@@ -76,8 +79,9 @@ def rule_text(key: str) -> str | None:
     return (r.get("text") or "").strip() if r else None
 
 
-def _cooldown_ok(key: tuple) -> bool:
-    cd = int(cfg().get("cooldown_min", 30)) * 60
+def _cooldown_ok(key: tuple, cd: float | None = None) -> bool:
+    if cd is None:
+        cd = int(cfg().get("cooldown_min", 30)) * 60
     now = time.time()
     if now - _sent.get(key, 0) < cd:
         return False
@@ -94,11 +98,12 @@ def send(text: str, context: str = "", title: str = "📌 트레이딩 지침") 
         print(f"[guideline] 보내기 실패: {e}")
 
 
-def fire(key: str, account_id: int, detail: str, context: str, text: str | None = None) -> bool:
+def fire(key: str, account_id: int, detail: str, context: str, text: str | None = None,
+         cooldown_sec: float | None = None) -> bool:
     r = rule(key)
     if not r:
         return False
-    if not _cooldown_ok((key, account_id, detail)):
+    if not _cooldown_ok((key, account_id, detail), cooldown_sec):
         return False
     send(text if text is not None else r.get("text") or "", context)
     print(f"[guideline] {key} 계좌{account_id} {detail}")
@@ -284,8 +289,18 @@ async def _check_positions() -> None:
             for at, name in upcoming:
                 mins = max(1, round((at - now).total_seconds() / 60))
                 syms = ", ".join(sorted({p["symbol"] for p in positions}))
-                fire("event_hold", a.id, f"{name}|{at.isoformat()}",
-                     f"{acc} · {at.strftime('%H:%M')} {name} ({mins}분 뒤) · 보유 중: {syms} {len(positions)}개")
+                # repeat 분마다 다시 (정리할 때까지) · 0 이면 한 번만
+                rep = int(r_ev.get("repeat", 10) or 0)
+                dkey = (a.id, f"{name}|{at.isoformat()}")
+                n = _hold_count.get(dkey, 0)
+                if fire("event_hold", a.id, dkey[1],
+                        f"{acc} · {at.strftime('%H:%M')} {name} ({mins}분 뒤) · 보유 중: {syms} {len(positions)}개"
+                        + (f"\n⏰ 아직 정리 안 됨 ({n + 1}번째 알림)" if n else ""),
+                        cooldown_sec=rep * 60 - 5 if rep else 86400):
+                    _hold_count[dkey] = n + 1
+    # 지난 지표·장 시작 반복 횟수는 잊음
+    for k in [k for k in _hold_count if k[1].split("|", 1)[1] < (now - timedelta(hours=1)).isoformat()]:
+        _hold_count.pop(k, None)
     # 없어진 포지션은 잊음
     for k in list(_first_seen):
         if k not in alive and r_sl:
