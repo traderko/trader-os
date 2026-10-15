@@ -620,6 +620,46 @@ async def add_phrase(body: PhraseIn, db: AsyncSession = Depends(get_db)):
     return {"id": row.id, "phrase": row.phrase, "phrase_type": row.phrase_type}
 
 
+class PhraseDefaultsIn(BaseModel):
+    phrase_type: str            # checkin | consec_loss | session
+    replace: bool = False       # True: 그 종류의 다른 문구는 지우고 기본 문구만
+
+
+@router.get("/api/phrases/defaults")
+async def phrase_defaults():
+    from services.phrase_defaults import DEFAULT_PHRASES
+    return DEFAULT_PHRASES
+
+
+@router.post("/api/phrases/defaults")
+async def restore_phrase_defaults(body: PhraseDefaultsIn, db: AsyncSession = Depends(get_db)):
+    """기본 문구 넣기 - 없는 것만 추가(지운 것은 되살림). replace 면 그 종류의 다른 문구는 지움(비활성화)"""
+    from services.phrase_defaults import DEFAULT_PHRASES
+    defaults = DEFAULT_PHRASES.get(body.phrase_type)
+    if defaults is None:
+        raise HTTPException(400, "기본 문구가 있는 종류는 checkin, consec_loss, session 입니다.")
+    removed = added = 0
+    if body.replace:
+        rows = (await db.execute(select(TradeLockPhrase).where(
+            TradeLockPhrase.phrase_type == body.phrase_type, TradeLockPhrase.is_active == True))).scalars().all()
+        for r in rows:
+            if r.phrase not in defaults:
+                r.is_active = False
+                removed += 1
+    for text in defaults:
+        row = (await db.execute(select(TradeLockPhrase).where(TradeLockPhrase.phrase == text))).scalar_one_or_none()
+        if row is None:
+            db.add(TradeLockPhrase(phrase=text, phrase_type=body.phrase_type, is_active=True))
+            added += 1
+        elif not row.is_active or row.phrase_type != body.phrase_type:
+            if row.is_active and not body.replace:
+                continue                      # 다른 종류에서 쓰고 있는 같은 문구는 그대로 (phrase 는 unique)
+            row.is_active, row.phrase_type = True, body.phrase_type
+            added += 1
+    await db.commit()
+    return {"added": added, "removed": removed}
+
+
 @router.delete("/api/phrases/{phrase_id}")
 async def delete_phrase(phrase_id: int, db: AsyncSession = Depends(get_db)):
     row = (await db.execute(select(TradeLockPhrase).where(TradeLockPhrase.id == phrase_id))).scalar_one_or_none()

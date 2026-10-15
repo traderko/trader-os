@@ -125,6 +125,9 @@
     padding: 2px 8px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
   .defv:hover { color: var(--text, inherit); border-style: solid; }
   .defv.same { opacity: .45; }
+  .pdef { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 8px 0 2px; }
+  .pdef small { color: var(--muted); font-size: 12px; }
+  .phrase .tagdef { font-size: 10.5px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; margin-left: 6px; }
   .gdrule { border-top: 1px solid var(--line); padding: 12px 0; }
   .gdrule .hd { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
   .gdrule .hd b { font-size: 14px; }
@@ -356,6 +359,7 @@
       <h2>정기 재확인 문구</h2>
       <p class="hint">정해진 시간마다 다시 잠길 때 입력하는 문구입니다. 무작위로 하나씩 보여 줍니다.</p>
       <div id="listCheckin"></div>
+      <div class="pdef" data-ptype="checkin"></div>
       <div class="add">
         <input type="text" class="wide" id="addCheckin" placeholder="새 문구 입력 (쉼표·특수기호 없이 쓰면 입력 실수가 줄어듭니다)">
         <button class="btn primary" data-add="checkin">추가</button>
@@ -365,6 +369,7 @@
       <h2>연속 손절 문구</h2>
       <p class="hint">손절이 연달아 나와 잠겼을 때 입력하는 문구입니다. 하나도 없으면 정기 재확인 문구로 풀립니다.</p>
       <div id="listConsec"></div>
+      <div class="pdef" data-ptype="consec_loss"></div>
       <div class="add">
         <input type="text" class="wide" id="addConsec" placeholder="예: 손절가를 넓히거나 물을 타지 않고 정한 손절을 그대로 지키겠습니다">
         <button class="btn primary" data-add="consec_loss">추가</button>
@@ -374,6 +379,7 @@
       <h2>집중 구간 문구</h2>
       <p class="hint">집중 구간에서는 <b>공통 문구</b>나 <b>그 구간 전용 문구</b>만 받습니다. 정기 재확인 문구로는 풀리지 않습니다.</p>
       <div id="listSession"></div>
+      <div class="pdef" data-ptype="session"></div>
       <div class="add">
         <select id="addSessionType"></select>
         <input type="text" class="wide" id="addSession" placeholder="예: 주간 고가나 저가를 넘어도 되돌림을 확인한 뒤에만 진입하겠습니다">
@@ -911,7 +917,7 @@ async function loadDefaults() {
   if (!defaults) { try { defaults = await api('settings/defaults'); } catch { return; } }   // 재시작 전 서버면 조용히 넘어감
   for (const [sel, get] of DEF_FIELDS) {
     const el = document.querySelector(sel); if (!el) continue;
-    const v = get(defaults); if (v === undefined) continue;
+    let v; try { v = get(defaults); } catch { continue; } if (v === undefined) continue;
     let chip = el._defChip;
     if (!chip) {
       chip = el._defChip = document.createElement('button');
@@ -981,10 +987,39 @@ $('rulesSave').onclick = async () => {
 };
 
 // ── 확인 문구 ──
+// 기본 문구: 목록에 '기본' 표시 + 패널마다 [기본 문구 추가 (n)] [기본값으로]
+let phraseDefs = null;
+const PTYPE_KR = { checkin: '정기 재확인', consec_loss: '연속 손절', session: '집중 구간 공통' };
+function renderPhraseDefaults(list) {
+  document.querySelectorAll('.pdef').forEach((box) => {
+    const t = box.dataset.ptype, defs = (phraseDefs && phraseDefs[t]) || [];
+    if (!defs.length) { box.innerHTML = ''; return; }
+    const mine = new Set(list.filter((p) => p.phrase_type === t).map((p) => p.phrase));
+    const missing = defs.filter((d) => !mine.has(d)).length;
+    const others = [...mine].filter((p) => !defs.includes(p)).length;
+    box.innerHTML = `<button class="btn" data-pdef="${t}" ${missing ? '' : 'disabled'} title="빠진 기본 문구만 추가 (내 문구는 그대로)">기본 문구 추가${missing ? ` (${missing})` : ''}</button>`
+      + `<button class="btn" data-pdef-replace="${t}" ${missing || others ? '' : 'disabled'} title="내가 넣은 문구는 지우고 기본 문구만 남김">기본값으로</button>`
+      + `<small>${missing || others ? `기본 문구 ${defs.length}개 중 ${defs.length - missing}개 있음` : '기본 문구 그대로입니다'}</small>`;
+  });
+}
+document.querySelectorAll('.pdef').forEach((box) => box.addEventListener('click', async (e) => {
+  const add = e.target.closest('[data-pdef]'), rp = e.target.closest('[data-pdef-replace]');
+  if (!add && !rp) return;
+  const t = (add || rp).dataset.pdef || (add || rp).dataset.pdefReplace, replace = !!rp;
+  if (replace && !confirm(`${PTYPE_KR[t]} 문구를 기본값으로 바꿀까요? 직접 넣은 문구는 지워집니다.`)) return;
+  try {
+    const r = await api('phrases/defaults', { method: 'POST', body: JSON.stringify({ phrase_type: t, replace }) });
+    toast(`기본 문구 ${r.added}개 추가` + (r.removed ? `, ${r.removed}개 삭제` : '') + '했습니다.'); loadPhrases();
+  } catch (err) { toast(err.message, true); }
+}));
+
 async function loadPhrases() {
   try {
+    if (!phraseDefs) { try { phraseDefs = await api('phrases/defaults'); } catch { phraseDefs = {}; } }   // 재시작 전 서버면 버튼 없이
     const list = await api('phrases');
-    const row = (p) => `<div class="phrase"><span>${esc(p.phrase)}</span><button class="btn danger" data-del="${p.id}">삭제</button></div>`;
+    renderPhraseDefaults(list);
+    const isDef = (p) => ((phraseDefs || {})[p.phrase_type] || []).includes(p.phrase);
+    const row = (p) => `<div class="phrase"><span>${esc(p.phrase)}${isDef(p) ? '<span class="tagdef">기본</span>' : ''}</span><button class="btn danger" data-del="${p.id}">삭제</button></div>`;
     const sessions = (settings && settings.lock.sessions) || [];
     const isSess = (t) => t === 'session' || t.startsWith('session:');
     const ck = list.filter((p) => p.phrase_type === 'checkin');
