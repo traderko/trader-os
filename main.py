@@ -429,7 +429,7 @@ async def lifespan(app: FastAPI):
     from services import updater
     update_task = asyncio.create_task(updater.loop())
 
-    # 7) 트레이딩 지침 - SL 없는 포지션, 지표·미장 전 보유 (services/guidelines.py)
+    # 7) 트레이딩 지침 - SL 없는 포지션, 지표·장 시작 전 보유 (services/guidelines.py)
     from services import guidelines
     guideline_task = asyncio.create_task(guidelines.loop())
  

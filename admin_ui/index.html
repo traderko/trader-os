@@ -332,14 +332,14 @@
       <div class="row"><label class="name">같은 알림 반복 방지<small>같은 규칙·계좌(·종목) 알림은 이 시간 안에 다시 보내지 않음</small></label>
         <input type="number" id="gdCooldown" min="1" max="1440" style="width:80px"><span class="unit">분</span></div>
       <div id="gdRules"></div>
-      <div class="actions"><button class="btn" id="gdTestAny">무작위 지침 미리 보내기</button><button class="btn primary" id="gdSave">저장</button></div>
+      <div class="actions"><button class="btn" id="gdDefAll" title="모든 규칙의 문구·수치와 반복 방지 시간을 기본값으로 (저장해야 적용)">전체 기본값</button><button class="btn" id="gdTestAny">무작위 지침 미리 보내기</button><button class="btn primary" id="gdSave">저장</button></div>
     </div>
     <div class="panel">
       <h2>지침 목록</h2>
       <p class="hint">한 줄에 하나씩. '그날 첫 진입' 알림은 여기서 무작위로 고릅니다.
         <b>정기 재확인 문구로 추가</b>를 누르면 재확인 잠금이 걸릴 때 이 지침 중 하나를 그대로 입력해야 풀립니다.</p>
       <textarea id="gdItems" rows="12" style="width:100%;font:inherit;line-height:1.6"></textarea>
-      <div class="actions"><button class="btn" id="gdToPhrases">정기 재확인 문구로 추가</button><button class="btn primary" id="gdSave2">저장</button></div>
+      <div class="actions"><button class="btn" id="gdDefItems" title="지침 목록을 처음 목록으로 (저장해야 적용)">목록 기본값</button><button class="btn" id="gdToPhrases">정기 재확인 문구로 추가</button><button class="btn primary" id="gdSave2">저장</button></div>
     </div>
   </section>
 
@@ -1105,7 +1105,7 @@ function renderGuides() {
     }).join('');
     return `<div class="gdrule${r.enabled ? '' : ' off'}" data-key="${m.key}">
       <div class="hd"><label class="switch"><input type="checkbox" data-p="enabled" ${r.enabled ? 'checked' : ''}> <b>${esc(m.label)}</b></label>
-        <small>${esc(m.desc)}</small><button class="btn" data-test="${m.key}" style="padding:3px 10px;font-size:12px">미리 보내기</button></div>
+        <small>${esc(m.desc)}</small><button class="btn" data-def="${m.key}" style="padding:3px 10px;font-size:12px" title="이 규칙의 문구·수치를 기본값으로 (저장해야 적용)">기본값</button><button class="btn" data-test="${m.key}" style="padding:3px 10px;font-size:12px">미리 보내기</button></div>
       <div class="bd"><textarea data-p="text" rows="${(r.text || '').includes('\n') ? 2 : 1}" placeholder="${m.key === 'first_entry' ? '비워 두면 지침 목록에서 무작위로' : '보낼 지침 문구'}">${esc(r.text || '')}</textarea>${params}</div>
     </div>`;
   }).join('');
@@ -1136,7 +1136,32 @@ $('gdSave').onclick = saveGuides; $('gdSave2').onclick = saveGuides;
 $('gdRules').addEventListener('change', (e) => {
   if (e.target.dataset.p === 'enabled') e.target.closest('.gdrule').classList.toggle('off', !e.target.checked);
 });
+// 기본값: 화면에만 채움 (다른 칸에서 고친 것은 그대로) - 저장을 눌러야 적용
+function guideDefaults(fn, msg) {
+  if (!guides || !guides.defaults) return toast('서버를 재시작하면 기본값을 쓸 수 있습니다.', true);
+  const cur = collectGuides(), d = JSON.parse(JSON.stringify(guides.defaults));
+  fn(cur, d);
+  guides = { ...guides, settings: { ...guides.settings, ...cur } };
+  renderGuides(); toast(msg + ' 저장을 눌러야 적용됩니다.');
+}
+$('gdDefAll').onclick = () => {
+  if (!confirm('모든 규칙의 문구·수치와 반복 방지 시간을 기본값으로 바꿀까요? (켜기·끄기는 그대로)')) return;
+  guideDefaults((cur, d) => {
+    for (const k of Object.keys(d.rules)) cur.rules[k] = { ...d.rules[k], enabled: cur.rules[k] ? cur.rules[k].enabled : d.rules[k].enabled };
+    cur.cooldown_min = d.cooldown_min;
+  }, '모든 규칙을 기본값으로 채웠습니다.');
+};
+$('gdDefItems').onclick = () => {
+  if (!confirm('지침 목록을 처음 목록으로 바꿀까요? 직접 추가한 지침은 사라집니다.')) return;
+  guideDefaults((cur, d) => { cur.items = d.items; }, '지침 목록을 기본값으로 채웠습니다.');
+};
 $('gdRules').addEventListener('click', async (e) => {
+  const def = e.target.closest('[data-def]');
+  if (def) {
+    const k = def.dataset.def;
+    return guideDefaults((cur, d) => { cur.rules[k] = { ...d.rules[k], enabled: cur.rules[k] ? cur.rules[k].enabled : true }; },
+      `'${def.closest('.gdrule').querySelector('.hd b').textContent}' 을(를) 기본값으로 채웠습니다.`);
+  }
   const b = e.target.closest('[data-test]'); if (!b) return;
   if (!(await saveGuides())) return;
   try { await api('guidelines/test', { method: 'POST', body: JSON.stringify({ key: b.dataset.test }) }); toast('보냈습니다. 텔레그램을 확인하세요.'); }

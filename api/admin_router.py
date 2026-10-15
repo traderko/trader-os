@@ -513,10 +513,17 @@ async def week_events(db: AsyncSession = Depends(get_db)):
 
 
 # ── 트레이딩 지침 (services/guidelines.py) ─────────────────────────────
+def _guide_defaults() -> dict:
+    """지침 기본값 (관리 화면의 '기본값' 버튼)"""
+    import copy
+    from services.settings_service import DEFAULTS
+    return copy.deepcopy(DEFAULTS["guidelines"])
+
+
 @router.get("/api/guidelines")
 async def read_guidelines():
     from services import guidelines
-    return {"settings": get_settings()["guidelines"], "rules": guidelines.RULES}
+    return {"settings": get_settings()["guidelines"], "rules": guidelines.RULES, "defaults": _guide_defaults()}
 
 
 @router.put("/api/guidelines")
@@ -527,7 +534,7 @@ async def write_guidelines(body: dict):
         update_settings({"guidelines": patch})
     except SettingsError as e:
         raise HTTPException(400, str(e))
-    return {"settings": get_settings()["guidelines"], "rules": guidelines.RULES}
+    return {"settings": get_settings()["guidelines"], "rules": guidelines.RULES, "defaults": _guide_defaults()}
 
 
 @router.post("/api/guidelines/to-phrases")

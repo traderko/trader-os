@@ -11,7 +11,7 @@
 #     first_entry  그날(06:00 기준) 첫 진입 - 지침 목록에서 무작위 몇 개
 #   주기 확인 (loop, 20초마다)
 #     no_sl        진입하고 N초가 지나도 손절(SL)이 없는 포지션
-#     event_hold   고영향 지표 발표·미국장 개장 N분 전인데 포지션을 들고 있음
+#     event_hold   고영향 지표 발표·장 시작(아시아·유로·미국) N분 전인데 포지션을 들고 있음
 #   워커 (trade_lock_worker.py)
 #     loss_warn    일일 손실 한도 '경고' 단계 알림에 지침을 덧붙임
 #
@@ -43,8 +43,11 @@ RULES = [
      "params": [{"k": "weekdays", "label": "요일", "type": "weekdays"}, {"k": "event_days", "label": "지표 발표일 포함", "type": "bool"}]},
     {"key": "no_sl", "label": "손절 미설정", "desc": "진입하고 정한 시간이 지나도 손절(SL)이 없으면",
      "params": [{"k": "seconds", "label": "초 뒤", "type": "int"}]},
-    {"key": "event_hold", "label": "지표·미장 전 포지션 보유", "desc": "고영향 지표 발표(또는 미국장 개장) 정한 시간 전인데 포지션을 들고 있으면",
-     "params": [{"k": "minutes", "label": "분 전", "type": "int"}, {"k": "us_open", "label": "미국장 개장도", "type": "bool"}]},
+    {"key": "event_hold", "label": "지표·장 시작 전 포지션 보유",
+     "desc": "고영향 지표 발표(또는 체크한 장 시작) 정한 시간 전인데 포지션을 들고 있으면 · 장 시작은 서머타임 자동 "
+             "(아시아 07:00/08:00 · 유로 16:00/17:00 · 미국 22:30/23:30, 서머타임/아닐 때)",
+     "params": [{"k": "minutes", "label": "분 전", "type": "int"}, {"k": "asia_open", "label": "아시아장 시작", "type": "bool"},
+                {"k": "euro_open", "label": "유로장 시작", "type": "bool"}, {"k": "us_open", "label": "미국장 개장", "type": "bool"}]},
     {"key": "loss_warn", "label": "일일 손실 경고", "desc": "일일 손실 한도 '경고' 단계 알림에 덧붙임 (잠금 규칙 탭의 일일 손실 한도가 켜져 있어야 함)",
      "params": []},
     {"key": "first_entry", "label": "그날 첫 진입", "desc": "거래일(06:00 기준) 첫 진입 때 지침 목록에서 무작위로 · 문구를 비워 두면 목록에서 고름",
@@ -200,7 +203,7 @@ async def _on_open(account_id, account_number, symbol, side, volume, now):
                     fire("first_entry", account_id, start.date().isoformat(), f"{acc} · 오늘 첫 진입 ({symbol} {side})", text)
 
 
-# ── 주기 확인 (SL 없음, 지표·미장 전 보유) ──────────────────────────
+# ── 주기 확인 (SL 없음, 지표·장 시작 전 보유) ──────────────────────────
 async def loop() -> None:
     await asyncio.sleep(30)
     while True:
@@ -212,16 +215,23 @@ async def loop() -> None:
         await asyncio.sleep(LOOP_SEC)
 
 
-def _us_open_after(now: datetime) -> datetime:
-    """지금 이후 가장 가까운 미국장 개장 (평일 09:30 뉴욕 시간, 서머타임 자동)"""
-    ny = now.astimezone(NY)
-    d = ny.date()
-    for i in range(8):
-        day = d + timedelta(days=i)
-        if day.weekday() < 5:
-            t = datetime(day.year, day.month, day.day, 9, 30, tzinfo=NY)
-            if t > now:
-                return t.astimezone(KST)
+# 장 시작 시각 - 브로커 서버시간(뉴욕 + 7시간, 서머타임 자동) 기준, 브로커 날짜 월~금
+#   아시아 01:00 → KST 07:00 (서머타임) / 08:00
+#   유로   10:00 → KST 16:00 / 17:00
+#   미국   16:30 → KST 22:30 / 23:30 (= 뉴욕 09:30)
+MARKET_OPENS = [("asia_open", "아시아장 시작", 1, 0), ("euro_open", "유로장 시작", 10, 0), ("us_open", "미국장 개장", 16, 30)]
+
+
+def _open_after(now: datetime, hh: int, mm: int) -> datetime:
+    """지금 이후 가장 가까운 장 시작 (브로커 시간 hh:mm, 브로커 날짜 평일)"""
+    b_now = now.astimezone(NY).replace(tzinfo=None) + timedelta(hours=7)
+    for i in range(9):
+        day = (b_now + timedelta(days=i)).date()
+        if day.weekday() >= 5:
+            continue
+        t = (datetime(day.year, day.month, day.day, hh, mm) - timedelta(hours=7)).replace(tzinfo=NY)
+        if t > now:
+            return t.astimezone(KST)
     return now + timedelta(days=7)
 
 
@@ -247,10 +257,11 @@ async def _check_positions() -> None:
                     continue
                 seen.add(e.event_time)
                 upcoming.append((e.event_time.astimezone(KST), e.event_name.replace("[FF] ", "")))
-            if r_ev.get("us_open"):
-                uo = _us_open_after(now)
-                if uo <= horizon:
-                    upcoming.append((uo, "미국장 개장"))
+            for key, name, hh, mm in MARKET_OPENS:
+                if r_ev.get(key, True):
+                    at = _open_after(now, hh, mm)
+                    if at <= horizon:
+                        upcoming.append((at, name))
 
     r_sl = rule("no_sl")
     alive = set()
