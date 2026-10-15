@@ -15,7 +15,7 @@ from services.settings_service import get_settings, update_settings
 DEFAULT_PHRASES: dict[str, list[str]] = {
     # 정기 재확인
     "checkin": [
-        "나는 트레이딩 지침을 확인했고 뇌동매매를 하지 않겠습니다",
+        "트레이딩 지침을 확인했고 뇌동매매를 하지 않겠습니다",
     ],
     # 연속 손절 잠금
     "consec_loss": [
