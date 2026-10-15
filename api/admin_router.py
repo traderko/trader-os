@@ -599,7 +599,9 @@ async def add_phrase(body: PhraseIn, db: AsyncSession = Depends(get_db)):
     if not phrase:
         raise HTTPException(400, "문구를 입력하세요.")
     ptype = body.phrase_type
-    if ptype.startswith(lock_svc.PHRASE_TYPE_SESSION + ":"):
+    if ptype == lock_svc.PHRASE_TYPE_EVENT:
+        pass                                          # 지표 발표일 전용
+    elif ptype.startswith(lock_svc.PHRASE_TYPE_SESSION + ":"):
         sid = ptype.split(":", 1)[1]
         if sid not in {x["id"] for x in get_settings()["lock"]["sessions"]}:
             raise HTTPException(400, "없는 집중 구간입니다. 구간을 먼저 저장하세요.")

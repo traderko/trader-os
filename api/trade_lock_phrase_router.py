@@ -13,18 +13,29 @@ from db.session import get_db
 # consec_loss: 연속손절 잠금 해제용 (하나도 없으면 checkin 문구를 대신 보여줌/받음)
 # session: 집중 구간(아시아장·유로장 등) 공통 문구
 # session:<구간id>: 그 구간 전용 문구 (예: session:asia)
+# session:event: 지표 발표일 전용 - 집중 구간이 지표일 때문에 걸렸을 때만
 # 앱은 /lock/status 의 phrase_type 과 session.ids 를 보고 골라 씀:
 #   GET /trade-lock/phrases/random?type=session&session_ids=asia
 PhraseType = Literal["checkin", "session", "consec_loss"]
 
 
-def _types_for(type: str, session_ids: str | None) -> list[str]:
+async def _types_for(db: AsyncSession, type: str, session_ids: str | None) -> list[str]:
     if type == "consec_loss":
         return ["consec_loss", "checkin"]   # 아래에서 consec_loss가 없을 때만 checkin 사용
     if type != "session":
         return [type]
-    ids = [x.strip() for x in (session_ids or "").split(",") if x.strip()]
-    return ["session"] + [f"session:{i}" for i in ids]
+    ids = [x.strip() for x in (session_ids or "").split(",") if x.strip() and x.strip() != "event"]
+    types = ["session"] + [f"session:{i}" for i in ids]
+    # 지표 발표일 전용 문구: 지금 걸린 집중 구간이 지표일 때문이면 같이 (앱은 따로 넘기지 않아도 됨)
+    try:
+        from datetime import datetime
+        from services import trade_lock_service as svc
+        win = await svc.get_session_window(db, datetime.now(svc.KST))
+        if win is not None and win.event_day:
+            types.append(svc.PHRASE_TYPE_EVENT)
+    except Exception:
+        pass
+    return types
 
 
 def _prefer(phrases: list, type: str) -> list:
@@ -56,7 +67,7 @@ async def list_phrases(
 ):
     result = await db.execute(
         select(TradeLockPhrase)
-        .where(TradeLockPhrase.is_active == True, TradeLockPhrase.phrase_type.in_(_types_for(type, session_ids)))
+        .where(TradeLockPhrase.is_active == True, TradeLockPhrase.phrase_type.in_(await _types_for(db, type, session_ids)))
     )
 
     return _prefer(result.scalars().all(), type)
@@ -69,7 +80,7 @@ async def get_random_phrase(
 ):
     result = await db.execute(
         select(TradeLockPhrase)
-        .where(TradeLockPhrase.is_active == True, TradeLockPhrase.phrase_type.in_(_types_for(type, session_ids)))
+        .where(TradeLockPhrase.is_active == True, TradeLockPhrase.phrase_type.in_(await _types_for(db, type, session_ids)))
     )
     phrases = _prefer(result.scalars().all(), type)
     if not phrases:

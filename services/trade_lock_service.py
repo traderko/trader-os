@@ -36,6 +36,7 @@ KST = ZoneInfo("Asia/Seoul")
 
 PHRASE_TYPE_CHECKIN = "checkin"
 PHRASE_TYPE_SESSION = "session"
+PHRASE_TYPE_EVENT = "session:event"   # 지표 발표일 전용 - 집중 구간이 지표일이라서 걸렸을 때만 (구간 id 'event' 는 예약)
 PHRASE_TYPE_CONSEC = "consec_loss"   # 연속손절 잠금 전용 (없으면 checkin 문구로 풀림)
 
 REASON_PRIORITY = {
@@ -69,9 +70,15 @@ class SessionWindow:
         return "session_window:" + ",".join(self.ids)
 
     @property
+    def event_day(self) -> bool:
+        """지표 발표일이라서 걸린 구간인지 (요일과 겹쳐도 지표가 있으면 True)"""
+        return any(c.startswith("지표:") for c in self.causes)
+
+    @property
     def phrase_types(self) -> list[str]:
-        """이 구간에서 받는 문구 종류: 모든 구간 공통(session) + 구간 전용(session:<id>)"""
-        return [PHRASE_TYPE_SESSION] + [f"{PHRASE_TYPE_SESSION}:{i}" for i in self.ids]
+        """이 구간에서 받는 문구 종류: 모든 구간 공통(session) + 구간 전용(session:<id>) + 지표일이면 지표 전용"""
+        return ([PHRASE_TYPE_SESSION] + [f"{PHRASE_TYPE_SESSION}:{i}" for i in self.ids]
+                + ([PHRASE_TYPE_EVENT] if self.event_day else []))
 
     @property
     def title(self) -> str:
@@ -313,6 +320,7 @@ async def get_lock_state(db: AsyncSession, account_id: int) -> dict:
             "causes": session.causes,
             "ids": session.ids,
             "names": session.names,
+            "event_day": session.event_day,
             "unlock_minutes": session.unlock_minutes,
         }
  

@@ -384,7 +384,9 @@
     </div>
     <div class="panel">
       <h2>집중 구간 문구</h2>
-      <p class="hint">집중 구간에서는 <b>공통 문구</b>나 <b>그 구간 전용 문구</b>만 받습니다. 정기 재확인 문구로는 풀리지 않습니다.</p>
+      <p class="hint">집중 구간에서는 <b>공통 문구</b>와 <b>그 구간 전용 문구</b> 중에서 무작위로 하나를 받습니다.
+        지표 발표일 때문에 잠긴 날에는 <b>지표 발표일 전용 문구</b>도 함께 나옵니다. 정기 재확인 문구로는 풀리지 않습니다.
+        유로장·미장 전용은 <b>잠금 규칙 → 집중 구간</b>에 그 구간을 먼저 추가하면 고를 수 있습니다.</p>
       <div id="listSession"></div>
       <div class="pdef" data-ptype="session"></div>
       <div class="add">
@@ -1057,14 +1059,17 @@ async function loadPhrases() {
     $('listConsec').innerHTML = cl.length ? cl.map(row).join('') : '<div class="empty">문구가 없습니다. 연속 손절로 잠기면 정기 재확인 문구로 풀립니다.</div>';
 
     // 집중 구간 문구: 공통 + 구간별로 묶어서 표시
+    const evOnly = list.filter((p) => p.phrase_type === 'session:event');
     const groups = [{ title: '모든 구간 공통', items: shared }].concat(sessions.map((x) => ({
-      title: `${x.name} 전용`, items: list.filter((p) => p.phrase_type === 'session:' + x.id) })));
-    const orphan = list.filter((p) => p.phrase_type.startsWith('session:') && !sessions.some((x) => 'session:' + x.id === p.phrase_type));
+      title: `${x.name} 전용`, items: list.filter((p) => p.phrase_type === 'session:' + x.id) })),
+      [{ title: '지표 발표일 전용 (지표 때문에 잠긴 날만, 어느 구간이든)', items: evOnly }]);
+    const orphan = list.filter((p) => p.phrase_type.startsWith('session:') && p.phrase_type !== 'session:event' && !sessions.some((x) => 'session:' + x.id === p.phrase_type));
     if (orphan.length) groups.push({ title: '삭제된 구간의 문구', items: orphan });
     $('listSession').innerHTML = groups.map((g) => `<h3 style="font-size:13px;margin:12px 0 2px;color:var(--muted)">${esc(g.title)}</h3>` +
       (g.items.length ? g.items.map(row).join('') : '<div class="empty" style="padding:8px 0;text-align:left">없음</div>')).join('');
     const sel = $('addSessionType'), cur = sel.value;
-    sel.innerHTML = '<option value="session">모든 구간 공통</option>' + sessions.map((x) => `<option value="session:${esc(x.id)}">${esc(x.name)} 전용</option>`).join('');
+    sel.innerHTML = '<option value="session">모든 구간 공통</option>' + sessions.map((x) => `<option value="session:${esc(x.id)}">${esc(x.name)} 전용</option>`).join('')
+      + '<option value="session:event">지표 발표일 전용</option>';
     if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
 
     const w = [];

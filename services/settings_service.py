@@ -394,6 +394,8 @@ def _validate_sessions(sessions) -> list[dict]:
             raise SettingsError(f"{label}의 id가 잘못됐습니다.")
         if sid in ids:
             raise SettingsError(f"집중 구간 id '{sid}'가 중복됩니다.")
+        if sid == "event":
+            raise SettingsError("집중 구간 id 'event' 는 지표 발표일 전용 문구에 쓰여서 쓸 수 없습니다.")
         ids.add(sid)
 
         start, end = s.get("start_min"), s.get("end_min")
