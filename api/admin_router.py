@@ -310,7 +310,7 @@ async def read_setting_defaults():
     tg = {k: v for k, v in d["telegram"].items() if k not in ("bot_token", "chat_id")}
     return {"lock": d["lock"], "telegram": tg, "guidelines": d["guidelines"],
             "access": {"session_days": d["access"]["session_days"]},
-            "admin_remote": {"session_days": d["admin_remote"]["session_days"]}}
+            "admin_remote": {"session_days": d["admin_remote"]["session_days"]}, "events": d["events"]}
 
 
 @router.put("/api/settings")
@@ -335,6 +335,11 @@ async def write_settings(body: dict):
         for k in ("live_enabled", "live_interval_sec", "live_position", "trade_sim", "trade_batch_sec", "trade_sim_mult"):
             if k in tg:
                 patch["telegram"][k] = tg[k]
+
+    if "events" in body:
+        ev = body["events"] or {}
+        if "highlight" in ev:
+            patch["events"] = {"highlight": ev["highlight"]}
 
     try:
         update_settings(patch)
@@ -480,6 +485,7 @@ async def week_events(db: AsyncSession = Depends(get_db)):
     from datetime import timedelta
     from db.models.economic_event import EconomicEvent
     from services import economic_event_service as ev
+    from services import key_events
     from services.settings_service import lock_cfg
 
     now = datetime.now(lock_svc.KST)
@@ -501,7 +507,7 @@ async def week_events(db: AsyncSession = Depends(get_db)):
             continue
         d = days.setdefault(r.broker_date, [])
         d.append({"name": r.event_name, "time": r.event_time.astimezone(lock_svc.KST).isoformat(),
-                  "source": "ff" if r.event_name.startswith("[FF]") else "einfomax"})
+                  "source": "ff" if r.event_name.startswith("[FF]") else "einfomax", "key": key_events.is_key(r.event_name)})
 
     out = []
     for i in range(7):
@@ -519,7 +525,8 @@ async def week_events(db: AsyncSession = Depends(get_db)):
     def h(src):
         x = ev.health[src]
         return {"ok_at": x["ok_at"], "saved": x["saved"], "error": x["error"], "fail_since": x["fail_since"]}
-    return {"days": out, "total": sum(len(d["events"]) for d in out),
+    return {"days": out, "total": sum(len(d["events"]) for d in out), "highlight": key_events.words(),
+            "key_total": sum(1 for d in out for e in d["events"] if e["key"]),
             "event_sessions": [x["name"] for x in sessions],
             "health": {"einfomax": h("einfomax"), "ff": h("ff")}}
 

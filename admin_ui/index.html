@@ -166,6 +166,10 @@
   .evday b { display: block; margin-bottom: 4px; }
   .evday .ev { display: flex; gap: 8px; } .evday .ev time { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .evday .lk { margin-top: 6px; color: var(--warn); font-size: 12px; }
+  .evday .ev.key span { font-weight: 700; color: var(--accent); }
+  .evday .ev.key { background: var(--accent-weak, rgba(37,99,235,.08)); border-radius: 6px; margin: 1px -6px; padding: 1px 6px; }
+  .evday.haskey { border-color: var(--accent); border-width: 1.5px; }
+  #evPanel h2 { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
   .warnbar { background: var(--warn-weak); color: var(--warn); border-radius: 10px; padding: 10px 12px; margin-bottom: 14px; }
 
   /* 집중 구간 카드 */
@@ -215,9 +219,12 @@
     <div id="dashWarn"></div>
     <div class="grid" id="accounts"><div class="empty">불러오는 중…</div></div>
     <div class="panel" id="evPanel" style="margin-top:16px">
-      <h2>이번 주 지표 <small class="hint" id="evSub" style="font-weight:400"></small></h2>
+      <h2>이번 주 지표 <small class="hint" id="evSub" style="font-weight:400"></small>
+        <label class="switch" style="margin-left:auto;font-size:13px;font-weight:400"><input type="checkbox" id="evKeyOnly"> ⭐ 주요 지표만</label></h2>
       <div id="evHealth"></div>
       <div id="evDays" class="evdays"><div class="empty">불러오는 중…</div></div>
+      <div class="row" style="margin-top:12px"><label class="name">강조할 지표 단어<small>이름에 이 단어가 들어가면 ⭐ 주요 지표 (쉼표로 구분 · 대소문자 무시) · 텔레그램 '발표 예정' 알림과 지침 알림에도 ⭐</small></label>
+        <input type="text" class="wide" id="evKw" placeholder="예: FOMC, 실업수당, 원유, 비농업"><button class="btn primary" id="evKwSave">저장</button></div>
     </div>
   </section>
 
@@ -650,13 +657,33 @@ async function loadEvents() {
   }
   if (!r.total) warns.push('이번 주 저장된 지표가 0개입니다. 휴일 주간이 아니라면 지표 받기에 문제가 있습니다 - 지표일 잠금이 걸리지 않습니다.');
   $('evHealth').innerHTML = warns.map((w) => `<div class="warnbar">${w}</div>`).join('');
+  if (r.highlight && document.activeElement !== $('evKw')) $('evKw').value = r.highlight.join(', ');
+  if (r.key_total !== undefined) $('evSub').textContent += ` · ⭐ 주요 지표 ${r.key_total}개`;
+  evLast = r; renderEventDays();
+  refreshDefChips();
+}
+let evLast = null;
+function renderEventDays() {
+  const r = evLast; if (!r) return;
+  const keyOnly = $('evKeyOnly').checked;
   $('evDays').innerHTML = r.days.map((d) => {
-    const evs = d.events.map((e) => `<div class="ev"><time>${kstMD(e.time).replace(/\s/g, '')} ${kstHM(e.time)}</time><span>${esc(e.name.replace(/^\[FF\] /, ''))}</span></div>`).join('');
+    const list = keyOnly ? d.events.filter((e) => e.key) : d.events;
+    const evs = list.map((e) => `<div class="ev${e.key ? ' key' : ''}"><time>${kstMD(e.time).replace(/\s/g, '')} ${kstHM(e.time)}</time><span>${e.key ? '⭐ ' : ''}${esc(e.name.replace(/^\[FF\] /, ''))}</span></div>`).join('');
     const lk = d.locks.map((l) => `🔒 ${esc(l.name)} ${kstMD(l.start)} ${kstHM(l.start)}~${kstHM(l.end)}`).join('<br>');
-    return `<div class="evday${d.today ? ' today' : ''}${d.events.length ? '' : ' none'}"><b>${esc(d.weekday)} ${d.broker_date.slice(5).replace('-', '/')}${d.today ? ' · 오늘' : ''}</b>
-      ${evs || '지표 없음'}${lk ? `<div class="lk">${lk}</div>` : ''}</div>`;
+    const more = keyOnly && d.events.length > list.length ? `<small class="hint">그 밖의 지표 ${d.events.length - list.length}개</small>` : '';
+    return `<div class="evday${d.today ? ' today' : ''}${d.events.length ? '' : ' none'}${d.events.some((e) => e.key) ? ' haskey' : ''}"><b>${esc(d.weekday)} ${d.broker_date.slice(5).replace('-', '/')}${d.today ? ' · 오늘' : ''}</b>
+      ${evs || (d.events.length ? '' : '지표 없음')}${more}${lk ? `<div class="lk">${lk}</div>` : ''}</div>`;
   }).join('');
 }
+try { $('evKeyOnly').checked = localStorage.getItem('traderos:evKeyOnly') === '1'; } catch {}
+$('evKeyOnly').onchange = () => { try { localStorage.setItem('traderos:evKeyOnly', $('evKeyOnly').checked ? '1' : '0'); } catch {} renderEventDays(); };
+$('evKwSave').onclick = async () => {
+  try {
+    await api('settings', { method: 'PUT', body: JSON.stringify({ events: { highlight: $('evKw').value } }) });
+    toast('저장했습니다. 바로 적용됩니다.'); $('evKw').blur(); loadEvents();
+  } catch (e) { toast(e.message, true); }
+};
+$('evKw').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) $('evKwSave').click(); });
 
 async function loadStatus() {
   try {
@@ -905,6 +932,7 @@ const DEF_FIELDS = [   // [칸, 기본값 가져오기]
   ['#tgSimMult', (d) => (d.telegram.trade_sim_mult || []).join(', ')], ['#tgBatch', (d) => d.telegram.trade_batch_sec],
   ['#acDays', (d) => d.access.session_days], ['#arDays', (d) => d.admin_remote.session_days],
   ['#gdCooldown', (d) => d.guidelines.cooldown_min],
+  ['#evKw', (d) => d.events.highlight.join(', ')],
 ];
 const defText = (el, v) => el.type === 'checkbox' ? (v ? '켜기' : '끄기')
   : el.tagName === 'SELECT' ? ([...el.options].find((o) => o.value === String(v)) || {}).text || v : String(v);

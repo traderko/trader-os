@@ -256,15 +256,21 @@ class EconomicEventService:
                 continue  # 이미 등록됨 → 스킵
 
             self.scheduler.add_job(
-                self.fcm.send,
+                self._notify,
                 trigger="date",
                 run_date=notify_time,
-                args=[
-                    f"[{currency}] 경제지표 발표 예정",
-                    f"{event_name} ({minutes_before}분 전)"
-                ],
+                args=[event_name, currency, minutes_before],
                 id=job_id
             )
+
+    def _notify(self, event_name, currency, minutes_before):
+        """보낼 때 '주요 지표'인지 봄 (관리 화면에서 강조 단어를 바꾸면 이미 잡힌 알림에도 바로 적용)"""
+        from services import key_events
+        name = event_name.replace("[FF] ", "")
+        if key_events.is_key(event_name):
+            self.fcm.send(f"⭐ [{currency}] 주요 지표 발표 예정", f"⭐ {name} ({minutes_before}분 전)")
+        else:
+            self.fcm.send(f"[{currency}] 경제지표 발표 예정", f"{event_name} ({minutes_before}분 전)")
 
     def _fetch_events(self):
         url = "https://eco-calendar.einfomax.co.kr/eco/master2"

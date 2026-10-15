@@ -261,7 +261,8 @@ async def _check_positions() -> None:
                 if e.event_time in seen:          # 같은 시각 einfomax·FF 중복
                     continue
                 seen.add(e.event_time)
-                upcoming.append((e.event_time.astimezone(KST), e.event_name.replace("[FF] ", "")))
+                from services.key_events import star
+                upcoming.append((e.event_time.astimezone(KST), star(e.event_name.replace("[FF] ", ""))))
             for key, name, hh, mm in MARKET_OPENS:
                 if r_ev.get(key, True):
                     at = _open_after(now, hh, mm)

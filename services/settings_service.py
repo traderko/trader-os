@@ -119,6 +119,13 @@ DEFAULTS: dict = {
             "first_entry":  {"enabled": True, "text": "", "count": 2},
         },
     },
+    # 경제지표 - 이름에 이 단어가 들어가면 '주요 지표'로 강조 (services/key_events.py). 대소문자 구분 없음
+    "events": {
+        "highlight": [
+            "FOMC", "금리", "파월", "실업수당", "원유", "비농업", "실업률", "CPI", "소비자물가", "PCE", "GDP",
+            "Federal Funds", "Fed Chair", "Non-Farm", "Unemployment", "Crude Oil",
+        ],
+    },
     # 관리 화면(:8100)을 다른 기기에서 열기 (services/admin_remote.py) - 기본 꺼짐, 켜기·비밀번호는 이 PC에서만
     "admin_remote": {
         "enabled": False,
@@ -310,6 +317,17 @@ def _validate(settings: dict) -> None:
     sd = ar.get("session_days", 7)
     if not _int(sd) or not (1 <= sd <= 90):
         raise SettingsError("관리 화면 로그인 유지 기간은 1~90일이어야 합니다.")
+
+    ev = settings["events"]
+    hl = ev.get("highlight") or []
+    if isinstance(hl, str):
+        hl = hl.replace("\n", ",").split(",")
+    if not isinstance(hl, list):
+        raise SettingsError("강조할 단어는 쉼표로 나눠 넣어 주세요.")
+    hl = list(dict.fromkeys(str(w).strip() for w in hl if str(w).strip()))
+    if len(hl) > 60 or any(len(w) > 40 for w in hl):
+        raise SettingsError("강조할 단어는 60개까지, 한 단어는 40자까지 넣을 수 있습니다.")
+    ev["highlight"] = hl
 
 
 # 지침 규칙별 숫자 범위 (key → (최소, 최대))
