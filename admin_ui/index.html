@@ -125,6 +125,12 @@
     padding: 2px 8px; border-radius: 999px; cursor: pointer; white-space: nowrap; }
   .defv:hover { color: var(--text, inherit); border-style: solid; }
   .defv.same { opacity: .45; }
+  .evkw { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); display: grid; gap: 8px; }
+  .evkw .name { display: block; font-weight: 600; font-size: 14px; }
+  .evkw .name small { display: block; font-weight: 400; color: var(--muted); font-size: 12px; margin-top: 2px; }
+  .evkw textarea { width: 100%; box-sizing: border-box; font: inherit; line-height: 1.6; resize: vertical; min-height: 4.8em; }
+  .evkw-acts { display: flex; gap: 8px; align-items: flex-start; flex-wrap: wrap; }
+  .evkw-acts .defv { flex: 1 1 auto; white-space: normal; text-align: left; border-radius: 10px; line-height: 1.5; }
   .pdef { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; margin: 8px 0 2px; }
   .pdef small { color: var(--muted); font-size: 12px; }
   .phrase .tagdef { font-size: 10.5px; color: var(--muted); border: 1px solid var(--line); border-radius: 999px; padding: 0 6px; margin-left: 6px; }
@@ -223,8 +229,11 @@
         <label class="switch" style="margin-left:auto;font-size:13px;font-weight:400"><input type="checkbox" id="evKeyOnly"> ⭐ 주요 지표만</label></h2>
       <div id="evHealth"></div>
       <div id="evDays" class="evdays"><div class="empty">불러오는 중…</div></div>
-      <div class="row" style="margin-top:12px"><label class="name">강조할 지표 단어<small>이름에 이 단어가 들어가면 ⭐ 주요 지표 (쉼표로 구분 · 대소문자 무시) · 텔레그램 '발표 예정' 알림과 지침 알림에도 ⭐</small></label>
-        <input type="text" class="wide" id="evKw" placeholder="예: FOMC, 실업수당, 원유, 비농업"><button class="btn primary" id="evKwSave">저장</button></div>
+      <div class="evkw">
+        <label class="name" for="evKw">강조할 지표 단어<small>이름에 이 단어가 들어가면 ⭐ 주요 지표 (쉼표나 줄바꿈으로 구분 · 대소문자 무시) · 텔레그램 '발표 예정' 알림, 지침 알림, '⭐ 주요 지표만' 잠금에 쓰임</small></label>
+        <textarea id="evKw" rows="4" placeholder="예: FOMC, 실업수당, 원유, 비농업"></textarea>
+        <div class="evkw-acts"><button class="btn primary" id="evKwSave">저장</button></div>
+      </div>
     </div>
   </section>
 
@@ -686,7 +695,7 @@ $('evKwSave').onclick = async () => {
     toast('저장했습니다. 바로 적용됩니다.'); $('evKw').blur(); loadEvents();
   } catch (e) { toast(e.message, true); }
 };
-$('evKw').addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.isComposing) $('evKwSave').click(); });
+$('evKw').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey) && !e.isComposing) $('evKwSave').click(); });   // Ctrl+Enter 저장 (Enter 는 줄바꿈)
 
 async function loadStatus() {
   try {
@@ -956,14 +965,15 @@ async function loadDefaults() {
       chip = el._defChip = document.createElement('button');
       chip.type = 'button'; chip.className = 'defv'; chip.title = '누르면 기본값으로 채웁니다 (저장해야 적용)';
       chip.onclick = () => { setVal(el, chip._v); refreshDefChips(); };
-      (el.closest('.row') || el.parentElement).appendChild(chip);
+      (el.id === 'evKw' ? document.querySelector('.evkw-acts') : (el.closest('.row') || el.parentElement)).appendChild(chip);
     }
     chip._v = v; chip._el = el; chip.textContent = '기본 ' + defText(el, v);
   }
   refreshDefChips();
 }
 function refreshDefChips() {
-  document.querySelectorAll('.defv').forEach((c) => c._el && c.classList.toggle('same', String(curVal(c._el)) === String(c._v)));
+  const norm = (el, v) => el.tagName === 'TEXTAREA' ? String(v).split(/[,\n]/).map((x) => x.trim()).filter(Boolean).join(',') : String(v);
+  document.querySelectorAll('.defv').forEach((c) => c._el && c.classList.toggle('same', norm(c._el, curVal(c._el)) === norm(c._el, c._v)));
 }
 document.addEventListener('input', refreshDefChips);
 document.addEventListener('change', refreshDefChips);
