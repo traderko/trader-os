@@ -13,6 +13,7 @@ SECRET_PATTERNS = [
     (r"-----BEGIN (RSA |EC |OPENSSH )?PRIVATE KEY-----", "개인 키"),
     (r"firebase" r"-adminsdk", "Firebase 키 파일 이름"),   # 나눠 써서 이 파일 자신은 안 걸리게
     (r"-100\d{10}", "텔레그램 채널 id"),
+    (r"\b[0-9a-f]{32}-[0-9a-f]{32}\b", "OANDA API 토큰"),
 ]
 PLACEHOLDERS = ("비밀번호", "password", "PASSWORD", "(.*?)", "<", "USER:PASS")
 

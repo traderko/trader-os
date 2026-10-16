@@ -104,4 +104,10 @@ async def get_rates(
     if from_utc >= to_utc:
         raise HTTPException(400, "from_ts가 to_ts보다 늦습니다")
 
-    return await asyncio.to_thread(_fetch_rates, mt5, symbol, tf_const, from_utc, to_utc)
+    def run():
+        # 종목 묶음 key(gold, nasdaq …)로 와도 이 브로커 심볼로 (구간매매 KTR 계산)
+        from api.worker.worker_account_router import _resolve_symbol
+        name = symbol if mt5.symbol_info(symbol) is not None else (_resolve_symbol(mt5, symbol) or symbol)
+        return _fetch_rates(mt5, name, tf_const, from_utc, to_utc)
+
+    return await asyncio.to_thread(run)

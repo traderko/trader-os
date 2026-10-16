@@ -17,6 +17,7 @@ class Trade(Base):
     open_time = Column(TZDateTime(timezone=True), index=True)
     close_time = Column(TZDateTime(timezone=True))
     commission = Column(Float)
+    magic = Column(Integer, nullable=True)   # MT5 매직넘버 - 71700000~71799999 는 구간매매 (services/grid.py), 없으면 직접 거래
     account_id = Column(Integer, ForeignKey("accounts.id"))
 
     account = relationship("Account", back_populates="trades")

@@ -14,6 +14,7 @@ class PositionOut(BaseModel):
     tp: float
     time: datetime
     comment: str
+    magic: int = 0                        # 구간매매 주문이면 71700000~71799999
     contract_size: float | None = None   # 1랏 계약 크기 (손익 계산용)
 
     class Config:

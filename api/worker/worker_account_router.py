@@ -45,7 +45,7 @@ async def get_all_positions(request: Request):
             "contract_size": sizes.get(p.symbol), "digits": digits.get(p.symbol),
             "ticket": p.ticket, "symbol": p.symbol, "volume": p.volume, "type": p.type,
             "price_open": p.price_open, "price_current": p.price_current, "profit": p.profit,
-            "swap": p.swap, "sl": p.sl, "tp": p.tp, "time": p.time,
+            "swap": p.swap, "sl": p.sl, "tp": p.tp, "time": p.time, "magic": p.magic, "comment": p.comment,
         }
         for p in positions
     ]

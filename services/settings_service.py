@@ -120,6 +120,8 @@ DEFAULTS: dict = {
             "first_entry":  {"enabled": True, "text": "", "count": 2},
         },
     },
+    # OANDA 시세 (구간매매 KTR 계산용, services/grid.py) - API 토큰은 OANDA 계정 → Manage API Access 에서 발급
+    "oanda": {"token": "", "env": "practice"},   # env: practice(연습 계좌) | live(실계좌)
     # 경제지표 - 이름에 이 단어가 들어가면 '주요 지표'로 강조 (services/key_events.py). 대소문자 구분 없음
     "events": {
         "highlight": [
@@ -318,6 +320,11 @@ def _validate(settings: dict) -> None:
     sd = ar.get("session_days", 7)
     if not _int(sd) or not (1 <= sd <= 90):
         raise SettingsError("관리 화면 로그인 유지 기간은 1~90일이어야 합니다.")
+
+    oa = settings["oanda"]
+    oa["token"] = str(oa.get("token") or "").strip()
+    if oa.get("env") not in ("practice", "live"):
+        raise SettingsError("OANDA 환경은 practice(연습) 또는 live(실계좌)여야 합니다.")
 
     ev = settings["events"]
     hl = ev.get("highlight") or []

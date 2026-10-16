@@ -135,7 +135,8 @@ class Mt5Client:
                 "price_close": row["exit"]["price"],
                 "profit": row["exit"]["profit"],
                 "commission": row["commission"],
-                "account_id": account.id
+                "account_id": account.id,
+                "magic": int(row["magic"] or 0),
             })
 
         return records
@@ -297,6 +298,7 @@ class Mt5Client:
                 "price_current": p.price_current,
                 "profit": p.profit,
                 "swap": p.swap,
+                "magic": p.magic,   # 71700000~ 이면 구간매매 (services/grid.py)
                 "sl": p.sl,   # 추가 - 0.0이면 미설정
                 "tp": p.tp,   # 추가 - 0.0이면 미설정
                 "time": p.time,  # mt5는 unix timestamp(int) 반환
@@ -984,6 +986,7 @@ class Mt5Client:
             commission=("commission", "sum"), # 커미션 합산
             symbol=("symbol", "first"),
             type=("type", "first"),
+            magic=("magic", "first"),         # 주문 매직넘버 (구간매매 구분)
         ).reset_index()
 
         exit_agg = exit_df.groupby("position_id").agg(
@@ -1022,6 +1025,7 @@ class Mt5Client:
             "position": np.where(merged["type"] == mt5.ORDER_TYPE_BUY, "BUY", "SELL"),
             "volume": merged["volume_entry"],  # volume은 양쪽에 있으니 suffix 붙음
             "commission": merged["commission"],
+            "magic": merged["magic"].astype(int),
             "entry": list(zip(
                 merged["time_kst_entry"],
                 merged["price_entry"]

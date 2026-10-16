@@ -289,6 +289,9 @@ def _public_settings() -> dict:
         "trade_sim_mult": s["telegram"].get("trade_sim_mult", [10]),
         "env_fallback": not token and bool(os.getenv("TELEGRAM_BOT_TOKEN")),
     }
+    oa = s.get("oanda") or {}
+    s["oanda"] = {"has_token": bool(oa.get("token")), "token_masked": _mask(oa.get("token") or ""),
+                  "env": oa.get("env", "practice")}         # 토큰은 화면에 보내지 않음
     s.pop("admin_remote", None)                       # 관리자 비밀번호 해시 - /api/admin-remote 에서 따로
     if isinstance(s.get("access"), dict):
         s["access"] = {k: v for k, v in s["access"].items() if k != "password_hash"}
@@ -308,6 +311,7 @@ async def read_setting_defaults():
     from services.settings_service import DEFAULTS
     d = copy.deepcopy(DEFAULTS)
     tg = {k: v for k, v in d["telegram"].items() if k not in ("bot_token", "chat_id")}
+    d.pop("oanda", None)
     return {"lock": d["lock"], "telegram": tg, "guidelines": d["guidelines"],
             "access": {"session_days": d["access"]["session_days"]},
             "admin_remote": {"session_days": d["admin_remote"]["session_days"]}, "events": d["events"]}
@@ -335,6 +339,16 @@ async def write_settings(body: dict):
         for k in ("live_enabled", "live_interval_sec", "live_position", "trade_sim", "trade_batch_sec", "trade_sim_mult"):
             if k in tg:
                 patch["telegram"][k] = tg[k]
+
+    if "oanda" in body:
+        oa = body["oanda"] or {}
+        patch["oanda"] = {}
+        if oa.get("token"):
+            patch["oanda"]["token"] = str(oa["token"]).strip()
+        if oa.get("clear_token"):
+            patch["oanda"]["token"] = ""
+        if "env" in oa:
+            patch["oanda"]["env"] = oa["env"]
 
     if "events" in body:
         ev = body["events"] or {}

@@ -14,7 +14,7 @@ from mt5.mt5Client import Mt5Client
 from schemas.trade import TradeCreate
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
-from sqlalchemy import select
+from sqlalchemy import func, select
 from db.upsert import upsert_insert as insert
 from services.worker_client import worker_get
 from util.parser import parse_dt
@@ -35,7 +35,7 @@ def _trade_json(t: Trade) -> dict:
     연결 정보(tag_id)만 나가서 직접 만든다. 앱(Trade.fromJson)이 읽는 필드 이름은 그대로 유지."""
     acc = t.account
     return {
-        "id": t.id, "ticket": t.ticket, "symbol": t.symbol, "position": t.position,
+        "id": t.id, "ticket": t.ticket, "symbol": t.symbol, "position": t.position, "magic": t.magic,
         "volume": t.volume, "price_open": t.price_open, "price_close": t.price_close,
         "profit": t.profit, "commission": t.commission,
         "open_time": _iso(t.open_time), "close_time": _iso(t.close_time),
@@ -134,9 +134,12 @@ async def create_trade(
                 price_open = data.price,
                 open_time = kst_time,
                 commission = data.commission,
-                account_id = account.id
+                account_id = account.id,
+                magic = data.magic or None,
             )
             db.add(trade)
+        elif data.magic and not trade.magic:
+            trade.magic = data.magic
 
         recent_trade_result = await db.execute(
             select(Trade)
@@ -326,6 +329,9 @@ async def _group_message(db: AsyncSession, account_id: int, account_number: str,
     _, last_body, buttons = await _trade_message(db, account_id, account_number, last_trade, last_data, last_time)
     trades = [(await db.get(Trade, tid), d, t) for tid, d, t in items]
     n, symbol = len(items), last_data.symbol
+    from services.grid import kind_of, MODE_KR
+    kinds = {kind_of(d.magic or (t.magic if t is not None else None)) for t, d, _ in trades}
+    gtag = f"🧱 {MODE_KR[next(iter(kinds))]} · " if len(kinds) == 1 and None not in kinds else ""
     vol = sum(d.volume for _, d, _ in trades)
     when = last_time.strftime("%H:%M")
     keep = [l for l in last_body.split("\n")[1:] if not l.startswith("손익 ")]
@@ -333,7 +339,7 @@ async def _group_message(db: AsyncSession, account_id: int, account_number: str,
     if last_data.entry_type == "OPEN":
         prices = [d.price for _, d, _ in trades]
         avg = sum(d.price * d.volume for _, d, _ in trades) / vol
-        title = f"🟢 진입 · {symbol} {last_data.position} {vol:g}lot ({n}건)"
+        title = f"{gtag}🟢 진입 · {symbol} {last_data.position} {vol:g}lot ({n}건)"
         rng = f" ({_price(min(prices))}~{_price(max(prices))})" if max(prices) != min(prices) else ""
         return title, "\n".join([f"평균가 {_price(avg)}{rng} · {when} · 계좌 {account_number}"] + keep), buttons
 
@@ -346,7 +352,7 @@ async def _group_message(db: AsyncSession, account_id: int, account_number: str,
     wins, losses = sum(1 for x in nets if x > 0), sum(1 for x in nets if x < 0)
     icon, word = ("✅", "익절") if net > 0 else ("🔴", "손절") if net < 0 else ("⚪", "본전")
     mix = f" · 익절 {wins} 손절 {losses}" if wins and losses else ""
-    title = f"{icon} {word} · {symbol} {side} {vol:g}lot ({n}건{mix})  {net:+,.2f}"
+    title = f"{gtag}{icon} {word} · {symbol} {side} {vol:g}lot ({n}건{mix})  {net:+,.2f}"
     opened = [(tr, d, t) for tr, d, t in trades if tr and tr.price_open is not None]
     lines = []
     if opened:
@@ -500,9 +506,12 @@ async def _trade_message(db: AsyncSession, account_id: int, account_number: str,
     """
     acc_line = f"계좌 {account_number}"
     when = kst_time.strftime("%H:%M")
+    from services.grid import kind_of, MODE_KR
+    gk = kind_of(data.magic or (trade.magic if trade is not None else None))
+    tag = f"🧱 {MODE_KR[gk]} · " if gk else ""          # 구간매매로 넣은 주문 (직접 거래와 구분)
 
     if data.entry_type == "OPEN":
-        title = f"🟢 진입 · {data.symbol} {data.position} {data.volume:g}lot"
+        title = f"{tag}🟢 진입 · {data.symbol} {data.position} {data.volume:g}lot"
         lines = [f"가격 {_price(data.price)} · {when} · {acc_line}"]
         positions = await _symbol_positions(account_id, data.symbol)
         me = next((p for p in positions if p.get("ticket") == data.ticket), None)
@@ -531,7 +540,7 @@ async def _trade_message(db: AsyncSession, account_id: int, account_number: str,
     fee = trade.commission if trade.commission is not None else data.commission   # 진입+청산 수수료 합
     net = (data.profit or 0) + (fee or 0)
     icon, word = ("✅", "익절") if net > 0 else ("🔴", "손절") if net < 0 else ("⚪", "본전")
-    title = f"{icon} {word} · {data.symbol} {side} {data.volume:g}lot  {net:+,.2f}"
+    title = f"{tag}{icon} {word} · {data.symbol} {side} {data.volume:g}lot  {net:+,.2f}"
     lines = []
     if trade.price_open is not None:
         move = (data.price - trade.price_open) if side == "BUY" else (trade.price_open - data.price)
@@ -686,6 +695,7 @@ async def collect(
             "close_time": parse_dt(t["close_time"]),
             "commission": t["commission"],
             "account_id": t["account_id"],
+            "magic": t.get("magic") or None,
         })
 
     inserted = 0
@@ -714,6 +724,7 @@ async def collect(
                 "close_time": stmt.excluded.close_time,
                 "commission": stmt.excluded.commission,
                 "account_id": stmt.excluded.account_id,
+                "magic": func.coalesce(stmt.excluded.magic, Trade.magic),
             }
         )
 

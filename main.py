@@ -15,7 +15,7 @@ from db.models import *
 from datetime import datetime
 from fastapi import Depends, FastAPI, HTTPException
 from api import admin_app, admin_router
-from api import account_router, mt5_gateway_router, rates, trade, trade_image, trade_lock_phrase_router, trade_lock_router, trade_note, trade_tag
+from api import account_router, grid_router, mt5_gateway_router, rates, trade, trade_image, trade_lock_phrase_router, trade_lock_router, trade_note, trade_tag
 import importlib
 from db import init_db
 from db.models.account import Account
@@ -480,6 +480,7 @@ app.include_router(trade_note.router)
 app.include_router(trade_image.router)
 app.include_router(trade_tag.router)
 app.include_router(account_router.router)
+app.include_router(grid_router.router)
 app.include_router(rates.router)
 
 

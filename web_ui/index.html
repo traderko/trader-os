@@ -99,6 +99,7 @@
   .badge.safe { background: var(--ok-weak); color: var(--ok); }
   .badge.warning { background: var(--warn-weak); color: var(--warn); }
   .badge.danger { background: var(--bad-weak); color: var(--bad); }
+  .btn.danger { color: var(--down); border-color: var(--line); }
   .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px 8px; }
   .stat small { display: block; font-size: 11.5px; color: var(--muted); }
   .stat span { font-size: 14px; font-weight: 600; }
@@ -111,6 +112,15 @@
   }
   .seg button.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 600; }
   .seg button .cnt { font-size: 11px; opacity: .8; margin-left: 4px; }
+  .seg.mini2 { margin-top: -6px; } .seg.mini2 button { flex: 0 0 auto; padding: 5px 11px; font-size: 12.5px; }
+  .gbadge { font-size: 11px; font-weight: 600; color: #8a5a00; background: #fff1d6; border-radius: 5px; padding: 1px 6px; white-space: nowrap; }
+  :root[data-theme="dark"] .gbadge { color: #ffd88a; background: #3a2c10; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .gbadge { color: #ffd88a; background: #3a2c10; } }
+  .pgrp { display: flex; align-items: center; gap: 8px; padding: 8px 14px; font-size: 12.5px; font-weight: 600; background: var(--bg); border-bottom: 1px solid var(--line); cursor: pointer; }
+  .pgrp .gl { flex: 1; min-width: 0; white-space: nowrap; } .pgrp small { font-weight: 400; color: var(--muted); display: block; margin-top: 1px; }
+  .pgrp .gl small.inl { display: inline; margin: 0 0 0 4px; }
+  .pgrp.grid { background: #fff7e6; } :root[data-theme="dark"] .pgrp.grid { background: #2a2210; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .pgrp.grid { background: #2a2210; } }
 
   /* 포지션 합계 */
   .sum { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 12px; }
@@ -350,6 +360,43 @@
   .meter i { display: block; height: 100%; background: var(--warn); border-radius: 3px; }
   .brow .s { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
   .hint2 { font-size: 11.5px; color: var(--muted); line-height: 1.6; margin: 0 0 6px; }
+  /* 구간매매 */
+  #tab-grid .gtop { display: grid; gap: 8px; }
+  #tab-grid .gtop .seg { margin: 0; }
+  #tab-grid .seg.two button { flex: 1; }
+  #tab-grid .seg.mini { margin: 0; gap: 4px; flex-wrap: wrap; overflow: visible; }
+  #tab-grid .seg.mini button { flex: 0 0 auto; padding: 6px 10px; font-size: 12.5px; }
+  #tab-grid .gh { font-size: 15px; margin: 0 0 8px; } #tab-grid .gh small { font-weight: 400; font-size: 12px; }
+  #tab-grid .grow2 { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+  #tab-grid .glab { width: 44px; flex-shrink: 0; font-size: 12px; color: var(--muted); }
+  .ktbl { width: 100%; border-collapse: separate; border-spacing: 3px; font-size: 13px; margin: 2px -3px 4px; }
+  .ktbl th { font-weight: 500; color: var(--muted); font-size: 11.5px; padding: 2px; }
+  .ktbl th.s { text-align: left; white-space: nowrap; } .ktbl th.s small { display: block; font-size: 10.5px; }
+  .ktbl td { text-align: center; padding: 7px 2px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; font-variant-numeric: tabular-nums; }
+  .ktbl td.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
+  .ktbl td.err { color: var(--muted); cursor: default; }
+  .ktbl tr.cur th.s { color: var(--accent); font-weight: 700; }
+  #tab-grid .gktr { display: flex; gap: 8px; margin: 10px 0 6px; } #tab-grid .gktr input { flex: 1; min-width: 0; font-size: 18px; font-weight: 600; }
+  #tab-grid [hidden] { display: none !important; }
+  .gtbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .gtbl th { font-weight: 500; color: var(--muted); font-size: 11.5px; text-align: right; padding: 5px 4px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .gtbl td { text-align: right; padding: 6px 4px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  .gtbl th:first-child, .gtbl td:first-child { text-align: left; }
+  .gtbl tr.sl td { color: var(--down); font-weight: 600; border-bottom: 0; }
+  .gtbl tr.sl td small { font-weight: 400; }
+  .gtbl small { display: block; color: var(--muted); font-size: 11px; }
+  .gwrap { overflow-x: auto; }
+  .gsum { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 10px; font-size: 13px; }
+  .gsum div { display: flex; flex-direction: column; } .gsum small { color: var(--muted); font-size: 11.5px; }
+  .gsum b { font-size: 15px; }
+  .gwarn { color: var(--warn, #c77700); font-size: 12.5px; margin-top: 8px; }
+  .gerr { color: var(--down); font-size: 13px; }
+  .gacts { display: flex; align-items: center; gap: 10px; justify-content: flex-end; margin: -2px 0 14px; }
+  .gacts #gGo { min-width: 140px; padding: 11px 16px; font-size: 15px; }
+  .gitem { border-top: 1px solid var(--line); padding: 10px 0; display: grid; gap: 4px; font-size: 13px; }
+  .gitem:first-child { border-top: 0; }
+  .gitem .t1 { display: flex; gap: 8px; align-items: center; } .gitem .t1 .sp { flex: 1; }
+  .gitem .acts { display: flex; gap: 6px; justify-content: flex-end; }
   .cmp { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
   .cmp small { display: block; font-size: 11.5px; color: var(--muted); }
   .cmp span { font-weight: 600; font-size: 15px; }
@@ -505,6 +552,7 @@
     <button class="btn small ghost" id="tCollect" title="MT5 체결 기록에서 거래내역을 다시 모읍니다">MT5에서 모으기</button>
   </div>
   <div class="seg" id="tSyms"></div>
+  <div class="seg mini2" id="tOrigin"><button data-o="all" class="on">전체</button><button data-o="manual">✋ 직접 거래</button><button data-o="grid">🧱 구간매매</button></div>
   <section class="panel">
     <div class="tsum">
       <div><small>순손익</small><span class="num" id="tNet">-</span></div>
@@ -551,6 +599,52 @@
   </div>
   <div id="sBody"><div class="empty">불러오는 중…</div></div>
 </section>
+
+<!-- 구간매매 -->
+<section class="tab" id="tab-grid">
+  <div class="seg" id="gSyms"></div>
+  <section class="panel">
+    <div class="gtop">
+      <div class="seg two" id="gSide"><button data-v="buy" class="on">매수 BUY</button><button data-v="sell">매도 SELL</button></div>
+      <div class="seg two" id="gMode"><button data-v="ktr" class="on">KTR 거래</button><button data-v="avg">일반 물타기</button></div>
+    </div>
+    <p class="hint2" id="gModeHint"></p>
+  </section>
+
+  <section class="panel">
+    <h2 class="gh">KTR <small class="muted">장 시작 봉 크기 = 구간 간격</small></h2>
+    <div class="grow2"><span class="glab">시세</span><div class="seg mini" id="gSrc"><button data-v="mt5" class="on">MT5</button><button data-v="oanda">OANDA</button></div></div>
+    <div id="gTable" class="gwrap"><div class="empty">KTR 표를 불러오는 중…</div></div>
+    <div class="gktr">
+      <input id="gKtr" inputmode="decimal" autocomplete="off" placeholder="KTR">
+      <button class="btn" id="gKtrLoad" title="표를 다시 계산">↻ 다시 계산</button>
+    </div>
+    <p class="hint2" id="gKtrInfo">표에서 칸을 누르면 그 KTR 을 씁니다. 직접 넣어도 됩니다.</p>
+  </section>
+
+  <section class="panel">
+    <div class="cgrid">
+      <label data-m="ktr">손실 % (잔고 대비)<input id="gRisk" inputmode="decimal" autocomplete="off" placeholder="예: 5"></label>
+      <label data-m="avg">구간마다 랏<input id="gLot" inputmode="decimal" autocomplete="off" placeholder="예: 0.1"></label>
+      <label>구간 수 (진입 횟수)<input id="gN" inputmode="numeric" autocomplete="off" placeholder="예: 5"></label>
+      <label data-m="ktr">랏 배분<span class="seg mini" id="gMethod" style="margin:0"><button data-v="equal" class="on">동일손실</button><button data-v="half">차등손실</button></span></label>
+      <label data-m="avg">손절<span class="seg mini" id="gStopMode" style="margin:0"><button data-v="ktr" class="on">KTR 배수</button><button data-v="pct">손실 %</button></span></label>
+      <label data-m="avg" data-s="ktr">손절 거리 (KTR 배수)<input id="gStopKtr" inputmode="decimal" autocomplete="off" placeholder="예: 6"></label>
+      <label data-m="avg" data-s="pct">손실 % (잔고 대비)<input id="gRisk2" inputmode="decimal" autocomplete="off" placeholder="예: 5"></label>
+    </div>
+  </section>
+
+  <section class="panel"><div id="gPlan"><div class="empty">KTR 과 값을 넣으면 미리보기가 나옵니다.</div></div></section>
+  <div class="gacts">
+    <span class="muted" id="gLockNote"></span>
+    <button class="btn primary" id="gGo" disabled>주문 실행</button>
+  </div>
+
+  <section class="panel">
+    <div class="risk-head"><h2>진행 중인 구간매매</h2><button class="btn small ghost" id="gListReload">↻</button></div>
+    <div id="gList"><div class="empty">불러오는 중…</div></div>
+  </section>
+</section>
 </main>
 
 <nav class="tabs" id="tabs">
@@ -558,6 +652,7 @@
   <button data-tab="trades"><span class="i">🧾</span>거래내역</button>
   <button data-tab="pnl"><span class="i">📅</span>손익</button>
   <button data-tab="stats"><span class="i">📊</span>통계</button>
+  <button data-tab="grid"><span class="i">🧱</span>구간</button>
 </nav>
 
 <!-- 거래 상세·기록 -->
@@ -668,6 +763,9 @@ const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '
 const fmt = (v, d = 2) => v == null || isNaN(v) ? '-' : Number(v).toLocaleString('en-US', { minimumFractionDigits: d, maximumFractionDigits: d });
 const signed = (v, d = 2) => v == null ? '-' : (v > 0 ? '+' : '') + fmt(v, d);
 const cls = (v) => v > 0 ? 'up' : v < 0 ? 'down' : '';
+// 구간매매로 넣은 주문 = MT5 매직넘버 71700000~71799999 (서버 services/grid.py 와 같은 규칙)
+const kindOfMagic = (m) => (m >= 71700000 && m < 71800000) ? (m >= 71750000 ? 'avg' : 'ktr') : null;
+const GRID_KR = { ktr: 'KTR 거래', avg: '일반 물타기' }, GRID_SHORT = { ktr: 'KTR', avg: '물타기' };
 const hm = (sec) => { sec = Math.max(0, sec | 0); const h = sec / 3600 | 0, m = (sec % 3600) / 60 | 0; return h ? `${h}시간 ${m}분` : `${m}분 ${sec % 60}초`; };
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem('traderos.' + k)) ?? d; } catch { return d; } },
                 set(k, v) { try { localStorage.setItem('traderos.' + k, JSON.stringify(v)); } catch {} } };
@@ -1027,7 +1125,8 @@ function renderPositions() {
   previewLevels();
   if (!positions.length) { $('posList').innerHTML = '<div class="empty">보유 포지션이 없습니다.</div>'; return; }
   if (!list.length) { $('posList').innerHTML = '<div class="empty">이 가격 범위에 포지션이 없습니다.</div>'; return; }
-  $('posList').innerHTML = list.map((p) => {
+  // 구간매매로 넣은 포지션은 주문 묶음(매직넘버)별로, 직접 거래는 따로 - 머리줄을 누르면 그 묶음 전체 선택
+  const row = (p) => {
     const sel = selected.has(p.ticket), pl = p.profit + (p.swap || 0), slP = projected(p, p.sl);
     return `<div class="pos${sel ? ' sel' : ''}" data-t="${p.ticket}">
       <input type="checkbox" ${sel ? 'checked' : ''} tabindex="-1" aria-label="선택">
@@ -1035,10 +1134,32 @@ function renderPositions() {
       <div class="pl"><strong class="num ${cls(pl)}">${signed(pl)}</strong>${slP != null ? `<small class="num ${cls(slP)}">SL시 ${signed(slP)}</small>` : ''}</div>
       <div class="sub num">${fmt(p.price_open)} → ${fmt(p.price_current)}${p.sl ? ` · SL ${fmt(p.sl)}` : ''}${p.tp ? ` · TP ${fmt(p.tp)}` : ''}</div>
     </div>`;
-  }).join('');
+  };
+  const gm = new Map();
+  for (const p of list) if (kindOfMagic(p.magic)) { if (!gm.has(p.magic)) gm.set(p.magic, []); gm.get(p.magic).push(p); }
+  if (!gm.size) { $('posList').innerHTML = list.map(row).join(''); return; }
+  const head = (cls, key, label, ps) => {
+    const lots = ps.reduce((a, p) => a + p.volume, 0), pl = ps.reduce((a, p) => a + p.profit + (p.swap || 0), 0);
+    const avg = ps.reduce((a, p) => a + p.price_open * p.volume, 0) / lots;
+    return `<div class="pgrp ${cls}" data-g="${key}"><span class="gl">${label}<small class="num">${ps.length}개 · ${fmt(lots)} lot · 평단 ${fmt(avg)}</small></span>
+      <b class="num ${cls_(pl)}">${signed(pl)}</b></div>`;
+  };
+  const cls_ = cls;
+  const manual = list.filter((p) => !kindOfMagic(p.magic));
+  let html = '';
+  for (const [m, ps] of gm) html += head('grid', m, `🧱 ${GRID_KR[kindOfMagic(m)]} <small class="inl">#${m % 100000}</small>`, ps) + ps.map(row).join('');
+  if (manual.length) html += head('', 'manual', '✋ 직접 거래', manual) + manual.map(row).join('');
+  $('posList').innerHTML = html;
 }
 
 $('posList').onclick = (e) => {
+  const g = e.target.closest('.pgrp');
+  if (g) {           // 묶음 머리줄: 그 묶음 전체 선택/해제
+    const ps = filtered().filter((p) => g.dataset.g === 'manual' ? !kindOfMagic(p.magic) : String(p.magic) === g.dataset.g);
+    const all = ps.every((p) => selected.has(p.ticket));
+    ps.forEach((p) => all ? selected.delete(p.ticket) : selected.add(p.ticket));
+    return renderPositions();
+  }
   const row = e.target.closest('.pos'); if (!row) return;
   const t = Number(row.dataset.t);
   selected.has(t) ? selected.delete(t) : selected.add(t);
@@ -1223,7 +1344,7 @@ $('tpGo').onclick = () => applyLevel('tp');
 
 // ── 주기적 갱신: 화면이 보일 때만, 대화상자가 열려 있으면 쉼 ──
 const busy = () => document.hidden || !$('unlockModal').hidden || !$('askModal').hidden || tab !== 'pos';
-function refreshAll() { if (tab === 'trades') return loadTrades(); if (tab === 'pnl') return loadPnl(); if (tab === 'stats') return loadStats(); loadLock(); loadRisk(); loadPositions(); }
+function refreshAll() { if (tab === 'trades') return loadTrades(); if (tab === 'pnl') return loadPnl(); if (tab === 'stats') return loadStats(); if (tab === 'grid') return gridEnter(); loadLock(); loadRisk(); loadPositions(); }
 setInterval(() => { if (!busy()) loadLock(); }, 3000);
 setInterval(() => { if (!busy()) { loadPositions(); loadRisk(); } }, 5000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAll(); });
@@ -1255,6 +1376,9 @@ const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
 let tPick = lsGet('traderos:tpick', 'chain'), tGap = Number(lsGet('traderos:tgap', '10')), tAnchor = null, tChainMap = null;
 let tYm = (() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 }; })();
 let tSym = 'all';
+let tOrigin = 'all';     // 거래내역 보기: all | manual(직접) | grid(구간매매)
+const tShow = (t) => (tSym === 'all' || symKeyOf(t.symbol) === tSym)
+  && (tOrigin === 'all' || (tOrigin === 'grid') === !!kindOfMagic(t.magic));
 let allTags = null;
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -1271,6 +1395,12 @@ function renderTSyms() {
   $('tSyms').innerHTML = [{ key: 'all', label: '전체' }, ...SYMBOLS].map((s) =>
     `<button data-sym="${s.key}" class="${s.key === tSym ? 'on' : ''}">${s.label}</button>`).join('');
 }
+$('tOrigin').onclick = (e) => {
+  const b = e.target.closest('button[data-o]'); if (!b) return;
+  tOrigin = b.dataset.o;
+  document.querySelectorAll('#tOrigin button').forEach((x) => x.classList.toggle('on', x === b));
+  renderTrades();
+};
 $('tSyms').onclick = (e) => { const b = e.target.closest('button[data-sym]'); if (!b) return; tSym = b.dataset.sym; renderTSyms(); renderTrades(); };
 $('mPrev').onclick = () => { tYm = tYm.m === 1 ? { y: tYm.y - 1, m: 12 } : { y: tYm.y, m: tYm.m - 1 }; loadTrades(); };
 $('mNext').onclick = () => { tYm = tYm.m === 12 ? { y: tYm.y + 1, m: 1 } : { y: tYm.y, m: tYm.m + 1 }; loadTrades(); };
@@ -1292,7 +1422,7 @@ async function loadTrades() {
 }
 
 function renderTrades() {
-  const list = trades.filter((t) => tSym === 'all' || symKeyOf(t.symbol) === tSym)
+  const list = trades.filter(tShow)
                      .sort((a, b) => (dt(b.open_time) - dt(a.open_time)));
   const closed = list.filter((t) => t.close_time);
   const total = closed.reduce((s, t) => s + net(t), 0);
@@ -1321,7 +1451,7 @@ function renderTrades() {
       const canSel = !!t.close_time, isSel = tSel && tSel.has(t.id), ch = tChainMap && tChainMap.get(t.id);
       html += `<div class="trade${tSel ? (canSel ? (isSel ? ' sel' : '') + (tAnchor === t.id ? ' anchor' : '') : ' nosel') : ''}" data-id="${t.id}">
         <div class="t1">${tSel && canSel ? `<input type="checkbox" class="ck" ${isSel ? 'checked' : ''} tabindex="-1" aria-label="선택">` : ''}<span class="side ${t.position === 'BUY' ? 'buy' : 'sell'}" style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:${t.position === 'BUY' ? 'var(--accent-weak)' : 'var(--bad-weak)'};color:${t.position === 'BUY' ? 'var(--up)' : 'var(--down)'}">${esc(t.position)}</span>
-          <span>${esc(t.symbol)}</span><span class="num muted" style="font-weight:400">${fmt(t.volume)} lot</span>${ch && ch.length > 1 ? `<span class="chain" title="이어서 들어간 거래 묶음">🔗${ch.length}</span>` : ''}${n.time_frame ? `<span class="chip">${TF[n.time_frame] || ''}</span>` : ''}</div>
+          <span>${esc(t.symbol)}</span><span class="num muted" style="font-weight:400">${fmt(t.volume)} lot</span>${kindOfMagic(t.magic) ? `<span class="gbadge" title="구간매매 ${GRID_KR[kindOfMagic(t.magic)]} #${t.magic % 100000}">🧱${GRID_SHORT[kindOfMagic(t.magic)]}</span>` : ''}${ch && ch.length > 1 ? `<span class="chain" title="이어서 들어간 거래 묶음">🔗${ch.length}</span>` : ''}${n.time_frame ? `<span class="chip">${TF[n.time_frame] || ''}</span>` : ''}</div>
         <div class="pl">${c ? `<strong class="num ${cls(t.profit)}">${signed(t.profit)}</strong><small class="num">수수료 ${fmt(t.commission)}</small>` : '<strong class="muted" style="font-size:13px">보유 중</strong>'}</div>
         <div class="t2 num">${dayKey(o) !== k ? dayKey(o).slice(5) + ' ' : ''}${hmOf(o)}${c ? ' → ' + (dayKey(c) !== dayKey(o) ? dayKey(c).slice(5) + ' ' : '') + hmOf(c) : ''} · ${fmt(t.price_open)}${c ? ' → ' + fmt(t.price_close) : ''}</div>
         ${tags || snip || (t.images || []).length ? `<div class="t3">${tags}${(t.images || []).length ? `<span>📷 ${t.images.length}</span>` : ''}${snip ? `<span class="snip">${esc(snip)}</span>` : ''}</div>` : ''}
@@ -1334,7 +1464,7 @@ $('tList').onclick = (e) => {
   if (tSel) {   // 선택 모드: 거래를 누르면 선택, 날짜 줄을 누르면 그날 청산 거래 전부
     const day = e.target.closest('.day');
     if (day) {
-      const ts = trades.filter((t) => t.close_time && dayKey(tdDate(dt(t.open_time))) === day.dataset.day && (tSym === 'all' || symKeyOf(t.symbol) === tSym));
+      const ts = trades.filter((t) => t.close_time && dayKey(tdDate(dt(t.open_time))) === day.dataset.day && tShow(t));
       const all = ts.every((t) => tSel.has(t.id));
       ts.forEach((t) => all ? tSel.delete(t.id) : tSel.set(t.id, t));
       return tSelChanged();
@@ -1350,7 +1480,7 @@ $('tList').onclick = (e) => {
       else {
         const a = trades.find((x) => x.id === tAnchor), ta = +dt(a.open_time), tb = +dt(t.open_time);
         const lo = Math.min(ta, tb), hi = Math.max(ta, tb);
-        trades.filter((x) => x.close_time && (tSym === 'all' || symKeyOf(x.symbol) === tSym) && +dt(x.open_time) >= lo && +dt(x.open_time) <= hi)
+        trades.filter((x) => x.close_time && tShow(x) && +dt(x.open_time) >= lo && +dt(x.open_time) <= hi)
           .forEach((x) => tSel.set(x.id, x));
         tAnchor = null;
       }
@@ -1366,16 +1496,17 @@ $('tList').onclick = (e) => {
 function tChains() {
   const by = new Map(), map = new Map();
   for (const t of trades) if (t.close_time) {
-    const k = t.symbol + '|' + t.position;
+    const k = kindOfMagic(t.magic) ? 'g' + t.magic : t.symbol + '|' + t.position;   // 구간매매는 그 주문 묶음 그대로
     if (!by.has(k)) by.set(k, []);
     by.get(k).push(t);
   }
   for (const arr of by.values()) {
     arr.sort((a, b) => dt(a.open_time) - dt(b.open_time));
     let cur = null, end = 0;
+    const isGrid = !!kindOfMagic(arr[0].magic);
     for (const t of arr) {
       const o = +dt(t.open_time), c = +dt(t.close_time);
-      if (cur && o <= end + tGap * 60000) { cur.push(t); end = Math.max(end, c); }
+      if (cur && (isGrid || o <= end + tGap * 60000)) { cur.push(t); end = Math.max(end, c); }
       else { cur = [t]; end = c; }
       map.set(t.id, cur);
     }
@@ -1408,7 +1539,7 @@ function tSelMode(on) {
   on ? tSelChanged() : renderTrades();
 }
 $('tSelBtn').onclick = () => tSelMode(!tSel);
-$('tSelAll').onclick = () => { trades.filter((t) => t.close_time && (tSym === 'all' || symKeyOf(t.symbol) === tSym)).forEach((t) => tSel.set(t.id, t)); tSelChanged(); };
+$('tSelAll').onclick = () => { trades.filter((t) => t.close_time && tShow(t)).forEach((t) => tSel.set(t.id, t)); tSelChanged(); };
 $('tSelNone').onclick = () => { tSel.clear(); tAnchor = null; tSelChanged(); };
 $('tSimGo').onclick = () => { $('simModal').hidden = false; runTradeSim(); };
 $('simRun').onclick = () => runTradeSim();
@@ -2314,9 +2445,209 @@ function drawSeq(el, vals, labelAt) {
   hit.addEventListener('touchstart', move, { passive: true }); hit.addEventListener('mouseleave', out); hit.addEventListener('touchend', out);
 }
 
+// ══════════════ 구간매매 ══════════════
+// KTR(장 시작 봉 크기) 간격으로 시장가 1개 + 리밋 N-1개, 손절은 모두 같은 가격. 계산·주문은 서버 (services/grid.py)
+const G = {
+  sym: store.get('gsym', 'nasdaq'), side: 'buy', mode: store.get('gmode', 'ktr'),
+  src: store.get('gsrc', 'mt5'), tf: store.get('gtf', '2m'), sess: 'auto', method: 'equal', stopMode: 'ktr',
+  plan: null, seq: 0, timer: 0, table: null,
+};
+const gKey = () => 'gset.' + G.sym + '.' + G.mode;
+function gSegs() {
+  const set = (id, v) => document.querySelectorAll(`#${id} button`).forEach((b) => b.classList.toggle('on', b.dataset.v === v));
+  set('gSide', G.side); set('gMode', G.mode); set('gSrc', G.src);
+  set('gMethod', G.method); set('gStopMode', G.stopMode);
+  $('gSyms').innerHTML = SYMBOLS.map((x) => `<button data-v="${esc(x.key)}" class="${x.key === G.sym ? 'on' : ''}">${esc(x.label)}</button>`).join('');
+  document.querySelectorAll('#tab-grid [data-m]').forEach((el) => el.hidden = el.dataset.m !== G.mode
+    || (el.dataset.s && el.dataset.s !== G.stopMode));
+  $('gModeHint').textContent = G.mode === 'ktr'
+    ? '손실 %를 먼저 정하면 구간마다 랏을 계산합니다. 손절 = 첫 진입가에서 구간 수 × KTR. 동일손실: 진입마다 손절 손실이 같게 / 차등손실: 남은 예산의 절반씩.'
+    : '구간마다 같은 랏으로 들어갑니다. 손절은 KTR 배수로 정하거나, 손실 %를 넣으면 다 체결된 채 손절일 때 그 %가 되도록 자동으로 정합니다.';
+}
+function gLoadInputs() {
+  const v = store.get(gKey(), {});
+  $('gRisk').value = v.risk ?? ''; $('gRisk2').value = v.risk2 ?? ''; $('gLot').value = v.lot ?? '';
+  $('gN').value = v.n ?? ''; $('gStopKtr').value = v.stopKtr ?? '';
+  G.method = v.method || 'equal'; G.stopMode = v.stopMode || 'ktr';
+}
+function gSaveInputs() {
+  store.set(gKey(), { risk: $('gRisk').value, risk2: $('gRisk2').value, lot: $('gLot').value, n: $('gN').value,
+    stopKtr: $('gStopKtr').value, method: G.method, stopMode: G.stopMode });
+}
+const gNum = (id) => { const v = parseFloat(String($(id).value).replace(/,/g, '')); return isFinite(v) ? v : null; };
+
+// KTR 표: 장 3개 × 시간봉 5개 (서버가 시간봉마다 봉을 한 번 받아 계산). 칸을 누르면 그 값을 씀
+const TF_KR = { '2m': '2분', '5m': '5분', '10m': '10분', '1h': '1시간', '2h': '2시간' };
+const kfmt = (v) => v == null ? '-' : fmt(v, v >= 100 ? 1 : v >= 1 ? 2 : 4);
+async function gLoadKtr() {
+  if (!acc) return;
+  if (viewOnly()) { $('gTable').innerHTML = '<div class="empty">MT5 가 연결된 계좌에서만 쓸 수 있습니다.</div>'; return; }
+  $('gTable').innerHTML = '<div class="empty">KTR 표를 계산하는 중…</div>';
+  try {
+    const q = new URLSearchParams({ symbol: G.sym, source: G.src });
+    G.table = await api(`/accounts/${encodeURIComponent(acc.account_number)}/grid/ktr-table?${q}`);
+    if (G.sess === 'auto' || !G.table.cells[G.sess]) G.sess = G.table.current;
+    gRenderTable(); gPickCell(G.sess, G.tf);
+  } catch (e) { $('gTable').innerHTML = `<div class="gerr">KTR 계산 실패: ${esc(e.message)}</div>`; }
+}
+function gRenderTable() {
+  const t = G.table; if (!t) return;
+  const tm = (iso) => { const d = new Date(iso); return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${hmOf(d)}`; };
+  $('gTable').innerHTML = `<table class="ktbl"><tr><th></th>${t.tfs.map((tf) => `<th>${TF_KR[tf] || tf}</th>`).join('')}</tr>`
+    + t.sessions.map((x) => `<tr class="${x.id === t.current ? 'cur' : ''}"><th class="s">${esc(x.name)}${x.id === t.current ? ' ●' : ''}<small>${tm(x.open)}</small></th>`
+      + t.tfs.map((tf) => {
+        const c = (t.cells[x.id] || {})[tf] || { error: (t.errors || {})[tf] || '-' };
+        return c.ktr == null ? `<td class="err" title="${esc(c.error || '')}">-</td>`
+          : `<td data-s="${x.id}" data-tf="${tf}" class="${x.id === G.sess && tf === G.tf ? 'on' : ''}">${kfmt(c.ktr)}</td>`;
+      }).join('') + '</tr>').join('') + '</table>'
+    + (Object.keys(t.errors || {}).length ? `<div class="gerr" style="font-size:12px">${esc(Object.values(t.errors)[0])}</div>` : '');
+}
+function gPickCell(sid, tf) {
+  const t = G.table; if (!t) return;
+  const c = (t.cells[sid] || {})[tf];
+  G.sess = sid; G.tf = tf; store.set('gtf', tf);
+  gRenderTable();
+  const x = t.sessions.find((v) => v.id === sid);
+  if (!c || c.ktr == null) { $('gKtrInfo').innerHTML = `<span class="gerr">${esc((c && c.error) || '이 칸은 값이 없습니다')}</span>`; return; }
+  $('gKtr').value = +c.ktr.toFixed(c.ktr >= 100 ? 1 : c.ktr >= 1 ? 2 : 4);
+  $('gKtrInfo').innerHTML = `<b>${esc(x.name)}</b> ${TF_KR[tf]}봉 ${sid === 'asia' ? '직전+첫 봉' : '첫 봉'} 고 ${fmt(c.high)} − 저 ${fmt(c.low)} = <b>${kfmt(c.ktr)}</b>`
+    + ` (${t.source === 'oanda' ? 'OANDA' : 'MT5'}) · ● = 지금 장`;
+  gSaveInputs(); gSchedule(0);
+}
+$('gTable').onclick = (e) => { const td = e.target.closest('td[data-s]'); if (td) gPickCell(td.dataset.s, td.dataset.tf); };
+
+function gSchedule(ms = 400) { clearTimeout(G.timer); G.timer = setTimeout(gPlan, ms); }
+function gBody() {
+  return { symbol: G.sym, side: G.side, mode: G.mode, ktr: gNum('gKtr'), n: gNum('gN'), method: G.method,
+    risk_pct: G.mode === 'ktr' ? gNum('gRisk') : (G.stopMode === 'pct' ? gNum('gRisk2') : null),
+    lot: gNum('gLot'), stop_mode: G.stopMode, stop_ktr: gNum('gStopKtr') };
+}
+function gReady(b) {
+  if (!b.ktr || !b.n) return false;
+  if (b.mode === 'ktr') return !!b.risk_pct;
+  return !!b.lot && (b.stop_mode === 'pct' ? !!b.risk_pct : !!b.stop_ktr);
+}
+async function gPlan() {
+  const b = gBody(), seq = ++G.seq;
+  G.plan = null; gGoState();
+  if (!acc || viewOnly()) { $('gPlan').innerHTML = '<div class="empty">MT5 가 연결된 계좌에서만 쓸 수 있습니다.</div>'; return; }
+  if (!gReady(b)) { $('gPlan').innerHTML = '<div class="empty">KTR 과 값을 넣으면 미리보기가 나옵니다.</div>'; return; }
+  try {
+    const p = await api(`/accounts/${encodeURIComponent(acc.account_number)}/grid/plan`, { method: 'POST', body: JSON.stringify(b) });
+    if (seq !== G.seq) return;
+    G.plan = p; gRenderPlan(p);
+  } catch (e) {
+    if (seq !== G.seq) return;
+    $('gPlan').innerHTML = `<div class="gerr">${esc(e.message)}</div>`;
+  }
+  gGoState();
+}
+function gRenderPlan(p) {
+  const d = p.digits ?? 2;
+  const rows = p.levels.map((l) => `<tr>
+    <td>${l.no}${l.no === 1 ? '<small>시장가</small>' : '<small>리밋</small>'}</td>
+    <td class="num">${fmt(l.price, d)}</td>
+    <td class="num">${fmt(l.lot)}</td>
+    <td class="num down">${signed(-l.loss)}<small>${fmt(l.dist_ktr, 2)} KTR</small></td>
+    <td class="num">${fmt(l.cum_lot)}<small>평단 ${fmt(l.avg, d)}</small></td>
+  </tr>`).join('');
+  const pct = (v) => v == null ? '' : ` (${v.toFixed(2)}%)`;
+  $('gPlan').innerHTML = `<div class="gwrap"><table class="gtbl">
+      <tr><th>#</th><th>가격</th><th>랏</th><th>손절 손실</th><th>누적 랏</th></tr>${rows}
+      <tr class="sl"><td>손절</td><td class="num">${fmt(p.sl, d)}</td><td colspan="3" class="num">${fmt(p.stop_ktr, 2)} KTR<small>첫 진입에서 ${fmt(p.stop_dist, d)}</small></td></tr>
+    </table></div>
+    <div class="gsum">
+      <div><small>다 체결되고 손절이면</small><b class="num down">${signed(-p.total_loss)}${pct(p.total_loss_pct)}</b></div>
+      <div><small>총 랏 · 다 체결된 평단</small><b class="num">${fmt(p.total_lot)} · ${fmt(p.levels[p.levels.length - 1].avg, d)}</b></div>
+      <div><small>필요 증거금 (다 체결)</small><b class="num">${p.margin_total == null ? '-' : fmt(p.margin_total)}</b></div>
+      <div><small>여유 증거금</small><b class="num">${p.margin_free == null ? '-' : fmt(p.margin_free)}</b></div>
+    </div>
+    <p class="hint2" style="margin-top:8px">${esc(p.symbol)} · 지금 ${p.side === 'buy' ? '매수가' : '매도가'} ${fmt(p.entry, d)} 기준 · KTR ${fmt(p.ktr, d)}
+      · 1랏이 1 움직이면 ${fmt(p.point_value)}${p.mode === 'ktr' ? ` · 손실 예산 ${fmt(p.budget)}` : ''} · 주문할 때 지금 시세로 다시 계산</p>
+    ${(p.warnings || []).map((w) => `<div class="gwarn">⚠ ${esc(w)}</div>`).join('')}`;
+}
+function gGoState() {
+  const locked = !!(lockState && lockState.locked);
+  $('gLockNote').textContent = locked ? '🔒 거래가 잠겨 있어 주문할 수 없습니다' : '';
+  $('gGo').disabled = !G.plan || locked;
+}
+$('gGo').onclick = async () => {
+  const p = G.plan; if (!p) return;
+  const d = p.digits ?? 2;
+  const ok = await ask(`${p.symbol} ${p.side === 'buy' ? '매수' : '매도'} 구간매매`,
+    `${G.mode === 'ktr' ? 'KTR 거래' : '일반 물타기'} · KTR ${fmt(p.ktr, d)} × ${p.n}구간\n`
+    + `시장가 ${fmt(p.levels[0].lot)}lot + 리밋 ${p.n - 1}개 (총 ${fmt(p.total_lot)}lot)\n`
+    + `손절 ${fmt(p.sl, d)} · 다 체결되고 손절이면 ${signed(-p.total_loss)}${p.total_loss_pct != null ? ` (${p.total_loss_pct.toFixed(2)}%)` : ''}\n\n`
+    + '지금 시세로 다시 계산해서 바로 주문합니다.');
+  if (!ok) return;
+  $('gGo').disabled = true;
+  try {
+    const r = await api(`/accounts/${encodeURIComponent(acc.account_number)}/grid/execute`, { method: 'POST', body: JSON.stringify(gBody()) });
+    const res = r.result;
+    toast(`주문했습니다: 시장가 ${fmt(res.fill, d)} + 리밋 ${res.placed.length - 1}개` + (res.failed.length ? ` · ${res.failed.length}개 실패` : ''), !!res.failed.length);
+    gLoadList(); loadLock();
+  } catch (e) { toast(e.message, true); }
+  gGoState();
+};
+
+async function gLoadList() {
+  if (!acc || viewOnly()) { $('gList').innerHTML = '<div class="empty">MT5 가 연결된 계좌에서만 볼 수 있습니다.</div>'; return; }
+  try {
+    const list = await api(`/accounts/${encodeURIComponent(acc.account_number)}/grid/list`);
+    $('gList').innerHTML = list.length ? list.map((x) => `<div class="gitem">
+      <div class="t1"><b>${esc(x.symbol)}</b><span class="${x.side === 'buy' ? 'up' : 'down'}">${x.side === 'buy' ? '매수' : '매도'}</span>
+        <span class="muted">${esc(x.comment === 'AVG' ? '일반 물타기' : x.comment === 'KTR' ? 'KTR 거래' : x.comment)}</span><span class="sp"></span>
+        <b class="num ${cls(x.profit)}">${x.positions ? signed(x.profit) : ''}</b></div>
+      <div class="muted num">체결 ${x.positions}개 ${fmt(x.lots)}lot${x.positions ? ` · 평단 ${fmt(x.avg)}` : ''} · 대기 ${x.pending}개 ${fmt(x.pending_lots)}lot${x.next_price ? ` · 다음 ${fmt(x.next_price)}` : ''}${x.sl ? ` · 손절 ${fmt(x.sl)}` : ''}</div>
+      <div class="acts">${x.pending ? `<button class="btn small" data-gpend="${x.magic}">대기 주문 취소</button>` : ''}
+        <button class="btn small danger" data-gclose="${x.magic}">전부 청산</button></div>
+    </div>`).join('') : '<div class="empty">진행 중인 구간매매가 없습니다.</div>';
+  } catch (e) { $('gList').innerHTML = `<div class="gerr">${esc(e.message)}</div>`; }
+}
+$('gList').onclick = async (e) => {
+  const pend = e.target.closest('[data-gpend]'), all = e.target.closest('[data-gclose]');
+  if (!pend && !all) return;
+  const magic = Number((pend || all).dataset.gpend || (pend || all).dataset.gclose);
+  if (!(await ask(pend ? '대기 주문 취소' : '구간매매 전부 청산',
+    pend ? '아직 체결되지 않은 리밋 주문을 모두 취소합니다. 체결된 포지션은 그대로 둡니다.' : '대기 주문을 취소하고 체결된 포지션을 모두 시장가로 청산합니다.'))) return;
+  try {
+    const r = await api(`/accounts/${encodeURIComponent(acc.account_number)}/grid/close`, { method: 'POST', body: JSON.stringify({ magic, pending_only: !!pend }) });
+    toast(`취소 ${r.cancelled}개 · 청산 ${r.closed}개` + (r.errors.length ? ` · 실패 ${r.errors.length}개` : ''), !!r.errors.length);
+  } catch (err) { toast(err.message, true); }
+  gLoadList(); loadPositions();
+};
+$('gListReload').onclick = gLoadList;
+
+function gSeg(id, key, after) {
+  $(id).onclick = (e) => {
+    const b = e.target.closest('button[data-v]'); if (!b || b.dataset.v === G[key]) return;
+    if (key === 'sym' || key === 'mode') gSaveInputs();
+    G[key] = b.dataset.v;
+    if (key === 'sym') store.set('gsym', G.sym);
+    if (key === 'mode') store.set('gmode', G.mode);
+    if (key === 'src') store.set('gsrc', G.src);
+    if (key === 'tf') store.set('gtf', G.tf);
+    if (key === 'sym' || key === 'mode') gLoadInputs();
+    gSegs(); gSaveInputs();
+    after ? after() : gSchedule(0);
+  };
+}
+gSeg('gSyms', 'sym', () => { $('gKtr').value = ''; gLoadKtr(); });
+gSeg('gSide', 'side'); gSeg('gMode', 'mode'); gSeg('gMethod', 'method'); gSeg('gStopMode', 'stopMode');
+gSeg('gSrc', 'src', gLoadKtr);
+$('gKtrLoad').onclick = gLoadKtr;
+['gKtr', 'gRisk', 'gRisk2', 'gLot', 'gN', 'gStopKtr'].forEach((id) => $(id).addEventListener('input', () => { gSaveInputs(); gSchedule(); }));
+let gInit = false;
+function gridEnter() {
+  if (!gInit) { gInit = true; gLoadInputs(); }
+  gSegs(); gGoState();
+  if (!G.table || G.table.symbol !== G.sym) gLoadKtr(); else gSchedule(0);
+  gLoadList(); loadLock().then(gGoState).catch(() => {});
+}
+
 (async () => {
   renderSyms(); renderTSyms();
-  const h = location.hash.slice(1); if (h === 'trades' || h === 'pnl' || h === 'stats') { tab = h; document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab)); document.querySelectorAll('main .tab').forEach((s) => s.classList.toggle('on', s.id === 'tab-' + tab)); }
+  const h = location.hash.slice(1); if (h === 'trades' || h === 'pnl' || h === 'stats' || h === 'grid') { tab = h; document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab)); document.querySelectorAll('main .tab').forEach((s) => s.classList.toggle('on', s.id === 'tab-' + tab)); }
   try {
     await loadAccounts();
     if (!acc) { $('posList').innerHTML = '<div class="empty">등록된 계좌가 없습니다. 이 PC의 관리 화면에서 계좌를 추가하세요.</div>'; return; }

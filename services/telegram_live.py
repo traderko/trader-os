@@ -147,6 +147,19 @@ def _positions_block(positions: list[dict]) -> list[str]:
                 avg = sum(p["price_open"] * p["volume"] for p in side) / vol if vol else 0
                 sides.append(f"{label} {_f(vol)} @{_f(avg)}")
         out.append(f"{icon} <b>{html.escape(sym)}</b>  {' · '.join(sides)}  <b>{_s(profit)}</b>")
+        # 구간매매로 넣은 포지션은 따로 (직접 거래와 구분)
+        from services.grid import kind_of, MODE_KR
+        grids: dict[int, list] = {}
+        for p in ps:
+            if kind_of(p.get("magic")):
+                grids.setdefault(p["magic"], []).append(p)
+        if grids:
+            mine = [p for p in ps if not kind_of(p.get("magic"))]
+            for mg, gp in grids.items():
+                gpl = sum(p["profit"] + (p.get("swap") or 0) for p in gp)
+                out.append(f"    🧱 {MODE_KR[kind_of(mg)]} {len(gp)}개 {_f(sum(p['volume'] for p in gp))}lot  {_s(gpl)}")
+            if mine:
+                out.append(f"    ✋ 직접 {len(mine)}개 {_f(sum(p['volume'] for p in mine))}lot  {_s(sum(p['profit'] + (p.get('swap') or 0) for p in mine))}")
         if pv is not None:
             proj = []
             for key, label in (("sl", "SL시"), ("tp", "TP시")):
@@ -282,7 +295,7 @@ class TelegramLive:
 
     def _markup(self) -> dict:
         rows = [[{"text": f"🔓 {num} 잠금 풀기", "callback_data": f"unlock:{aid}"}] for aid, num in self.locked]
-        rows.append([{"text": "🔄 새로고침", "callback_data": "live:refresh"}])
+        rows.append([{"text": "🔄 새로고침", "callback_data": "live:refresh"}, {"text": "🧱 구간매매", "callback_data": "gw:new"}])
         return {"inline_keyboard": rows}
 
     async def _send(self, client, token, chat_id, text: str, **extra) -> dict:
@@ -844,15 +857,28 @@ class TelegramLive:
                     await self.sim(client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                 elif mine and text.startswith("/calc"):
                     await self.calc(client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                elif mine and text.startswith("/grids"):
+                    from services import telegram_grid
+                    await telegram_grid.cmd_grids(self, client, token, cid)
+                elif mine and text.startswith("/grid"):
+                    from services import telegram_grid
+                    await telegram_grid.cmd_grid(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                elif mine and text.startswith("/ktr"):
+                    from services import telegram_grid
+                    await telegram_grid.cmd_ktr(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                 elif mine and text.startswith("/pos"):
                     await self.show_positions(client, token, cid)
                 elif mine and text.startswith("/cancel"):
                     p = self.pending.pop(cid, None)
                     if p:
-                        await self._send(client, token, cid, "SL/TP 설정을 그만뒀습니다." if p.get("type") == "pos" else "잠금 풀기를 그만뒀습니다.")
+                        await self._send(client, token, cid, {"pos": "SL/TP 설정을 그만뒀습니다.", "grid": "직접 입력을 그만뒀습니다. 설정 메시지의 버튼은 그대로 쓸 수 있습니다."}
+                                         .get(p.get("type"), "잠금 풀기를 그만뒀습니다."))
                 elif mine and raw and not raw.startswith("/") and cid in self.pending:
                     if self.pending[cid].get("type") == "pos":
                         await self.try_pos(client, token, cid, raw)
+                    elif self.pending[cid].get("type") == "grid":
+                        from services import telegram_grid
+                        await telegram_grid.wiz_text(self, client, token, cid, raw)
                     else:
                         await self.try_unlock(client, token, cid, raw, int(msg.get("date") or time.time()))
                 elif text.startswith("/start") or text.startswith("/id"):
@@ -882,6 +908,16 @@ class TelegramLive:
                         answer = "등록된 대화에서만 쓸 수 있습니다"
                     else:
                         answer = await self.pos_button(client, token, cid, data)
+                elif data.startswith("grid:") or data.startswith("ktr:") or data.startswith("gw:"):
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        from services import telegram_grid
+                        try:
+                            fn = telegram_grid.wiz_button if data.startswith("gw:") else telegram_grid.button
+                            answer = await fn(self, client, token, cid, data, (cb.get("message") or {}).get("message_id"))
+                        except Exception as e:
+                            answer = f"실패: {e}"[:190]
                 elif data.startswith("upd:"):
                     if cid != str(telegram_cfg()["chat_id"] or ""):
                         answer = "등록된 대화에서만 쓸 수 있습니다"
@@ -920,6 +956,9 @@ class TelegramLive:
                                 {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
                                 {"command": "pos", "description": "포지션 SL/TP 설정"},
                                 {"command": "calc", "description": "SL·TP 예상 손익 계산"},
+                                {"command": "grid", "description": "구간매매 - 버튼으로 하나씩 설정 (또는 한 줄로)"},
+                                {"command": "grids", "description": "진행 중인 구간매매·청산"},
+                                {"command": "ktr", "description": "KTR 표 (장 × 시간봉)"},
                                 {"command": "sim", "description": "청산 시뮬레이션 (알림 미리보기)"},
                                 {"command": "update", "description": "새 버전 확인·업데이트"},
                                 {"command": "cancel", "description": "잠금 풀기 그만두기"},

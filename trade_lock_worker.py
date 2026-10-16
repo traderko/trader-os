@@ -23,7 +23,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
 from sqlalchemy.orm import selectinload, sessionmaker
 
-from api.worker import worker_account_router, worker_chart, worker_trade
+from api.worker import worker_account_router, worker_chart, worker_grid, worker_trade
 import importlib
 from db import init_db
 from db.models.account import Account
@@ -417,6 +417,7 @@ for _name in ("worker_trade_ktr", "worker_trade_report"):
             raise
 app.include_router(worker_trade.router)
 app.include_router(worker_chart.router)
+app.include_router(worker_grid.router)
 
 @app.get("/positions")
 async def get_positions():

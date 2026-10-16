@@ -443,6 +443,19 @@
         <button class="btn primary" id="tgSave">저장</button>
       </div>
     </div>
+    <div class="panel">
+      <h2>OANDA 시세</h2>
+      <p class="hint">웹 화면 <b>구간</b> 탭에서 KTR 값을 OANDA 봉으로 계산할 때만 씁니다 (주문은 MT5 로). 없으면 MT5 시세만 씁니다.
+        OANDA 계정 → <b>Manage API Access</b> 에서 토큰을 발급받아 넣으세요. 토큰은 이 PC의 설정 파일에만 저장되고 화면에는 다시 보이지 않습니다.</p>
+      <div class="row"><label class="name">API 토큰<small id="oaNow"></small></label>
+        <input type="password" class="wide" id="oaToken" placeholder="xxxxxxxx-xxxxxxxx" autocomplete="off"></div>
+      <div class="row"><label class="name">계정 종류</label>
+        <select id="oaEnv"><option value="practice">연습 계좌 (fxPractice)</option><option value="live">실계좌 (fxTrade)</option></select></div>
+      <div class="actions">
+        <button class="btn danger" id="oaClear">토큰 지우기</button>
+        <button class="btn primary" id="oaSave">저장</button>
+      </div>
+    </div>
   </section>
 
   <!-- 바깥 접속 -->
@@ -931,7 +944,7 @@ $('sessAdd').onclick = () => {
 
 async function loadSettings() {
   settings = await api('settings');
-  fillRules(); fillTelegram();
+  fillRules(); fillTelegram(); fillOanda();
   loadDefaults();
 }
 
@@ -1160,6 +1173,25 @@ $('tgTest').onclick = async (e) => {
     if ($('tgToken').value.trim() || $('tgChat').value.trim() !== (settings.telegram.chat_id || '')) await saveTelegram();
     await api('telegram/test', { method: 'POST' }); toast('보냈습니다. 텔레그램을 확인하세요.');
   } catch (err) { toast(err.message, true); } finally { b.disabled = false; }
+};
+
+// ── OANDA ──
+function fillOanda() {
+  const o = settings.oanda || {};
+  $('oaToken').value = '';
+  $('oaEnv').value = o.env || 'practice';
+  $('oaNow').textContent = o.has_token ? `저장됨: ${o.token_masked} (바꿀 때만 새로 입력)` : '아직 없음';
+}
+async function saveOanda(extra = {}) {
+  const oanda = { env: $('oaEnv').value, ...extra };
+  const tok = $('oaToken').value.trim(); if (tok) oanda.token = tok;
+  settings = await api('settings', { method: 'PUT', body: JSON.stringify({ oanda }) });
+  fillOanda();
+}
+$('oaSave').onclick = async () => { try { await saveOanda(); toast('저장했습니다.'); } catch (e) { toast(e.message, true); } };
+$('oaClear').onclick = async () => {
+  if (!confirm('저장된 OANDA 토큰을 지울까요?')) return;
+  try { await saveOanda({ clear_token: true }); toast('토큰을 지웠습니다.'); } catch (e) { toast(e.message, true); }
 };
 
 // ── 바깥 접속 ──
