@@ -134,7 +134,9 @@ async def get_session_window(db: AsyncSession, now: datetime) -> SessionWindow |
         if x["event_days"]:
             if events is None:
                 events = await event_names_on(db, wall.date())
-            causes += [f"지표: {name}" for name in events]   # 주요 지표는 앞에 ⭐ (event_names_on)
+            # 주요 지표는 앞에 ⭐ (event_names_on). '주요 지표만' 구간은 ⭐ 지표가 있는 날만 잠금
+            evs = [n for n in events if n.startswith("⭐ ")] if x.get("event_key_only", True) else events
+            causes += [f"지표: {name}" for name in evs]
         if causes:
             hits.append((x, causes))
 

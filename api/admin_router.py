@@ -515,7 +515,10 @@ async def week_events(db: AsyncSession = Depends(get_db)):
         locks = []
         if days.get(bd):
             base = datetime(bd.year, bd.month, bd.day)
+            has_key = any(e["key"] for e in days[bd])
             for x in sessions:
+                if x.get("event_key_only", True) and not has_key:
+                    continue                          # '주요 지표만' 구간은 ⭐ 지표가 있는 날만
                 start = lock_svc.broker_wallclock_to_kst(base + timedelta(minutes=x["start_min"]))
                 end = lock_svc.broker_wallclock_to_kst(base + timedelta(minutes=x["end_min"]))
                 locks.append({"name": x["name"], "start": start.isoformat(), "end": end.isoformat()})

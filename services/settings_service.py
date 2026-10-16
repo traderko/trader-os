@@ -48,6 +48,7 @@ DEFAULTS: dict = {
                 "id": "asia", "name": "아시아장", "enabled": True,
                 "start_min": 60, "end_min": 600,          # 브로커 01:00~10:00 = KST 07~16시(서머타임)
                 "weekdays": [3, 4], "event_days": True, "unlock_minutes": 30,
+                "event_key_only": True,                   # True: 고영향 지표 중 ⭐ 주요 지표(events.highlight)가 있는 날만
             },
         ],
         # 수동 잠금
@@ -417,7 +418,9 @@ def _validate_sessions(sessions) -> list[dict]:
         out.append({
             "id": sid, "name": name, "enabled": s["enabled"],
             "start_min": start, "end_min": end,
-            "weekdays": sorted(set(days)), "event_days": s["event_days"], "unlock_minutes": unlock,
+            "weekdays": sorted(set(days)), "event_days": s["event_days"],
+            "event_key_only": bool(s.get("event_key_only", True)),    # 지표일 중 ⭐ 주요 지표가 있는 날만 (기본 켜짐)
+            "unlock_minutes": unlock,
         })
     return out
 

@@ -677,7 +677,8 @@ function renderEventDays() {
       ${evs || (d.events.length ? '' : '지표 없음')}${more}${lk ? `<div class="lk">${lk}</div>` : ''}</div>`;
   }).join('');
 }
-try { $('evKeyOnly').checked = localStorage.getItem('traderos:evKeyOnly') === '1'; } catch {}
+$('evKeyOnly').checked = true;   // 기본: 주요 지표만 (끄면 이 브라우저에서 기억)
+try { if (localStorage.getItem('traderos:evKeyOnly') === '0') $('evKeyOnly').checked = false; } catch {}
 $('evKeyOnly').onchange = () => { try { localStorage.setItem('traderos:evKeyOnly', $('evKeyOnly').checked ? '1' : '0'); } catch {} renderEventDays(); };
 $('evKwSave').onclick = async () => {
   try {
@@ -884,7 +885,9 @@ function renderSessions() {
         `<label><input type="checkbox" data-day="${d}" ${x.weekdays.includes(d) ? 'checked' : ''}>${n.slice(0, 1)}</label>`).join('')}</div></div>
       <div class="row"><label class="name">미국 고영향 지표 발표일도 포함<small>실업수당, 고용지표, CPI, FOMC 등</small>
           ${noTrigger ? '<span class="warn">요일이나 지표일을 하나 이상 골라야 잠깁니다.</span>' : ''}</label>
-        <label class="switch"><input type="checkbox" data-f="event_days" ${x.event_days ? 'checked' : ''}> 포함</label></div>
+        <label class="switch"><input type="checkbox" data-f="event_days" ${x.event_days ? 'checked' : ''}> 포함</label>
+        <label class="switch" title="고영향 지표 중 이름에 강조 단어가 들어간 ⭐ 주요 지표가 있는 날만 잠금 (대시보드 '강조할 지표 단어')" ${x.event_days ? '' : 'hidden'}>
+          <input type="checkbox" data-f="event_key_only" ${x.event_key_only !== false ? 'checked' : ''}> ⭐ 주요 지표만</label></div>
       <div class="row"><label class="name">전용 문구 입력 후 풀려 있는 시간</label>
         <input type="number" data-f="unlock_minutes" min="5" max="540" value="${x.unlock_minutes}"><span class="unit">분</span></div>
     </div>`;
@@ -913,7 +916,7 @@ $('sessAdd').onclick = () => {
   let id = key === 'custom' ? 's' + Date.now().toString(36) : key, n = 2;
   while (sessDraft.some((x) => x.id === id)) id = `${key}${n++}`;
   sessDraft.push({ id, name: p.name, enabled: true, start_min: p.start_min, end_min: p.end_min,
-    weekdays: [3, 4], event_days: true, unlock_minutes: 30 });
+    weekdays: [3, 4], event_days: true, event_key_only: true, unlock_minutes: 30 });
   renderSessions(); toast('추가했습니다. 저장을 눌러야 반영됩니다.');
 };
 
