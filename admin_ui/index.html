@@ -445,9 +445,12 @@
     </div>
     <div class="panel">
       <h2>구간매매</h2>
-      <p class="hint">일반 물타기에서 구간 수를 <b>자동</b>으로 두면, 마지막 구간과 손절선 사이에 이 만큼(KTR 배수) 여유를 두고
+      <p class="hint"><b>KTR 거래 손절</b>: 마지막 구간에서 이만큼(KTR 배수) 더 가면 손절합니다. 웹 구간 탭·텔레그램에서 주문마다 바꿀 수 있고, 비우면 이 값.<br>
+        <b>물타기 자동 구간 수</b>: 일반 물타기에서 구간 수를 자동으로 두면, 마지막 구간과 손절선 사이에 이만큼 여유를 두고
         증거금 안에서 가장 많이 넣습니다. 직접 넣은 구간 수가 이보다 손절선에 붙으면 경고만 하고 주문은 됩니다.</p>
-      <div class="row"><label class="name">손절 여유 (KTR)</label>
+      <div class="row"><label class="name">KTR 거래 손절 (마지막 구간 뒤 KTR)</label>
+        <input type="number" id="grStop" min="0.1" max="10" step="0.1" inputmode="decimal" style="width:90px"></div>
+      <div class="row"><label class="name">물타기 자동 구간 수 여유 (KTR)</label>
         <input type="number" id="grGap" min="0.1" max="10" step="0.1" inputmode="decimal" style="width:90px"></div>
       <div class="actions"><button class="btn primary" id="grSave">저장</button></div>
     </div>
@@ -968,7 +971,7 @@ const DEF_FIELDS = [   // [칸, 기본값 가져오기]
   ['#acDays', (d) => d.access.session_days], ['#arDays', (d) => d.admin_remote.session_days],
   ['#gdCooldown', (d) => d.guidelines.cooldown_min],
   ['#evKw', (d) => d.events.highlight.join(', ')],
-  ['#grGap', (d) => d.grid.min_gap_ktr],
+  ['#grGap', (d) => d.grid.min_gap_ktr], ['#grStop', (d) => d.grid.ktr_stop_gap],
 ];
 const defText = (el, v) => el.type === 'checkbox' ? (v ? '켜기' : '끄기')
   : el.tagName === 'SELECT' ? ([...el.options].find((o) => o.value === String(v)) || {}).text || v : String(v);
@@ -1185,10 +1188,10 @@ $('tgTest').onclick = async (e) => {
 };
 
 // ── 구간매매 ──
-function fillGrid() { $('grGap').value = (settings.grid || {}).min_gap_ktr ?? 1; }
+function fillGrid() { const g = settings.grid || {}; $('grGap').value = g.min_gap_ktr ?? 1; $('grStop').value = g.ktr_stop_gap ?? 0.5; }
 $('grSave').onclick = async () => {
   try {
-    settings = await api('settings', { method: 'PUT', body: JSON.stringify({ grid: { min_gap_ktr: parseFloat($('grGap').value) } }) });
+    settings = await api('settings', { method: 'PUT', body: JSON.stringify({ grid: { min_gap_ktr: parseFloat($('grGap').value), ktr_stop_gap: parseFloat($('grStop').value) } }) });
     fillGrid(); refreshDefChips(); toast('저장했습니다.');
   } catch (e) { toast(e.message, true); }
 };

@@ -230,8 +230,10 @@ def build_plan(*, mode: str, side: str, entry: float, ktr: float, n: int | None,
                vol_min: float, vol_step: float, vol_max: float,
                risk_pct: float | None = None, method: str = "equal",
                lot: float | None = None, stop_mode: str = "ktr", stop_ktr: float | None = None,
-               n_auto: bool = False, min_gap: float = 1.0, margin_free: float | None = None) -> dict:
+               n_auto: bool = False, min_gap: float = 1.0, margin_free: float | None = None,
+               stop_gap: float = 0.5) -> dict:
     """구간별 가격·랏·손절 손실. point_value = 1랏이 가격 1만큼 움직일 때 손익(계좌 통화)
+    KTR 거래 손절 = 마지막 구간에서 stop_gap KTR 더 간 곳 (첫 진입에서 (n-1+stop_gap) KTR)
     일반 물타기는 n_auto 면 구간 수를 자동으로 정함 (avg_options)"""
     side = "buy" if side.lower().startswith("b") else "sell"
     sgn = -1 if side == "buy" else 1                     # 다음 구간 방향 (매수는 아래로)
@@ -248,8 +250,11 @@ def build_plan(*, mode: str, side: str, entry: float, ktr: float, n: int | None,
     if mode == "ktr":
         if not (risk_pct and risk_pct > 0):
             raise GridError("손실 %를 넣으세요.")
+        if not (stop_gap and 0 < stop_gap <= 10):
+            raise GridError("손절 여유(마지막 구간 뒤 KTR)는 0보다 크고 10 이하여야 합니다.")
         budget = equity * risk_pct / 100
-        stop_dist = n * ktr
+        stop_dist = (n - 1 + stop_gap) * ktr
+        extra = {"stop_gap": stop_gap}
         raw, left = [], budget
         for i in range(n):
             dist = stop_dist - i * ktr
@@ -385,6 +390,15 @@ def _f(v) -> float | None:
         raise GridError(f"숫자가 아닙니다: {v}")
 
 
+def ktr_stop_gap() -> float:
+    """KTR 거래 기본 손절 여유: 마지막 구간에서 몇 KTR 더 가면 손절 (관리 화면 설정, 기본 0.5)"""
+    try:
+        from services.settings_service import get_settings
+        return float((get_settings().get("grid") or {}).get("ktr_stop_gap") or 0.5)
+    except Exception:
+        return 0.5
+
+
 def min_gap() -> float:
     """일반 물타기 자동 구간 수: 마지막 구간과 손절선 사이 최소 여유 (KTR, 관리 화면 설정)"""
     try:
@@ -395,7 +409,7 @@ def min_gap() -> float:
 
 
 async def make_plan(account_id: int, body: dict) -> dict:
-    """body: symbol, side, mode(ktr|avg), ktr, n, risk_pct, method, lot, stop_mode, stop_ktr - 지금 시세 기준 계획"""
+    """body: symbol, side, mode(ktr|avg), ktr, n, risk_pct, method, lot, stop_mode, stop_ktr, stop_gap - 지금 시세 기준 계획"""
     from services.worker_client import worker_get
     symbol = str(body.get("symbol") or "")
     side = "buy" if str(body.get("side", "buy")).lower().startswith("b") else "sell"
@@ -420,6 +434,7 @@ async def make_plan(account_id: int, body: dict) -> dict:
     equity = float(c.get("equity") or c.get("balance") or 0)
     plan = build_plan(
         n_auto=n_auto, min_gap=min_gap(), margin_free=c.get("margin_free"),
+        stop_gap=_f(body.get("stop_gap")) or ktr_stop_gap(),
         mode=mode, side=side, entry=entry, ktr=ktr, n=n, point_value=abs(float(c.get("profit") or 0)),
         margin_per_lot=c.get("margin"), equity=equity, digits=int(c.get("digits") or 2),
         vol_min=float(c.get("volume_min") or 0.01), vol_step=float(c.get("volume_step") or 0.01),

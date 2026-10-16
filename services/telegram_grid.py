@@ -3,7 +3,7 @@
 # 텔레그램 구간매매 (services/telegram_live.py 가 명령·버튼을 넘겨줌). 계산·주문은 services/grid.py - 웹 '구간' 탭과 같음.
 #
 #   /ktr [종목] [oanda]        장 3개 × 시간봉 5개 KTR 표 (종목·시세 버튼으로 바꾸기)
-#   /grid 나스닥 매수 5% 5구간              KTR 거래 (손실 %로 랏 계산, 손절 = 구간 수 × KTR)
+#   /grid 나스닥 매수 5% 5구간              KTR 거래 (손실 %로 랏 계산, 손절 = 마지막 구간 뒤 0.5 KTR - '여유1' 처럼 바꿈)
 #   /grid 골드 매도 물타기 0.1랏 5구간 손절6  일반 물타기 (손절 KTR 배수) - '손실5%' 로 쓰면 손실 %로 손절 자동
 #     물타기는 구간 수를 빼면 자동 (손절선과 최소 여유를 두고 증거금 안에서 가장 많이)
 #     더 넣을 수 있는 것: 아시아/유로/미장, 2분/5분/10분/1시간/2시간 (기본: 지금 장 · 2분), 차등, oanda, ktr=62.4, #계좌번호
@@ -27,6 +27,7 @@ TF_KR = {"2m": "2분", "5m": "5분", "10m": "10분", "1h": "1시간", "2h": "2�
 
 HELP = ("<b>/grid 구간매매</b>\n"
         "• <code>/grid 나스닥 매수 5% 5구간</code> - KTR 거래: 손실 5% 안에서 구간마다 랏 계산\n"
+        "• <code>/grid 나스닥 매수 5% 5구간 여유1</code> - 손절을 마지막 구간에서 1 KTR 뒤로 (안 쓰면 기본값)\n"
         "• <code>/grid 골드 매도 물타기 0.1랏 5구간 손절6</code> - 일반 물타기: 같은 랏, 손절 6 KTR\n"
         "• <code>/grid 골드 매도 물타기 0.1랏 5구간 손실5%</code> - 손절을 손실 %로 자동\n"
         "• <code>/grid 골드 매도 물타기 0.1랏 손실5%</code> - 구간 수도 자동 (손절선과 여유를 두고 가장 많이)\n"
@@ -112,6 +113,8 @@ def parse(args: str) -> dict:
             b["n"] = int(m.group(1))
         elif m := re.fullmatch(r"(\d*\.?\d+)(?:랏|lot|lots)", w):
             b["lot"] = float(m.group(1))
+        elif m := re.fullmatch(r"(?:손절여유|여유|gap)(\d*\.?\d+)(?:ktr)?", w):
+            b["stop_gap"] = float(m.group(1))
         elif m := re.fullmatch(r"(?:손절|sl|stop)(\d+(?:\.\d+)?)(?:ktr)?", w):
             b["stop_ktr"] = float(m.group(1))
             b["stop_mode"] = "ktr"
@@ -153,7 +156,8 @@ def _plan_text(p: dict, info: str) -> str:
              f"<b>{html.escape(p['symbol'])} {'매수' if p['side'] == 'buy' else '매도'}</b> · KTR {_k(p['ktr'])} {html.escape(info)} × {p['n']}구간"
              + (" (자동)" if p.get("n_is_auto") else ""),
              "<pre>" + html.escape(" #" + _pad("가격", 12) + _pad("랏", 9) + _pad("손절손실", 10)) + "\n" + "\n".join(rows) + "</pre>",
-             f"🛑 손절 <b>{_fmt(p['sl'], d)}</b> (첫 진입에서 {p['stop_ktr']:.2f} KTR)",
+             f"🛑 손절 <b>{_fmt(p['sl'], d)}</b> (첫 진입에서 {p['stop_ktr']:.2f} KTR"
+             + (f" · 마지막 구간 뒤 {p['stop_gap']:g} KTR)" if p.get("stop_gap") else ")"),
              f"다 체결되고 손절이면 <b>{-p['total_loss']:,.2f}</b>"
              + (f" ({-p['total_loss_pct']:.2f}%)" if p.get("total_loss_pct") is not None else "")
              + f" · 총 {p['total_lot']:g}lot · 평단 {_fmt(p['levels'][-1]['avg'], d)}",
@@ -492,7 +496,7 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
         q = "방향을 고르세요."
         kb = [[_b(wid, "📈 매수 (아래로 물타기)", "side", "buy"), _b(wid, "📉 매도 (위로 물타기)", "side", "sell")]]
     elif step == "mode":
-        q = ("방식을 고르세요.\n• <b>KTR 거래</b>: 손실 %를 먼저 정하면 구간마다 랏을 계산 (손절 = 구간 수 × KTR)\n"
+        q = ("방식을 고르세요.\n• <b>KTR 거래</b>: 손실 %를 먼저 정하면 구간마다 랏을 계산 (손절 = 마지막 구간 뒤 기본 여유, 미리보기에서 바꿈)\n"
              "• <b>일반 물타기</b>: 구간마다 같은 랏, 손절은 KTR 배수 또는 손실 %")
         kb = [[_b(wid, "KTR 거래", "mode", "ktr"), _b(wid, "일반 물타기", "mode", "avg")]]
     elif step == "ktr":
@@ -567,8 +571,12 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
                     {"inline_keyboard": [nav]})
         w["body"], w["acc"] = body, w.get("acc") or acc.account_number
         q = _plan_text(p, w.get("ktr_info") or "")
+        gaps = []
+        if w["mode"] == "ktr":                 # 손절 여유 (마지막 구간 뒤 KTR) 바로 바꾸기
+            cur = p.get("stop_gap")
+            gaps = [[_b(wid, "손절 여유", "noop")] + [_b(wid, ("✓ " if cur == v else "") + f"{v:g}", "gap", v) for v in (0.5, 1, 1.5, 2)]]
         return (f"계좌 {html.escape(str(w['acc']))}\n" + q,
-                {"inline_keyboard": [[_b(wid, "✅ 주문 실행", "go")], [_b(wid, "◀ 뒤로", "back"), _b(wid, "↻ 다시 계산", "noop2"), _b(wid, "✖ 그만", "quit")]]})
+                {"inline_keyboard": gaps + [[_b(wid, "✅ 주문 실행", "go")], [_b(wid, "◀ 뒤로", "back"), _b(wid, "↻ 다시 계산", "noop2"), _b(wid, "✖ 그만", "quit")]]})
     return head + "\n\n" + q, {"inline_keyboard": kb + [nav]}
 
 
@@ -578,7 +586,8 @@ def _wiz_body(w: dict, n_auto: bool = False) -> dict:
             "n": None if auto else w.get("n"), "n_auto": auto and w["mode"] == "avg",
             "method": w.get("method") or "equal", "lot": w.get("lot"),
             "risk_pct": w.get("risk") if w["mode"] == "ktr" else w.get("stop_pct"),
-            "stop_mode": w.get("stop_mode") or "ktr", "stop_ktr": w.get("stop_ktr")}
+            "stop_mode": w.get("stop_mode") or "ktr", "stop_ktr": w.get("stop_ktr"),
+            "stop_gap": w.get("stop_gap") if w["mode"] == "ktr" else None}
 
 
 async def _wiz_show(live, client, token, chat_id, wid: str) -> None:
@@ -670,6 +679,10 @@ async def wiz_button(live, client, token, chat_id: str, data: str, message_id) -
     if field == "noop2":                       # 미리보기 다시 계산
         await _wiz_show(live, client, token, chat_id, wid)
         return "다시 계산했습니다"
+    if field == "gap":                         # 미리보기에서 손절 여유 바꾸기 (단계 아님)
+        w["stop_gap"] = float(value)
+        await _wiz_show(live, client, token, chat_id, wid)
+        return f"손절 여유 {float(value):g} KTR"
     if field == "src":
         w["src"] = value
         await _wiz_show(live, client, token, chat_id, wid)

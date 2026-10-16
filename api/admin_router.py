@@ -353,8 +353,7 @@ async def write_settings(body: dict):
 
     if "grid" in body:
         gr = body["grid"] or {}
-        if "min_gap_ktr" in gr:
-            patch["grid"] = {"min_gap_ktr": gr["min_gap_ktr"]}
+        patch["grid"] = {k: gr[k] for k in ("min_gap_ktr", "ktr_stop_gap") if k in gr}
 
     if "events" in body:
         ev = body["events"] or {}
