@@ -122,8 +122,8 @@ DEFAULTS: dict = {
     # 경제지표 - 이름에 이 단어가 들어가면 '주요 지표'로 강조 (services/key_events.py). 대소문자 구분 없음
     "events": {
         "highlight": [
-            "FOMC", "금리", "파월", "실업수당", "원유", "비농업", "실업률", "CPI", "소비자물가", "PCE", "GDP",
-            "Federal Funds", "Fed Chair", "Non-Farm", "Unemployment", "Crude Oil",
+            "FOMC", "금리", "연준 의장", "파월", "워시", "실업수당", "원유", "비농업", "실업률", "CPI", "소비자물가", "PCE", "GDP",
+            "Federal Funds", "Fed Chair", "Powell", "Warsh", "Non-Farm", "Unemployment", "Crude Oil",
         ],
     },
     # 관리 화면(:8100)을 다른 기기에서 열기 (services/admin_remote.py) - 기본 꺼짐, 켜기·비밀번호는 이 PC에서만

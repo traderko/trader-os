@@ -98,12 +98,19 @@ def broker_wallclock_to_kst(wall: datetime) -> datetime:
 
 
 async def event_names_on(db: AsyncSession, broker_date: date) -> list[str]:
+    """그날 고영향 지표 이름 - 주요 지표(services/key_events.py)는 ⭐ 붙여 맨 앞으로, '[FF] ' 표시는 뗌"""
     result = await db.execute(
         select(EconomicEvent.event_name)
         .where(EconomicEvent.broker_date == broker_date)
         .order_by(EconomicEvent.event_time)
     )
-    return list(dict.fromkeys(result.scalars().all()))  # 순서 유지 중복 제거
+    names = list(dict.fromkeys(n.replace("[FF] ", "") for n in result.scalars().all()))  # 순서 유지 중복 제거
+    try:
+        from services.key_events import is_key
+        key = [n for n in names if is_key(n)]
+        return [f"⭐ {n}" for n in key] + [n for n in names if n not in key]
+    except Exception:
+        return names
 
 
 async def get_session_window(db: AsyncSession, now: datetime) -> SessionWindow | None:
@@ -127,7 +134,7 @@ async def get_session_window(db: AsyncSession, now: datetime) -> SessionWindow |
         if x["event_days"]:
             if events is None:
                 events = await event_names_on(db, wall.date())
-            causes += [f"지표: {name}" for name in events]
+            causes += [f"지표: {name}" for name in events]   # 주요 지표는 앞에 ⭐ (event_names_on)
         if causes:
             hits.append((x, causes))
 
