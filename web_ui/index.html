@@ -390,6 +390,14 @@
   .gsum div { display: flex; flex-direction: column; } .gsum small { color: var(--muted); font-size: 11.5px; }
   .gsum b { font-size: 15px; }
   .gwarn { color: var(--warn, #c77700); font-size: 12.5px; margin-top: 8px; }
+  #gNMode[hidden] { display: none; } .cgrid label.gnl { grid-column: 1 / -1; }
+  .gnrow { display: flex; gap: 6px; align-items: center; } .gnrow input { flex: 1; min-width: 0; }
+  .gnrow input:disabled { opacity: .75; }
+  .gopts { margin-top: 10px; } .gopts h4 { margin: 0 0 4px; font-size: 12.5px; font-weight: 600; }
+  .gopts h4 small { font-weight: 400; color: var(--muted); }
+  .gopts tr[data-n] { cursor: pointer; } .gopts tr.on td { background: var(--code); font-weight: 600; }
+  .gopts tr.bad td { color: var(--muted); cursor: default; } .gopts td.thin { color: var(--warn, #c77700); }
+  .gopts .tag { font-size: 10.5px; font-weight: 600; border-radius: 4px; padding: 0 4px; margin-left: 3px; background: #e6f4ea; color: #1e7b34; }
   .gerr { color: var(--down); font-size: 13px; }
   .gacts { display: flex; align-items: center; gap: 10px; justify-content: flex-end; margin: -2px 0 14px; }
   .gacts #gGo { min-width: 140px; padding: 11px 16px; font-size: 15px; }
@@ -641,7 +649,8 @@
     <div class="cgrid">
       <label data-m="ktr">손실 % (잔고 대비)<input id="gRisk" inputmode="decimal" autocomplete="off" placeholder="예: 5"></label>
       <label data-m="avg">구간마다 랏<input id="gLot" inputmode="decimal" autocomplete="off" placeholder="예: 0.1"></label>
-      <label>구간 수 (진입 횟수)<input id="gN" inputmode="numeric" autocomplete="off" placeholder="예: 5"></label>
+      <label class="gnl">구간 수 (진입 횟수)<span class="gnrow"><span class="seg mini" id="gNMode" style="margin:0" data-m="avg"><button data-v="auto" class="on">자동</button><button data-v="manual">직접</button></span>
+        <input id="gN" inputmode="numeric" autocomplete="off" placeholder="예: 5"></span></label>
       <label data-m="ktr">랏 배분<span class="seg mini" id="gMethod" style="margin:0"><button data-v="equal" class="on">동일손실</button><button data-v="half">차등손실</button></span></label>
       <label data-m="avg">손절<span class="seg mini" id="gStopMode" style="margin:0"><button data-v="ktr" class="on">KTR 배수</button><button data-v="pct">손실 %</button></span></label>
       <label data-m="avg" data-s="ktr">손절 거리 (KTR 배수)<input id="gStopKtr" inputmode="decimal" autocomplete="off" placeholder="예: 6"></label>
@@ -2486,30 +2495,33 @@ function drawSeq(el, vals, labelAt) {
 // KTR(장 시작 봉 크기) 간격으로 시장가 1개 + 리밋 N-1개, 손절은 모두 같은 가격. 계산·주문은 서버 (services/grid.py)
 const G = {
   sym: store.get('gsym', 'nasdaq'), side: 'buy', mode: store.get('gmode', 'ktr'),
-  src: store.get('gsrc', 'mt5'), tf: store.get('gtf', '2m'), sess: 'auto', method: 'equal', stopMode: 'ktr',
+  src: store.get('gsrc', 'mt5'), tf: store.get('gtf', '2m'), sess: 'auto', method: 'equal', stopMode: 'ktr', nMode: 'auto',
   plan: null, seq: 0, timer: 0, table: null,
 };
 const gKey = () => 'gset.' + G.sym + '.' + G.mode;
 function gSegs() {
   const set = (id, v) => document.querySelectorAll(`#${id} button`).forEach((b) => b.classList.toggle('on', b.dataset.v === v));
   set('gSide', G.side); set('gMode', G.mode); set('gSrc', G.src);
-  set('gMethod', G.method); set('gStopMode', G.stopMode);
+  set('gMethod', G.method); set('gStopMode', G.stopMode); set('gNMode', G.nMode);
+  const nAuto = G.mode === 'avg' && G.nMode === 'auto';
+  $('gN').disabled = nAuto; $('gN').placeholder = nAuto ? '자동' : '예: 5';
   $('gSyms').innerHTML = SYMBOLS.map((x) => `<button data-v="${esc(x.key)}" class="${x.key === G.sym ? 'on' : ''}">${esc(x.label)}</button>`).join('');
   document.querySelectorAll('#tab-grid [data-m]').forEach((el) => el.hidden = el.dataset.m !== G.mode
     || (el.dataset.s && el.dataset.s !== G.stopMode));
   $('gModeHint').textContent = G.mode === 'ktr'
     ? '손실 %를 먼저 정하면 구간마다 랏을 계산합니다. 손절 = 첫 진입가에서 구간 수 × KTR. 동일손실: 진입마다 손절 손실이 같게 / 차등손실: 남은 예산의 절반씩.'
-    : '구간마다 같은 랏으로 들어갑니다. 손절은 KTR 배수로 정하거나, 손실 %를 넣으면 다 체결된 채 손절일 때 그 %가 되도록 자동으로 정합니다.';
+    : '구간마다 같은 랏으로 들어갑니다. 손절은 KTR 배수로 정하거나, 손실 %를 넣으면 다 체결된 채 손절일 때 그 %가 되도록 자동으로 정합니다.'
+      + ' 구간 수 자동: 마지막 구간과 손절선 사이에 여유를 두고 증거금 안에서 가장 많이. 아래 N별 표에서 줄을 누르면 그 구간 수로 바꿉니다.';
 }
 function gLoadInputs() {
   const v = store.get(gKey(), {});
   $('gRisk').value = v.risk ?? ''; $('gRisk2').value = v.risk2 ?? ''; $('gLot').value = v.lot ?? '';
   $('gN').value = v.n ?? ''; $('gStopKtr').value = v.stopKtr ?? '';
-  G.method = v.method || 'equal'; G.stopMode = v.stopMode || 'ktr';
+  G.method = v.method || 'equal'; G.stopMode = v.stopMode || 'ktr'; G.nMode = v.nMode || 'auto';
 }
 function gSaveInputs() {
   store.set(gKey(), { risk: $('gRisk').value, risk2: $('gRisk2').value, lot: $('gLot').value, n: $('gN').value,
-    stopKtr: $('gStopKtr').value, method: G.method, stopMode: G.stopMode });
+    stopKtr: $('gStopKtr').value, method: G.method, stopMode: G.stopMode, nMode: G.nMode });
 }
 const gNum = (id) => { const v = parseFloat(String($(id).value).replace(/,/g, '')); return isFinite(v) ? v : null; };
 
@@ -2555,12 +2567,13 @@ $('gTable').onclick = (e) => { const td = e.target.closest('td[data-s]'); if (td
 
 function gSchedule(ms = 400) { clearTimeout(G.timer); G.timer = setTimeout(gPlan, ms); }
 function gBody() {
-  return { symbol: G.sym, side: G.side, mode: G.mode, ktr: gNum('gKtr'), n: gNum('gN'), method: G.method,
+  const nAuto = G.mode === 'avg' && G.nMode === 'auto';
+  return { symbol: G.sym, side: G.side, mode: G.mode, ktr: gNum('gKtr'), n: nAuto ? null : gNum('gN'), n_auto: nAuto, method: G.method,
     risk_pct: G.mode === 'ktr' ? gNum('gRisk') : (G.stopMode === 'pct' ? gNum('gRisk2') : null),
     lot: gNum('gLot'), stop_mode: G.stopMode, stop_ktr: gNum('gStopKtr') };
 }
 function gReady(b) {
-  if (!b.ktr || !b.n) return false;
+  if (!b.ktr || (!b.n && !b.n_auto)) return false;
   if (b.mode === 'ktr') return !!b.risk_pct;
   return !!b.lot && (b.stop_mode === 'pct' ? !!b.risk_pct : !!b.stop_ktr);
 }
@@ -2572,7 +2585,12 @@ async function gPlan() {
   try {
     const p = await api(`/accounts/${encodeURIComponent(acc.account_number)}/grid/plan`, { method: 'POST', body: JSON.stringify(b) });
     if (seq !== G.seq) return;
-    G.plan = p; gRenderPlan(p);
+    if (p.invalid) {                 // 직접 넣은 구간 수가 손절선 밖 등 - 이유 + N별 표 (주문 안 됨)
+      $('gPlan').innerHTML = `<div class="gerr">${esc(p.invalid)}</div>` + gOptsHtml(p);
+    } else {
+      G.plan = p; gRenderPlan(p);
+      if (p.n_is_auto) { G.lastAutoN = p.n; $('gN').value = ''; $('gN').placeholder = `자동 → ${p.n}`; }
+    }
   } catch (e) {
     if (seq !== G.seq) return;
     $('gPlan').innerHTML = `<div class="gerr">${esc(e.message)}</div>`;
@@ -2601,8 +2619,27 @@ function gRenderPlan(p) {
     </div>
     <p class="hint2" style="margin-top:8px">${esc(p.symbol)} · 지금 ${p.side === 'buy' ? '매수가' : '매도가'} ${fmt(p.entry, d)} 기준 · KTR ${fmt(p.ktr, d)}
       · 1랏이 1 움직이면 ${fmt(p.point_value)}${p.mode === 'ktr' ? ` · 손실 예산 ${fmt(p.budget)}` : ''} · 주문할 때 지금 시세로 다시 계산</p>
-    ${(p.warnings || []).map((w) => `<div class="gwarn">⚠ ${esc(w)}</div>`).join('')}`;
+    ${(p.warnings || []).map((w) => `<div class="gwarn">⚠ ${esc(w)}</div>`).join('')}${gOptsHtml(p)}`;
 }
+// 일반 물타기 N별 비교 (서버 grid.avg_options). 줄을 누르면 그 구간 수로 '직접'
+function gOptsHtml(p) {
+  const o = p.options; if (!o || !o.length) return '';
+  const cur = p.levels ? p.n : null;
+  let lo = 0, hi = o.length;                  // 길면 지금 N·자동 N 근처만
+  if (o.length > 9) { const c = (cur || p.n_auto || o.length) - 1; lo = Math.max(0, Math.min(c - 4, o.length - 9)); hi = lo + 9; }
+  const rows = o.slice(lo, hi).map((r) => !r.ok
+    ? `<tr class="bad"><td>${r.n}</td><td colspan="5">손절선 안쪽 - 불가</td></tr>`
+    : `<tr data-n="${r.n}" class="${r.n === cur ? 'on' : ''}"><td>${r.n === cur ? '▶' : ''}${r.n}${r.n === p.n_auto ? '<span class="tag">자동</span>' : ''}</td>
+      <td class="num">${fmt(r.stop_ktr, 2)}</td><td class="num ${r.gap_ok ? '' : 'thin'}">${fmt(r.gap, 2)}</td>
+      <td class="num">${fmt(r.total_lot)}</td><td class="num down">${signed(-r.total_loss)}</td>
+      <td class="num${r.margin_ok ? '' : ' down'}">${r.margin == null ? '-' : fmt(r.margin, 0)}</td></tr>`).join('');
+  return `<div class="gopts"><h4>구간 수별 비교 <small>손절 여유 ${fmt(p.min_gap, 1)} KTR 이상 · 줄을 누르면 그 구간 수로</small></h4>
+    <div class="gwrap"><table class="gtbl"><tr><th>N</th><th>손절 KTR</th><th>여유</th><th>총 랏</th><th>손절 손실</th><th>증거금</th></tr>${rows}</table></div></div>`;
+}
+$('gPlan').addEventListener('click', (e) => {
+  const tr = e.target.closest('.gopts tr[data-n]'); if (!tr) return;
+  G.nMode = 'manual'; $('gN').value = tr.dataset.n; gSegs(); gSaveInputs(); gSchedule(0);
+});
 function gGoState() {
   const locked = !!(lockState && lockState.locked);
   $('gLockNote').textContent = locked ? '🔒 거래가 잠겨 있어 주문할 수 없습니다' : '';
@@ -2612,7 +2649,7 @@ $('gGo').onclick = async () => {
   const p = G.plan; if (!p) return;
   const d = p.digits ?? 2;
   const ok = await ask(`${p.symbol} ${p.side === 'buy' ? '매수' : '매도'} 구간매매`,
-    `${G.mode === 'ktr' ? 'KTR 거래' : '일반 물타기'} · KTR ${fmt(p.ktr, d)} × ${p.n}구간\n`
+    `${G.mode === 'ktr' ? 'KTR 거래' : '일반 물타기'} · KTR ${fmt(p.ktr, d)} × ${p.n}구간${p.n_is_auto ? ' (자동)' : ''}\n`
     + `시장가 ${fmt(p.levels[0].lot)}lot + 리밋 ${p.n - 1}개 (총 ${fmt(p.total_lot)}lot)\n`
     + `손절 ${fmt(p.sl, d)} · 다 체결되고 손절이면 ${signed(-p.total_loss)}${p.total_loss_pct != null ? ` (${p.total_loss_pct.toFixed(2)}%)` : ''}\n\n`
     + '지금 시세로 다시 계산해서 바로 주문합니다.');
@@ -2743,6 +2780,7 @@ function gSeg(id, key, after) {
 }
 gSeg('gSyms', 'sym', () => { $('gKtr').value = ''; gLoadKtr(); });
 gSeg('gSide', 'side'); gSeg('gMode', 'mode'); gSeg('gMethod', 'method'); gSeg('gStopMode', 'stopMode');
+gSeg('gNMode', 'nMode', () => { if (G.nMode === 'manual' && !$('gN').value && G.lastAutoN) $('gN').value = G.lastAutoN; gSaveInputs(); gSchedule(0); });
 gSeg('gSrc', 'src', gLoadKtr);
 $('gKtrLoad').onclick = gLoadKtr;
 ['gKtr', 'gRisk', 'gRisk2', 'gLot', 'gN', 'gStopKtr'].forEach((id) => $(id).addEventListener('input', () => { gSaveInputs(); gSchedule(); }));

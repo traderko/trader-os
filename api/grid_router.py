@@ -4,7 +4,7 @@
 #
 #   GET  /accounts/{번호}/grid/ktr?symbol=nasdaq&source=mt5|oanda&tf=2m&session=auto|asia|euro|us
 #   GET  /accounts/{번호}/grid/ktr-table?symbol=nasdaq&source=mt5   장 3개 × 시간봉 5개 표
-#   POST /accounts/{번호}/grid/plan      미리보기 (주문 안 함)
+#   POST /accounts/{번호}/grid/plan      미리보기 (주문 안 함). 일반 물타기는 n 을 비우면 자동, 막히면 {invalid, options, n_auto}
 #   POST /accounts/{번호}/grid/execute   주문 - 거래 잠금 중이면 거절, 지금 시세로 다시 계산해서 넣음
 #   GET  /accounts/{번호}/grid/list      진행 중인 구간매매
 #   GET  /accounts/{번호}/grid/detail?magic=…  묶음 상세 (구간마다 보유·대기·청산, 손절·다음 구간 손익)
@@ -27,9 +27,13 @@ async def _account(db, account_number: int):
     return acc
 
 
-async def _run(coro):
+async def _run(coro, keep_invalid: bool = False):
     try:
         return await coro
+    except grid.GridPlanInvalid as e:
+        if keep_invalid:          # 미리보기: 막힌 이유 + N별 비교표를 그대로 돌려줌 (주문 실행은 400)
+            return {"invalid": str(e), **e.data}
+        raise HTTPException(400, str(e))
     except grid.GridLocked as e:
         raise HTTPException(423, str(e))
     except grid.GridError as e:
@@ -53,7 +57,7 @@ async def grid_ktr_table(account_number: int, symbol: str, source: str = "mt5", 
 @router.post("/{account_number}/grid/plan")
 async def grid_plan(account_number: int, body: dict, db: AsyncSession = Depends(get_db)):
     acc = await _account(db, account_number)
-    return await _run(grid.make_plan(acc.id, body))
+    return await _run(grid.make_plan(acc.id, body), keep_invalid=True)
 
 
 @router.post("/{account_number}/grid/execute")

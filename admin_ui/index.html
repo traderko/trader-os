@@ -444,6 +444,14 @@
       </div>
     </div>
     <div class="panel">
+      <h2>구간매매</h2>
+      <p class="hint">일반 물타기에서 구간 수를 <b>자동</b>으로 두면, 마지막 구간과 손절선 사이에 이 만큼(KTR 배수) 여유를 두고
+        증거금 안에서 가장 많이 넣습니다. 직접 넣은 구간 수가 이보다 손절선에 붙으면 경고만 하고 주문은 됩니다.</p>
+      <div class="row"><label class="name">손절 여유 (KTR)</label>
+        <input type="number" id="grGap" min="0.1" max="10" step="0.1" inputmode="decimal" style="width:90px"></div>
+      <div class="actions"><button class="btn primary" id="grSave">저장</button></div>
+    </div>
+    <div class="panel">
       <h2>OANDA 시세</h2>
       <p class="hint">웹 화면 <b>구간</b> 탭에서 KTR 값을 OANDA 봉으로 계산할 때만 씁니다 (주문은 MT5 로). 없으면 MT5 시세만 씁니다.
         OANDA 계정 → <b>Manage API Access</b> 에서 토큰을 발급받아 넣으세요. 토큰은 이 PC의 설정 파일에만 저장되고 화면에는 다시 보이지 않습니다.</p>
@@ -944,7 +952,7 @@ $('sessAdd').onclick = () => {
 
 async function loadSettings() {
   settings = await api('settings');
-  fillRules(); fillTelegram(); fillOanda();
+  fillRules(); fillTelegram(); fillOanda(); fillGrid();
   loadDefaults();
 }
 
@@ -960,6 +968,7 @@ const DEF_FIELDS = [   // [칸, 기본값 가져오기]
   ['#acDays', (d) => d.access.session_days], ['#arDays', (d) => d.admin_remote.session_days],
   ['#gdCooldown', (d) => d.guidelines.cooldown_min],
   ['#evKw', (d) => d.events.highlight.join(', ')],
+  ['#grGap', (d) => d.grid.min_gap_ktr],
 ];
 const defText = (el, v) => el.type === 'checkbox' ? (v ? '켜기' : '끄기')
   : el.tagName === 'SELECT' ? ([...el.options].find((o) => o.value === String(v)) || {}).text || v : String(v);
@@ -1173,6 +1182,15 @@ $('tgTest').onclick = async (e) => {
     if ($('tgToken').value.trim() || $('tgChat').value.trim() !== (settings.telegram.chat_id || '')) await saveTelegram();
     await api('telegram/test', { method: 'POST' }); toast('보냈습니다. 텔레그램을 확인하세요.');
   } catch (err) { toast(err.message, true); } finally { b.disabled = false; }
+};
+
+// ── 구간매매 ──
+function fillGrid() { $('grGap').value = (settings.grid || {}).min_gap_ktr ?? 1; }
+$('grSave').onclick = async () => {
+  try {
+    settings = await api('settings', { method: 'PUT', body: JSON.stringify({ grid: { min_gap_ktr: parseFloat($('grGap').value) } }) });
+    fillGrid(); refreshDefChips(); toast('저장했습니다.');
+  } catch (e) { toast(e.message, true); }
 };
 
 // ── OANDA ──

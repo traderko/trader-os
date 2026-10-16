@@ -122,6 +122,8 @@ DEFAULTS: dict = {
     },
     # OANDA 시세 (구간매매 KTR 계산용, services/grid.py) - API 토큰은 OANDA 계정 → Manage API Access 에서 발급
     "oanda": {"token": "", "env": "practice"},   # env: practice(연습 계좌) | live(실계좌)
+    # 구간매매 - 일반 물타기에서 구간 수를 자동으로 정할 때 마지막 구간과 손절선 사이 최소 여유 (KTR 배수)
+    "grid": {"min_gap_ktr": 1.0},
     # 경제지표 - 이름에 이 단어가 들어가면 '주요 지표'로 강조 (services/key_events.py). 대소문자 구분 없음
     "events": {
         "highlight": [
@@ -325,6 +327,14 @@ def _validate(settings: dict) -> None:
     oa["token"] = str(oa.get("token") or "").strip()
     if oa.get("env") not in ("practice", "live"):
         raise SettingsError("OANDA 환경은 practice(연습) 또는 live(실계좌)여야 합니다.")
+
+    gr = settings["grid"]
+    try:
+        gr["min_gap_ktr"] = round(float(gr.get("min_gap_ktr")), 3)
+    except (TypeError, ValueError):
+        raise SettingsError("손절 여유(KTR)는 숫자여야 합니다.")
+    if not (0.1 <= gr["min_gap_ktr"] <= 10):
+        raise SettingsError("손절 여유(KTR)는 0.1~10 이어야 합니다.")
 
     ev = settings["events"]
     hl = ev.get("highlight") or []

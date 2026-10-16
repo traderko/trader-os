@@ -5,6 +5,7 @@
 #   /ktr [종목] [oanda]        장 3개 × 시간봉 5개 KTR 표 (종목·시세 버튼으로 바꾸기)
 #   /grid 나스닥 매수 5% 5구간              KTR 거래 (손실 %로 랏 계산, 손절 = 구간 수 × KTR)
 #   /grid 골드 매도 물타기 0.1랏 5구간 손절6  일반 물타기 (손절 KTR 배수) - '손실5%' 로 쓰면 손실 %로 손절 자동
+#     물타기는 구간 수를 빼면 자동 (손절선과 최소 여유를 두고 증거금 안에서 가장 많이)
 #     더 넣을 수 있는 것: 아시아/유로/미장, 2분/5분/10분/1시간/2시간 (기본: 지금 장 · 2분), 차등, oanda, ktr=62.4, #계좌번호
 #   → 미리보기 + [주문 실행] 버튼 (지금 시세로 다시 계산해서 주문, 거래 잠금 중이면 거절)
 #   /grids                    진행 중인 구간매매 + [대기 주문 취소] [전부 청산]
@@ -28,6 +29,7 @@ HELP = ("<b>/grid 구간매매</b>\n"
         "• <code>/grid 나스닥 매수 5% 5구간</code> - KTR 거래: 손실 5% 안에서 구간마다 랏 계산\n"
         "• <code>/grid 골드 매도 물타기 0.1랏 5구간 손절6</code> - 일반 물타기: 같은 랏, 손절 6 KTR\n"
         "• <code>/grid 골드 매도 물타기 0.1랏 5구간 손실5%</code> - 손절을 손실 %로 자동\n"
+        "• <code>/grid 골드 매도 물타기 0.1랏 손실5%</code> - 구간 수도 자동 (손절선과 여유를 두고 가장 많이)\n"
         "더 넣을 수 있는 것: <code>아시아/유로/미장</code> <code>2분/5분/10분/1시간/2시간</code> (기본: 지금 장 · 2분), "
         "<code>차등</code> (KTR 거래 랏 배분), <code>oanda</code>, <code>ktr=62.4</code> (직접), <code>#계좌번호</code>\n"
         "미리보기를 보고 <b>주문 실행</b>을 눌러야 주문합니다. <code>/grid</code> 만 보내면 버튼으로 하나씩 고릅니다.\n"
@@ -124,12 +126,32 @@ def parse(args: str) -> dict:
     return o
 
 
+def _opts_text(p: dict) -> str:
+    """일반 물타기 구간 수별 비교 (자동 N 근처만)"""
+    o = p.get("options") or []
+    if not o:
+        return ""
+    cur = p.get("n") if p.get("levels") else None
+    c = (cur or p.get("n_auto") or len(o)) - 1
+    lo = max(0, min(c - 3, len(o) - 7)) if len(o) > 7 else 0
+    rows = [" " + _pad("N", 3) + _pad("손절KTR", 8) + _pad("여유", 6) + _pad("총랏", 6) + _pad("손실", 9)]
+    for r in o[lo:lo + 7]:
+        mark = "▶" if r["n"] == cur else ("*" if r["n"] == p.get("n_auto") else " ")
+        if not r["ok"]:
+            rows.append(mark + _pad(str(r["n"]), 3) + "  손절선 안쪽 - 불가")
+            continue
+        rows.append(mark + _pad(str(r["n"]), 3) + _pad(f"{r['stop_ktr']:.2f}", 8) + _pad(f"{r['gap']:.2f}" + ("" if r["gap_ok"] else "!"), 6)
+                    + _pad(f"{r['total_lot']:g}", 6) + _pad(f"{-r['total_loss']:,.0f}", 9) + ("" if r["margin_ok"] else " 증거금X"))
+    return (f"구간 수별 (* 자동 · ! 여유 {p.get('min_gap', 1):g} KTR 미만)\n<pre>" + html.escape("\n".join(rows)) + "</pre>")
+
+
 def _plan_text(p: dict, info: str) -> str:
     d = p.get("digits") or 2
     rows = [f"{lv['no']:>2} {_fmt(lv['price'], d):>11} {lv['lot']:>5.2f}lot {-lv['loss']:>9,.2f}" for lv in p["levels"]]
     lines = [f"🧱 <b>구간매매 미리보기</b> · {grid.MODE_KR.get(p['mode'], p['mode'])}"
              + (" (차등손실)" if p["mode"] == "ktr" and p.get("method") == "half" else ""),
-             f"<b>{html.escape(p['symbol'])} {'매수' if p['side'] == 'buy' else '매도'}</b> · KTR {_k(p['ktr'])} {html.escape(info)} × {p['n']}구간",
+             f"<b>{html.escape(p['symbol'])} {'매수' if p['side'] == 'buy' else '매도'}</b> · KTR {_k(p['ktr'])} {html.escape(info)} × {p['n']}구간"
+             + (" (자동)" if p.get("n_is_auto") else ""),
              "<pre>" + html.escape(" #" + _pad("가격", 12) + _pad("랏", 9) + _pad("손절손실", 10)) + "\n" + "\n".join(rows) + "</pre>",
              f"🛑 손절 <b>{_fmt(p['sl'], d)}</b> (첫 진입에서 {p['stop_ktr']:.2f} KTR)",
              f"다 체결되고 손절이면 <b>{-p['total_loss']:,.2f}</b>"
@@ -138,6 +160,8 @@ def _plan_text(p: dict, info: str) -> str:
              f"필요 증거금 {_fmt(p.get('margin_total'))} / 여유 {_fmt(p.get('margin_free'))}"
              + (f" · 손실 예산 {_fmt(p.get('budget'))}" if p["mode"] == "ktr" else "")]
     lines += [f"⚠ {html.escape(w)}" for w in p.get("warnings") or []]
+    if p.get("options"):
+        lines.append(_opts_text(p))
     lines.append(f"<i>지금 {'매수가' if p['side'] == 'buy' else '매도가'} {_fmt(p['entry'], d)} 기준 · 주문할 때 지금 시세로 다시 계산 · 10분 안에 눌러야 합니다</i>")
     return "\n".join(lines)
 
@@ -156,7 +180,7 @@ async def cmd_grid(live, client, token, chat_id: str, args: str) -> None:
         miss.append("종목 (예: 나스닥)")
     if not b["side"]:
         miss.append("매수/매도")
-    if not b.get("n"):
+    if not b.get("n") and b["mode"] != "avg":          # 물타기는 빼면 자동
         miss.append("구간 수 (예: 5구간)")
     if b["mode"] == "ktr" and not b.get("risk_pct"):
         miss.append("손실 % (예: 5%)")
@@ -183,6 +207,10 @@ async def cmd_grid(live, client, token, chat_id: str, args: str) -> None:
             b["ktr"] = k["ktr"]
             info = f"({k['session_name']} {TF_KR[o['tf']]}봉{' · OANDA' if o['src'] == 'oanda' else ''})"
         p = await grid.make_plan(acc.id, b)
+    except grid.GridPlanInvalid as e:
+        await live._send(client, token, chat_id, f"❌ {html.escape(str(e))}\n" + _opts_text(e.data)
+                         + "\n<i>구간 수를 빼면 자동으로 정합니다.</i>")
+        return
     except grid.GridError as e:
         await live._send(client, token, chat_id, f"❌ {html.escape(str(e))}")
         return
@@ -395,7 +423,7 @@ FIELD_KR = {"risk": "손실 %", "lot": "구간마다 랏", "n": "구간 수", "s
 def _steps(w: dict) -> list[str]:
     s = (["acc"] if w.get("multi") else []) + ["sym", "side", "mode", "ktr"]
     if w.get("mode") == "avg":
-        s += ["lot", "n", "stop"]
+        s += ["lot", "stop", "n"]              # 손절을 먼저 정해야 구간 수 자동·비교가 됨
     else:
         s += ["risk", "n", "method"]
     return s + ["preview"]
@@ -430,7 +458,7 @@ def _summary(w: dict) -> str:
     if w.get("lot") is not None:
         bits.append(f"{w['lot']:g}랏씩")
     if w.get("n") is not None:
-        bits.append(f"{w['n']}구간")
+        bits.append("구간 수 자동" if w["n"] == "auto" else f"{w['n']}구간")
     if w.get("method"):
         bits.append("차등손실" if w["method"] == "half" else "동일손실")
     if w.get("stop_mode") == "ktr" and w.get("stop_ktr"):
@@ -494,6 +522,26 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
     elif step == "lot":
         q = "구간마다 넣을 랏을 고르세요."
         kb = _rows([_b(wid, f"{v:g}", "lot", v) for v in LOT_CHOICES], 6) + [[_b(wid, "✏️ 직접 입력", "input", "lot")]]
+    elif step == "n" and w.get("mode") == "avg":
+        acc = await _account(w.get("acc"))
+        try:
+            p = await grid.make_plan(acc.id, _wiz_body(w, n_auto=True))
+        except grid.GridPlanInvalid as e:
+            p = e.data
+            q = f"❌ {html.escape(str(e))}\n" + _opts_text(p) + "\n◀ 뒤로 가서 랏·손절을 바꾸세요."
+        except grid.GridError as e:
+            p, q = {}, f"❌ {html.escape(str(e))}"
+        else:
+            q = (f"구간 수를 고르세요. <b>자동이면 {p['n']}구간</b> (손절 {p['stop_ktr']:.2f} KTR, 마지막 구간과 여유 {p.get('min_gap', 1):g} KTR 이상, 증거금 안).\n"
+                 + _opts_text({**p, "levels": None}))      # 아직 고르기 전이라 ▶ 대신 * (자동)만
+        ok = [r["n"] for r in p.get("options") or [] if r["ok"]]
+        if p.get("n_auto"):
+            kb.append([_b(wid, f"✅ 자동 ({p['n_auto']}구간)", "n", "auto")])
+        if ok:
+            c = (p.get("n_auto") or ok[-1])
+            pick = [v for v in ok if abs(v - c) <= 3][:7]
+            kb += _rows([_b(wid, str(v) + ("*" if v == p.get("n_auto") else ""), "n", v) for v in pick], 7)
+        kb.append([_b(wid, "✏️ 직접 입력", "input", "n")])
     elif step == "n":
         q = "구간 수 (진입 횟수)를 고르세요. 첫 진입은 시장가, 나머지는 KTR 간격 리밋입니다."
         kb = _rows([_b(wid, str(v), "n", v) for v in N_CHOICES], 7) + [[_b(wid, "✏️ 직접 입력", "input", "n")]]
@@ -501,20 +549,19 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
         q = "랏 배분을 고르세요.\n• <b>동일손실</b>: 진입마다 손절 손실이 같게\n• <b>차등손실</b>: 남은 예산의 절반씩 (앞 진입이 크게)"
         kb = [[_b(wid, "동일손실", "method", "equal"), _b(wid, "차등손실", "method", "half")]]
     elif step == "stop":
-        n = int(w.get("n") or 1)
-        q = (f"손절을 정하세요.\n• <b>KTR 배수</b>: 첫 진입에서 몇 KTR (마지막 구간이 {n - 1} KTR 이라 그보다 커야 함)\n"
-             "• <b>손실 %</b>: 다 체결되고 손절이면 잔고의 이만큼 잃도록 자동")
-        kb = [[_b(wid, f"{v} KTR", "stop", f"k{v}") for v in range(n, n + 4)],
+        q = ("손절을 정하세요. 다음 단계에서 구간 수를 자동으로 정하거나 고릅니다.\n• <b>KTR 배수</b>: 첫 진입에서 몇 KTR\n"
+             "• <b>손실 %</b>: 다 체결되고 손절이면 잔고의 이만큼 잃도록 손절선 자동")
+        kb = [[_b(wid, f"{v} KTR", "stop", f"k{v}") for v in (3, 4, 5, 6, 8, 10)],
               [_b(wid, f"손실 {v:g}%", "stop", f"p{v}") for v in (1, 2, 3, 5)],
               [_b(wid, "✏️ KTR 배수", "input", "stop_ktr"), _b(wid, "✏️ 손실 %", "input", "stop_pct")]]
     else:  # preview
         acc = await _account(w.get("acc"))
-        body = {"symbol": w["sym"], "side": w["side"], "mode": w["mode"], "ktr": w["ktr"], "n": w["n"],
-                "method": w.get("method") or "equal", "lot": w.get("lot"),
-                "risk_pct": w.get("risk") if w["mode"] == "ktr" else w.get("stop_pct"),
-                "stop_mode": w.get("stop_mode") or "ktr", "stop_ktr": w.get("stop_ktr")}
+        body = _wiz_body(w)
         try:
             p = await grid.make_plan(acc.id, body)
+        except grid.GridPlanInvalid as e:
+            return (head + f"\n\n❌ {html.escape(str(e))}\n" + _opts_text(e.data) + "\n◀ 뒤로 가서 구간 수를 바꾸세요.",
+                    {"inline_keyboard": [nav]})
         except grid.GridError as e:
             return (head + f"\n\n❌ {html.escape(str(e))}\n값을 바꿔 주세요.",
                     {"inline_keyboard": [nav]})
@@ -523,6 +570,15 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
         return (f"계좌 {html.escape(str(w['acc']))}\n" + q,
                 {"inline_keyboard": [[_b(wid, "✅ 주문 실행", "go")], [_b(wid, "◀ 뒤로", "back"), _b(wid, "↻ 다시 계산", "noop2"), _b(wid, "✖ 그만", "quit")]]})
     return head + "\n\n" + q, {"inline_keyboard": kb + [nav]}
+
+
+def _wiz_body(w: dict, n_auto: bool = False) -> dict:
+    auto = n_auto or w.get("n") == "auto"
+    return {"symbol": w["sym"], "side": w["side"], "mode": w["mode"], "ktr": w["ktr"],
+            "n": None if auto else w.get("n"), "n_auto": auto and w["mode"] == "avg",
+            "method": w.get("method") or "equal", "lot": w.get("lot"),
+            "risk_pct": w.get("risk") if w["mode"] == "ktr" else w.get("stop_pct"),
+            "stop_mode": w.get("stop_mode") or "ktr", "stop_ktr": w.get("stop_ktr")}
 
 
 async def _wiz_show(live, client, token, chat_id, wid: str) -> None:
@@ -641,7 +697,7 @@ async def wiz_button(live, client, token, chat_id: str, data: str, message_id) -
         if field == "sym":
             w.pop("table", None)
     elif field in ("risk", "lot", "n"):
-        w[field] = int(float(value)) if field == "n" else float(value)
+        w[field] = "auto" if value == "auto" else (int(float(value)) if field == "n" else float(value))
         changed = [field]
     else:
         return ""

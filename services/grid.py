@@ -45,6 +45,13 @@ class GridError(Exception):
     pass
 
 
+class GridPlanInvalid(GridError):
+    """직접 넣은 구간 수가 손절선 밖으로 나가는 등 - 미리보기에서는 N별 비교표와 함께 보여줌 (주문은 거절)"""
+    def __init__(self, msg: str, data: dict):
+        super().__init__(msg)
+        self.data = data
+
+
 # ── 장 시작 시각 ──
 def _broker_now(now: datetime) -> datetime:
     return now.astimezone(NY).replace(tzinfo=None) + timedelta(hours=7)
@@ -196,22 +203,47 @@ def _floor_step(v: float, step: float) -> float:
     return round(math.floor(v / step + 1e-9) * step, 8)
 
 
-def build_plan(*, mode: str, side: str, entry: float, ktr: float, n: int, point_value: float,
+def avg_options(*, lot: float, point_value: float, ktr: float, stop_mode: str, stop_ktr: float | None,
+                budget: float | None, equity: float, margin_per_lot: float | None, margin_free: float | None,
+                min_gap: float) -> tuple[list[dict], int | None]:
+    """일반 물타기: 구간 수 N 마다 손절 거리·여유·손실·증거금 + 자동 N.
+    자동 N = 마지막 구간과 손절선 사이가 min_gap KTR 이상이고, 다 체결돼도 여유 증거금 안인 가장 큰 N.
+    손실 % 방식이면 손실은 N과 상관없이 예산 그대로 - N을 늘릴수록 손절선이 가까워짐."""
+    rows = []
+    for n in range(1, MAX_LEVELS + 1):
+        s = budget / (lot * point_value * ktr * n) + (n - 1) / 2 if stop_mode == "pct" else stop_ktr
+        gap = s - (n - 1)                                  # 마지막 구간 → 손절선 (KTR)
+        loss = lot * point_value * ktr * (n * s - n * (n - 1) / 2)
+        margin = margin_per_lot * lot * n if margin_per_lot else None
+        rows.append({"n": n, "stop_ktr": s, "gap": gap, "total_lot": round(lot * n, 8), "total_loss": loss,
+                     "loss_pct": loss / equity * 100 if equity else None, "margin": margin,
+                     "ok": gap > 1e-9, "gap_ok": gap >= min_gap - 1e-9,
+                     "margin_ok": margin is None or margin_free is None or margin <= margin_free})
+        if gap <= 1e-9:
+            break                                          # 여기부터는 손절선 밖 - 한 줄만 보여주고 끝
+    auto = max((r["n"] for r in rows if r["ok"] and r["gap_ok"] and r["margin_ok"]), default=None)
+    return rows, auto
+
+
+def build_plan(*, mode: str, side: str, entry: float, ktr: float, n: int | None, point_value: float,
                margin_per_lot: float | None, equity: float, digits: int,
                vol_min: float, vol_step: float, vol_max: float,
                risk_pct: float | None = None, method: str = "equal",
-               lot: float | None = None, stop_mode: str = "ktr", stop_ktr: float | None = None) -> dict:
-    """구간별 가격·랏·손절 손실. point_value = 1랏이 가격 1만큼 움직일 때 손익(계좌 통화)"""
+               lot: float | None = None, stop_mode: str = "ktr", stop_ktr: float | None = None,
+               n_auto: bool = False, min_gap: float = 1.0, margin_free: float | None = None) -> dict:
+    """구간별 가격·랏·손절 손실. point_value = 1랏이 가격 1만큼 움직일 때 손익(계좌 통화)
+    일반 물타기는 n_auto 면 구간 수를 자동으로 정함 (avg_options)"""
     side = "buy" if side.lower().startswith("b") else "sell"
     sgn = -1 if side == "buy" else 1                     # 다음 구간 방향 (매수는 아래로)
     if not (ktr > 0):
         raise GridError("KTR 값이 0 입니다.")
-    if not (1 <= n <= MAX_LEVELS):
+    n_auto = bool(n_auto and mode == "avg")
+    if not n_auto and not (n and 1 <= n <= MAX_LEVELS):
         raise GridError(f"구간 수는 1~{MAX_LEVELS} 입니다.")
     if point_value <= 0:
         raise GridError("이 종목의 1랏 손익을 계산하지 못했습니다.")
     warns: list[str] = []
-    prices = [entry + sgn * ktr * i for i in range(n)]
+    extra: dict = {}
 
     if mode == "ktr":
         if not (risk_pct and risk_pct > 0):
@@ -238,24 +270,49 @@ def build_plan(*, mode: str, side: str, entry: float, ktr: float, n: int, point_
         lv = min(max(_floor_step(lot, vol_step), vol_min), vol_max)
         if abs(lv - lot) > 1e-9:
             warns.append(f"랏을 브로커 단위에 맞춰 {lv:g}로 고쳤습니다.")
-        lots = [lv] * n
+        budget = None
         if stop_mode == "pct":
             if not (risk_pct and risk_pct > 0):
                 raise GridError("손실 %를 넣으세요.")
             budget = equity * risk_pct / 100
-            stop_dist = budget / (lv * point_value * n) + ktr * (n - 1) / 2
-            if stop_dist <= ktr * (n - 1):
-                need = lv * point_value * ktr * n * (n - 1) / 2 / equity * 100 if equity else 0
-                raise GridError(f"손실 {risk_pct:g}%로는 손절이 마지막 구간보다 안쪽에 옵니다. "
-                                f"손실 %를 {need:.2f}% 보다 크게 하거나 랏·구간 수를 줄이세요.")
+        elif not (stop_ktr and stop_ktr > 0):
+            raise GridError("손절 거리(KTR 배수)를 넣으세요.")
+        opts, auto = avg_options(lot=lv, point_value=point_value, ktr=ktr, stop_mode=stop_mode, stop_ktr=stop_ktr,
+                                 budget=budget, equity=equity, margin_per_lot=margin_per_lot, margin_free=margin_free,
+                                 min_gap=min_gap)
+        gap_max = max((r["n"] for r in opts if r["ok"] and r["gap_ok"]), default=None)
+        info = {"options": opts, "n_auto": auto, "min_gap": min_gap, "n_is_auto": n_auto}
+        what = f"손실 {risk_pct:g}%" if stop_mode == "pct" else f"손절 {stop_ktr:g} KTR"
+        if n_auto:
+            if auto is None:
+                if gap_max is None:
+                    raise GridPlanInvalid(
+                        f"{what}로는 1구간만 넣어도 손절선이 {min_gap:g} KTR 보다 가깝습니다. "
+                        + ("손실 %를 늘리거나 랏을 줄이세요." if stop_mode == "pct" else f"손절을 {min_gap:g} KTR 이상으로 하세요."), info)
+                raise GridPlanInvalid("여유 증거금으로는 1구간도 넣을 수 없습니다. 랏을 줄이세요.", info)
+            n = auto
+            if gap_max and gap_max > auto:
+                warns.append(f"증거금 때문에 {auto}구간으로 줄였습니다 (손절 여유만 보면 {gap_max}구간까지 됨).")
+            elif auto == MAX_LEVELS:
+                warns.append(f"구간 수는 최대 {MAX_LEVELS} 입니다.")
         else:
-            if not (stop_ktr and stop_ktr > 0):
-                raise GridError("손절 거리(KTR 배수)를 넣으세요.")
-            stop_dist = stop_ktr * ktr
-            if stop_dist <= ktr * (n - 1):
-                raise GridError(f"손절({stop_ktr:g} KTR)이 마지막 구간({n - 1} KTR)보다 안쪽입니다. {n - 1} 보다 크게 넣으세요.")
+            row = opts[n - 1] if n <= len(opts) else None
+            if row is None or not row["ok"]:
+                s_n = budget / (lv * point_value * ktr * n) + (n - 1) / 2 if stop_mode == "pct" else stop_ktr
+                raise GridPlanInvalid(
+                    f"{n}구간이면 손절선({s_n:.2f} KTR)이 마지막 구간({n - 1} KTR)보다 안쪽입니다. "
+                    + (f"{what}로는 {gap_max}구간까지 됩니다 (손절 여유 {min_gap:g} KTR)." if gap_max else "구간 수를 줄이세요."), info)
+            if not row["gap_ok"]:
+                warns.append(f"마지막 구간이 손절선에서 {row['gap']:.2f} KTR 밖에 안 떨어져 있습니다"
+                             + (f" (자동이면 {auto}구간)." if auto else "."))
+        s = opts[n - 1]["stop_ktr"]
+        stop_dist = s * ktr
+        lots = [lv] * n
+        extra = info
     else:
         raise GridError("거래 방식이 잘못됐습니다.")
+
+    prices = [entry + sgn * ktr * i for i in range(n)]
 
     sl = entry + sgn * stop_dist
     levels, cum_lot, cum_px, cum_loss = [], 0.0, 0.0, 0.0
@@ -281,6 +338,7 @@ def build_plan(*, mode: str, side: str, entry: float, ktr: float, n: int, point_
     }
     if mode == "ktr":
         out["budget"] = equity * risk_pct / 100
+    out.update(extra)
     return out
 
 
@@ -327,12 +385,23 @@ def _f(v) -> float | None:
         raise GridError(f"숫자가 아닙니다: {v}")
 
 
+def min_gap() -> float:
+    """일반 물타기 자동 구간 수: 마지막 구간과 손절선 사이 최소 여유 (KTR, 관리 화면 설정)"""
+    try:
+        from services.settings_service import get_settings
+        return float((get_settings().get("grid") or {}).get("min_gap_ktr") or 1.0)
+    except Exception:
+        return 1.0
+
+
 async def make_plan(account_id: int, body: dict) -> dict:
     """body: symbol, side, mode(ktr|avg), ktr, n, risk_pct, method, lot, stop_mode, stop_ktr - 지금 시세 기준 계획"""
     from services.worker_client import worker_get
     symbol = str(body.get("symbol") or "")
     side = "buy" if str(body.get("side", "buy")).lower().startswith("b") else "sell"
     ktr, n = _f(body.get("ktr")), int(_f(body.get("n")) or 0)
+    mode = str(body.get("mode") or "ktr")
+    n_auto = mode == "avg" and (bool(body.get("n_auto")) or not n)       # 일반 물타기는 구간 수를 비우면 자동
     if not symbol or not ktr:
         raise GridError("종목과 KTR 값을 넣으세요.")
     try:
@@ -350,7 +419,8 @@ async def make_plan(account_id: int, body: dict) -> dict:
         raise GridError(_detail(e))
     equity = float(c.get("equity") or c.get("balance") or 0)
     plan = build_plan(
-        mode=str(body.get("mode") or "ktr"), side=side, entry=entry, ktr=ktr, n=n, point_value=abs(float(c.get("profit") or 0)),
+        n_auto=n_auto, min_gap=min_gap(), margin_free=c.get("margin_free"),
+        mode=mode, side=side, entry=entry, ktr=ktr, n=n, point_value=abs(float(c.get("profit") or 0)),
         margin_per_lot=c.get("margin"), equity=equity, digits=int(c.get("digits") or 2),
         vol_min=float(c.get("volume_min") or 0.01), vol_step=float(c.get("volume_step") or 0.01),
         vol_max=float(c.get("volume_max") or 100), risk_pct=_f(body.get("risk_pct")),

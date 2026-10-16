@@ -314,7 +314,8 @@ async def read_setting_defaults():
     d.pop("oanda", None)
     return {"lock": d["lock"], "telegram": tg, "guidelines": d["guidelines"],
             "access": {"session_days": d["access"]["session_days"]},
-            "admin_remote": {"session_days": d["admin_remote"]["session_days"]}, "events": d["events"]}
+            "admin_remote": {"session_days": d["admin_remote"]["session_days"]}, "events": d["events"],
+            "grid": d["grid"]}
 
 
 @router.put("/api/settings")
@@ -349,6 +350,11 @@ async def write_settings(body: dict):
             patch["oanda"]["token"] = ""
         if "env" in oa:
             patch["oanda"]["env"] = oa["env"]
+
+    if "grid" in body:
+        gr = body["grid"] or {}
+        if "min_gap_ktr" in gr:
+            patch["grid"] = {"min_gap_ktr": gr["min_gap_ktr"]}
 
     if "events" in body:
         ev = body["events"] or {}
