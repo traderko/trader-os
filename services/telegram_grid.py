@@ -6,6 +6,7 @@
 #   /grid 나스닥 매수 5% 5구간              KTR 거래 (손실 %로 랏 계산, 손절 = 마지막 구간 뒤 1 KTR - '여유0.5' 처럼 바꿈)
 #   /grid 골드 매도 물타기 0.1랏 5구간 손절6  일반 물타기 (손절 KTR 배수) - '손실5%' 로 쓰면 손실 %로 손절 자동
 #     물타기는 구간 수를 빼면 자동 (손절선과 최소 여유를 두고 증거금 안에서 가장 많이)
+#     손절가20430 - 주요 고점·저점을 손절가로 (KTR 거래·물타기 둘 다), 구간 수 자동
 #     더 넣을 수 있는 것: 아시아/유로/미장, 2분/5분/10분/1시간/2시간 (기본: 지금 장 · 2분), 차등, oanda, ktr=62.4, #계좌번호
 #   → 미리보기 + [주문 실행] 버튼 (지금 시세로 다시 계산해서 주문, 거래 잠금 중이면 거절)
 #   /grids                    진행 중인 구간매매 + [대기 주문 취소] [전부 청산]
@@ -31,6 +32,7 @@ HELP = ("<b>/grid 구간매매</b>\n"
         "• <code>/grid 골드 매도 물타기 0.1랏 5구간 손절6</code> - 일반 물타기: 같은 랏, 손절 6 KTR\n"
         "• <code>/grid 골드 매도 물타기 0.1랏 5구간 손실5%</code> - 손절을 손실 %로 자동\n"
         "• <code>/grid 골드 매도 물타기 0.1랏 손실5%</code> - 구간 수도 자동 (손절선과 여유를 두고 가장 많이)\n"
+        "• <code>/grid 나스닥 매수 1% 손절가20430</code> - 주요 고점·저점을 손절가로, 그 안에 들어가는 구간 수 자동 (물타기도 됨)\n"
         "더 넣을 수 있는 것: <code>아시아/유로/미장</code> <code>2분/5분/10분/1시간/2시간</code> (기본: 지금 장 · 2분), "
         "<code>차등</code> (KTR 거래 랏 배분), <code>oanda</code>, <code>ktr=62.4</code> (직접), <code>#계좌번호</code>\n"
         "미리보기를 보고 <b>주문 실행</b>을 눌러야 주문합니다. <code>/grid</code> 만 보내면 버튼으로 하나씩 고릅니다.\n"
@@ -113,6 +115,9 @@ def parse(args: str) -> dict:
             b["n"] = int(m.group(1))
         elif m := re.fullmatch(r"(\d*\.?\d+)(?:랏|lot|lots)", w):
             b["lot"] = float(m.group(1))
+        elif m := re.fullmatch(r"(?:손절가|sl=|@)(\d*\.?\d+)", w):
+            b["stop_price"] = float(m.group(1))
+            b["stop_mode"] = "price"
         elif m := re.fullmatch(r"(?:손절여유|여유|gap)(\d*\.?\d+)(?:ktr)?", w):
             b["stop_gap"] = float(m.group(1))
         elif m := re.fullmatch(r"(?:손절|sl|stop)(\d+(?:\.\d+)?)(?:ktr)?", w):
@@ -124,7 +129,7 @@ def parse(args: str) -> dict:
             o["bad"].append(raw)
     if pct_seen is not None:
         b["risk_pct"] = pct_seen
-        if b["mode"] == "avg" and "stop_ktr" not in b:
+        if b["mode"] == "avg" and "stop_ktr" not in b and b.get("stop_mode") != "price":
             b["stop_mode"] = "pct"
     return o
 
@@ -156,8 +161,9 @@ def _plan_text(p: dict, info: str) -> str:
              f"<b>{html.escape(p['symbol'])} {'매수' if p['side'] == 'buy' else '매도'}</b> · KTR {_k(p['ktr'])} {html.escape(info)} × {p['n']}구간"
              + (" (자동)" if p.get("n_is_auto") else ""),
              "<pre>" + html.escape(" #" + _pad("가격", 12) + _pad("랏", 9) + _pad("손절손실", 10)) + "\n" + "\n".join(rows) + "</pre>",
-             f"🛑 손절 <b>{_fmt(p['sl'], d)}</b> (첫 진입에서 {p['stop_ktr']:.2f} KTR"
-             + (f" · 마지막 구간 뒤 {p['stop_gap']:g} KTR)" if p.get("stop_gap") else ")"),
+             f"🛑 손절{'가' if p.get('stop_price') else ''} <b>{_fmt(p['sl'], d)}</b> (첫 진입에서 {p['stop_ktr']:.2f} KTR"
+             + (f" · 마지막 구간과 {p['stop_ktr'] - (p['n'] - 1):.2f} KTR)" if p.get("stop_price")
+                else f" · 마지막 구간 뒤 {p['stop_gap']:g} KTR)" if p.get("stop_gap") else ")"),
              f"다 체결되고 손절이면 <b>{-p['total_loss']:,.2f}</b>"
              + (f" ({-p['total_loss_pct']:.2f}%)" if p.get("total_loss_pct") is not None else "")
              + f" · 총 {p['total_lot']:g}lot · 평단 {_fmt(p['levels'][-1]['avg'], d)}",
@@ -184,7 +190,7 @@ async def cmd_grid(live, client, token, chat_id: str, args: str) -> None:
         miss.append("종목 (예: 나스닥)")
     if not b["side"]:
         miss.append("매수/매도")
-    if not b.get("n") and b["mode"] != "avg":          # 물타기는 빼면 자동
+    if not b.get("n") and b["mode"] != "avg" and b.get("stop_mode") != "price":   # 물타기·손절가는 빼면 자동
         miss.append("구간 수 (예: 5구간)")
     if b["mode"] == "ktr" and not b.get("risk_pct"):
         miss.append("손실 % (예: 5%)")
@@ -192,7 +198,7 @@ async def cmd_grid(live, client, token, chat_id: str, args: str) -> None:
         if not b.get("lot"):
             miss.append("랏 (예: 0.1랏)")
         if b["stop_mode"] == "ktr" and not b.get("stop_ktr"):
-            miss.append("손절 (예: 손절6 또는 손실5%)")
+            miss.append("손절 (예: 손절6, 손실5%, 손절가20430)")
     if miss or o["bad"]:
         msg = ("빠진 것: " + ", ".join(miss) + "\n" if miss else "") + \
               (f"모르는 말: {html.escape(' '.join(o['bad']))}\n" if o["bad"] else "")
@@ -420,7 +426,7 @@ WIZ_TTL = 1800
 RISK_CHOICES = [0.5, 1, 2, 3, 5, 10]
 N_CHOICES = [2, 3, 4, 5, 6, 8, 10]
 LOT_CHOICES = [0.01, 0.05, 0.1, 0.2, 0.5, 1]
-FIELD_KR = {"risk": "손실 %", "lot": "구간마다 랏", "n": "구간 수", "stop_ktr": "손절 (KTR 배수)", "stop_pct": "손실 % (손절 자동)",
+FIELD_KR = {"risk": "손실 %", "lot": "구간마다 랏", "n": "구간 수", "stop_ktr": "손절 (KTR 배수)", "stop_pct": "손실 % (손절 자동)", "stop_price": "손절가 (주요 고점·저점·매물대)",
             "ktr": "KTR 값"}
 
 
@@ -435,7 +441,8 @@ def _steps(w: dict) -> list[str]:
 
 def _done(w: dict, step: str) -> bool:
     if step == "stop":
-        return (w.get("stop_mode") == "ktr" and bool(w.get("stop_ktr"))) or (w.get("stop_mode") == "pct" and bool(w.get("stop_pct")))
+        return ((w.get("stop_mode") == "ktr" and bool(w.get("stop_ktr"))) or (w.get("stop_mode") == "pct" and bool(w.get("stop_pct")))
+                or (w.get("stop_mode") == "price" and bool(w.get("stop_price"))))
     if step == "preview":
         return False
     return w.get(step) is not None
@@ -467,6 +474,8 @@ def _summary(w: dict) -> str:
         bits.append("차등손실" if w["method"] == "half" else "동일손실")
     if w.get("stop_mode") == "ktr" and w.get("stop_ktr"):
         bits.append(f"손절 {w['stop_ktr']:g} KTR")
+    if w.get("stop_mode") == "price" and w.get("stop_price"):
+        bits.append(f"손절가 {w['stop_price']:g}")
     if w.get("stop_mode") == "pct" and w.get("stop_pct"):
         bits.append(f"손절: 손실 {w['stop_pct']:g}%")
     return " · ".join(bits)
@@ -526,7 +535,7 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
     elif step == "lot":
         q = "구간마다 넣을 랏을 고르세요."
         kb = _rows([_b(wid, f"{v:g}", "lot", v) for v in LOT_CHOICES], 6) + [[_b(wid, "✏️ 직접 입력", "input", "lot")]]
-    elif step == "n" and w.get("mode") == "avg":
+    elif step == "n" and (w.get("mode") == "avg" or w.get("stop_mode") == "price"):
         acc = await _account(w.get("acc"))
         try:
             p = await grid.make_plan(acc.id, _wiz_body(w, n_auto=True))
@@ -536,7 +545,9 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
         except grid.GridError as e:
             p, q = {}, f"❌ {html.escape(str(e))}"
         else:
-            q = (f"구간 수를 고르세요. <b>자동이면 {p['n']}구간</b> (손절 {p['stop_ktr']:.2f} KTR, 마지막 구간과 여유 {p.get('min_gap', 1):g} KTR 이상, 증거금 안).\n"
+            q = (f"구간 수를 고르세요. <b>자동이면 {p['n']}구간</b> ("
+                 + (f"손절가 {_fmt(p['sl'], p.get('digits') or 2)} = " if p.get("stop_price") else "손절 ")
+                 + f"{p['stop_ktr']:.2f} KTR, 마지막 구간과 여유 {p.get('min_gap', 1):g} KTR 이상, 증거금 안).\n"
                  + _opts_text({**p, "levels": None}))      # 아직 고르기 전이라 ▶ 대신 * (자동)만
         ok = [r["n"] for r in p.get("options") or [] if r["ok"]]
         if p.get("n_auto"):
@@ -547,8 +558,10 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
             kb += _rows([_b(wid, str(v) + ("*" if v == p.get("n_auto") else ""), "n", v) for v in pick], 7)
         kb.append([_b(wid, "✏️ 직접 입력", "input", "n")])
     elif step == "n":
-        q = "구간 수 (진입 횟수)를 고르세요. 첫 진입은 시장가, 나머지는 KTR 간격 리밋입니다."
-        kb = _rows([_b(wid, str(v), "n", v) for v in N_CHOICES], 7) + [[_b(wid, "✏️ 직접 입력", "input", "n")]]
+        q = ("구간 수 (진입 횟수)를 고르세요. 첫 진입은 시장가, 나머지는 KTR 간격 리밋입니다.\n"
+             "주요 고점·저점을 손절로 보려면 <b>📍 손절가로</b> - 그 안에 들어가는 구간 수를 자동으로 계산합니다.")
+        kb = _rows([_b(wid, str(v), "n", v) for v in N_CHOICES], 7) + [[_b(wid, "✏️ 직접 입력", "input", "n"),
+                                                                       _b(wid, "📍 손절가로", "input", "stop_price")]]
     elif step == "method":
         q = "랏 배분을 고르세요.\n• <b>동일손실</b>: 진입마다 손절 손실이 같게\n• <b>차등손실</b>: 남은 예산의 절반씩 (앞 진입이 크게)"
         kb = [[_b(wid, "동일손실", "method", "equal"), _b(wid, "차등손실", "method", "half")]]
@@ -557,7 +570,8 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
              "• <b>손실 %</b>: 다 체결되고 손절이면 잔고의 이만큼 잃도록 손절선 자동")
         kb = [[_b(wid, f"{v} KTR", "stop", f"k{v}") for v in (3, 4, 5, 6, 8, 10)],
               [_b(wid, f"손실 {v:g}%", "stop", f"p{v}") for v in (1, 2, 3, 5)],
-              [_b(wid, "✏️ KTR 배수", "input", "stop_ktr"), _b(wid, "✏️ 손실 %", "input", "stop_pct")]]
+              [_b(wid, "✏️ KTR 배수", "input", "stop_ktr"), _b(wid, "✏️ 손실 %", "input", "stop_pct")],
+              [_b(wid, "📍 손절가 (주요 고점·저점)", "input", "stop_price")]]
     else:  # preview
         acc = await _account(w.get("acc"))
         body = _wiz_body(w)
@@ -574,7 +588,7 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
         gaps = []
         if w["mode"] == "ktr":                 # 손절 여유 (마지막 구간 뒤 KTR) 바로 바꾸기
             cur = p.get("stop_gap")
-            gaps = [[_b(wid, "손절 여유", "noop")] + [_b(wid, ("✓ " if cur == v else "") + f"{v:g}", "gap", v) for v in (0.5, 1, 1.5)]]
+            gaps = [[_b(wid, "최소 여유" if w.get("stop_mode") == "price" else "손절 여유", "noop")] + [_b(wid, ("✓ " if cur == v else "") + f"{v:g}", "gap", v) for v in (0.5, 1, 1.5)]]
         return (f"계좌 {html.escape(str(w['acc']))}\n" + q,
                 {"inline_keyboard": gaps + [[_b(wid, "✅ 주문 실행", "go")], [_b(wid, "◀ 뒤로", "back"), _b(wid, "↻ 다시 계산", "noop2"), _b(wid, "✖ 그만", "quit")]]})
     return head + "\n\n" + q, {"inline_keyboard": kb + [nav]}
@@ -587,7 +601,8 @@ def _wiz_body(w: dict, n_auto: bool = False) -> dict:
             "method": w.get("method") or "equal", "lot": w.get("lot"),
             "risk_pct": w.get("risk") if w["mode"] == "ktr" else w.get("stop_pct"),
             "stop_mode": w.get("stop_mode") or "ktr", "stop_ktr": w.get("stop_ktr"),
-            "stop_gap": w.get("stop_gap") if w["mode"] == "ktr" else None}
+            "stop_gap": w.get("stop_gap") if w["mode"] == "ktr" else None,
+            "stop_price": w.get("stop_price") if w.get("stop_mode") == "price" else None}
 
 
 async def _wiz_show(live, client, token, chat_id, wid: str) -> None:
@@ -741,6 +756,9 @@ async def wiz_text(live, client, token, chat_id: str, text: str) -> None:
     elif field == "stop_pct":
         w["stop_mode"], w["stop_pct"] = "pct", v
         changed = ["stop_mode", "stop_pct"]
+    elif field == "stop_price":
+        w["stop_mode"], w["stop_price"] = "price", v
+        changed = ["stop_mode", "stop_price"]
     else:
         w[field] = int(v) if field == "n" else v
         changed = [field]

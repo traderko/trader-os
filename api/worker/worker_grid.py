@@ -3,7 +3,7 @@
 # 구간매매 주문 - 첫 진입 시장가 + KTR 간격 리밋 주문, 모두 같은 손절가. (계산은 services/grid.py)
 # 이 워커가 붙어 있는 MT5 연결을 그대로 쓴다 (initialize/shutdown 하지 않음).
 #
-#   POST /grid/place   {symbol, side, ktr, lots[], stop_dist, magic, comment}
+#   POST /grid/place   {symbol, side, ktr, lots[], stop_dist, sl?, magic, comment}  sl 이 있으면 그 손절가 그대로
 #   GET  /grid/list    진행 중인 구간매매 (magic 71700000~71799999) - 포지션·대기 주문 묶어서
 #   POST /grid/close   {magic, pending_only} 대기 주문 취소 (+ 포지션 청산)
 
@@ -65,6 +65,12 @@ async def place(request: Request, body: dict):
         entry = tick.ask if buy else tick.bid
         sgn = -1 if buy else 1
         sl = round(entry + sgn * stop_dist, d)
+        if body.get("sl"):                       # 손절가를 직접 넣은 경우 - 그 가격 그대로 (지금 가격 반대쪽이어야 함)
+            sl = round(float(body["sl"]), d)
+            if (sl >= entry) if buy else (sl <= entry):
+                raise HTTPException(400, f"손절가 {sl:.{d}f} 가 지금 가격 {entry:.{d}f} 의 {'아래' if buy else '위'}가 아닙니다.")
+            stop_dist = abs(entry - sl)
+            lots = [lv for i, lv in enumerate(lots) if i * ktr < stop_dist]   # 시세가 움직여 손절 밖으로 나간 구간은 뺌
         # 손절이 스프레드·브로커 최소 거리보다 가까우면 주문 전에 멈춤
         min_dist = max(info.spread, info.trade_stops_level) * info.point
         if stop_dist <= min_dist:

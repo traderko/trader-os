@@ -231,15 +231,26 @@ def build_plan(*, mode: str, side: str, entry: float, ktr: float, n: int | None,
                risk_pct: float | None = None, method: str = "equal",
                lot: float | None = None, stop_mode: str = "ktr", stop_ktr: float | None = None,
                n_auto: bool = False, min_gap: float = 1.0, margin_free: float | None = None,
-               stop_gap: float = 1.0) -> dict:
+               stop_gap: float = 1.0, stop_price: float | None = None) -> dict:
     """구간별 가격·랏·손절 손실. point_value = 1랏이 가격 1만큼 움직일 때 손익(계좌 통화)
     KTR 거래 손절 = 마지막 구간에서 stop_gap KTR 더 간 곳 (첫 진입에서 (n-1+stop_gap) KTR)
+    stop_mode="price" 면 손절가(주요 고점·저점·매물대)를 직접 받고 구간 수를 자동으로 정함
+      KTR 거래: 마지막 구간과 손절가 사이가 stop_gap KTR 이상인 가장 큰 N (증거금 안)
+      일반 물타기: 손절 KTR 배수 = 손절가까지 거리 / KTR 로 바꿔서 avg_options
     일반 물타기는 n_auto 면 구간 수를 자동으로 정함 (avg_options)"""
     side = "buy" if side.lower().startswith("b") else "sell"
     sgn = -1 if side == "buy" else 1                     # 다음 구간 방향 (매수는 아래로)
     if not (ktr > 0):
         raise GridError("KTR 값이 0 입니다.")
-    n_auto = bool(n_auto and mode == "avg")
+    if stop_mode == "price":
+        if not (stop_price and stop_price > 0):
+            raise GridError("손절가를 넣으세요.")
+        d_price = (entry - stop_price) if side == "buy" else (stop_price - entry)
+        if d_price <= 0:
+            raise GridError(f"손절가({stop_price:,.{digits}f})가 {'지금 가격 위' if side == 'buy' else '지금 가격 아래'}입니다. "
+                            f"{'매수는 아래' if side == 'buy' else '매도는 위'}에 넣으세요.")
+        stop_ktr = d_price / ktr
+    n_auto = bool(n_auto and (mode == "avg" or stop_mode == "price"))
     if not n_auto and not (n and 1 <= n <= MAX_LEVELS):
         raise GridError(f"구간 수는 1~{MAX_LEVELS} 입니다.")
     if point_value <= 0:
@@ -253,22 +264,64 @@ def build_plan(*, mode: str, side: str, entry: float, ktr: float, n: int | None,
         if not (stop_gap and 0 < stop_gap <= 10):
             raise GridError("손절 여유(마지막 구간 뒤 KTR)는 0보다 크고 10 이하여야 합니다.")
         budget = equity * risk_pct / 100
-        stop_dist = (n - 1 + stop_gap) * ktr
         extra = {"stop_gap": stop_gap}
-        raw, left = [], budget
-        for i in range(n):
-            dist = stop_dist - i * ktr
-            alloc = budget / n if method == "equal" else (left if i == n - 1 else left / 2)
-            left -= alloc
-            raw.append(alloc / (dist * point_value))
-        lots = []
-        for v in raw:
-            lv = min(_floor_step(v, vol_step), vol_max)
-            if lv < vol_min:
-                lv = vol_min
-                if not any("최소 랏" in w for w in warns):
-                    warns.append(f"손실 %에 비해 랏이 작아 최소 랏({vol_min:g})으로 올린 구간이 있습니다 - 실제 손실이 조금 큽니다.")
-            lots.append(lv)
+
+        def ktr_lots(k: int, sd: float) -> tuple[list[float], bool]:
+            raw, left = [], budget
+            for i in range(k):
+                dist = sd - i * ktr
+                alloc = budget / k if method == "equal" else (left if i == k - 1 else left / 2)
+                left -= alloc
+                raw.append(alloc / (dist * point_value))
+            out, bumped = [], False
+            for v in raw:
+                lv = min(_floor_step(v, vol_step), vol_max)
+                if lv < vol_min:
+                    lv, bumped = vol_min, True
+                out.append(lv)
+            return out, bumped
+
+        if stop_mode == "price":                  # 손절가 고정 → 구간 수별 비교 + 자동 N
+            stop_dist = stop_ktr * ktr
+            opts = []
+            for k in range(1, MAX_LEVELS + 1):
+                gap = stop_ktr - (k - 1)
+                if gap <= 1e-9:
+                    opts.append({"n": k, "stop_ktr": stop_ktr, "gap": gap, "ok": False, "gap_ok": False, "margin_ok": False,
+                                 "total_lot": None, "total_loss": None, "loss_pct": None, "margin": None})
+                    break
+                ls, _ = ktr_lots(k, stop_dist)
+                tl = sum(ls)
+                loss = sum(lv * (stop_dist - i * ktr) * point_value for i, lv in enumerate(ls))
+                margin = margin_per_lot * tl if margin_per_lot else None
+                opts.append({"n": k, "stop_ktr": stop_ktr, "gap": gap, "ok": True, "gap_ok": gap >= stop_gap - 1e-9,
+                             "margin_ok": margin is None or margin_free is None or margin <= margin_free,
+                             "total_lot": round(tl, 8), "total_loss": loss, "loss_pct": loss / equity * 100 if equity else None,
+                             "margin": margin})
+            auto = max((r["n"] for r in opts if r["ok"] and r["gap_ok"] and r["margin_ok"]), default=None)
+            gap_max = max((r["n"] for r in opts if r["ok"] and r["gap_ok"]), default=None)
+            info = {"options": opts, "n_auto": auto, "min_gap": stop_gap, "n_is_auto": n_auto, "stop_price": stop_price}
+            extra.update(info)
+            if n_auto:
+                if auto is None:
+                    raise GridPlanInvalid(
+                        f"손절가까지 {stop_ktr:.2f} KTR 이라 1구간만 넣어도 손절 여유({stop_gap:g} KTR)가 안 됩니다. 손절가를 더 멀리 하거나 여유를 줄이세요."
+                        if gap_max is None else "여유 증거금으로는 1구간도 넣을 수 없습니다. 손실 %를 줄이세요.", info)
+                n = auto
+                if gap_max and gap_max > auto:
+                    warns.append(f"증거금 때문에 {auto}구간으로 줄였습니다 (손절 여유만 보면 {gap_max}구간까지 됨).")
+            else:
+                row = opts[n - 1] if n <= len(opts) else None
+                if row is None or not row["ok"]:
+                    raise GridPlanInvalid(f"{n}구간이면 마지막 구간({n - 1} KTR)이 손절가({stop_ktr:.2f} KTR)보다 멉니다. "
+                                          + (f"{gap_max}구간까지 됩니다 (손절 여유 {stop_gap:g} KTR)." if gap_max else "구간 수를 줄이세요."), info)
+                if not row["gap_ok"]:
+                    warns.append(f"마지막 구간이 손절가에서 {row['gap']:.2f} KTR 밖에 안 떨어져 있습니다" + (f" (자동이면 {auto}구간)." if auto else "."))
+        else:
+            stop_dist = (n - 1 + stop_gap) * ktr
+        lots, bumped = ktr_lots(n, stop_dist)
+        if bumped:
+            warns.append(f"손실 %에 비해 랏이 작아 최소 랏({vol_min:g})으로 올린 구간이 있습니다 - 실제 손실이 조금 큽니다.")
     elif mode == "avg":
         if not (lot and lot > 0):
             raise GridError("구간마다 넣을 랏을 넣으세요.")
@@ -276,6 +329,9 @@ def build_plan(*, mode: str, side: str, entry: float, ktr: float, n: int | None,
         if abs(lv - lot) > 1e-9:
             warns.append(f"랏을 브로커 단위에 맞춰 {lv:g}로 고쳤습니다.")
         budget = None
+        price_mode = stop_mode == "price"
+        if price_mode:
+            stop_mode = "ktr"                     # 손절가까지 거리를 KTR 배수로 바꿔 같은 계산
         if stop_mode == "pct":
             if not (risk_pct and risk_pct > 0):
                 raise GridError("손실 %를 넣으세요.")
@@ -287,7 +343,10 @@ def build_plan(*, mode: str, side: str, entry: float, ktr: float, n: int | None,
                                  min_gap=min_gap)
         gap_max = max((r["n"] for r in opts if r["ok"] and r["gap_ok"]), default=None)
         info = {"options": opts, "n_auto": auto, "min_gap": min_gap, "n_is_auto": n_auto}
-        what = f"손실 {risk_pct:g}%" if stop_mode == "pct" else f"손절 {stop_ktr:g} KTR"
+        if price_mode:
+            info["stop_price"] = stop_price
+        what = (f"손실 {risk_pct:g}%" if stop_mode == "pct" else
+                f"손절가({stop_ktr:.2f} KTR)" if price_mode else f"손절 {stop_ktr:g} KTR")
         if n_auto:
             if auto is None:
                 if gap_max is None:
@@ -319,7 +378,7 @@ def build_plan(*, mode: str, side: str, entry: float, ktr: float, n: int | None,
 
     prices = [entry + sgn * ktr * i for i in range(n)]
 
-    sl = entry + sgn * stop_dist
+    sl = stop_price if stop_mode == "price" or extra.get("stop_price") else entry + sgn * stop_dist
     levels, cum_lot, cum_px, cum_loss = [], 0.0, 0.0, 0.0
     for i, (p, lv) in enumerate(zip(prices, lots)):
         loss = lv * abs(sl - p) * point_value
@@ -415,7 +474,7 @@ async def make_plan(account_id: int, body: dict) -> dict:
     side = "buy" if str(body.get("side", "buy")).lower().startswith("b") else "sell"
     ktr, n = _f(body.get("ktr")), int(_f(body.get("n")) or 0)
     mode = str(body.get("mode") or "ktr")
-    n_auto = mode == "avg" and (bool(body.get("n_auto")) or not n)       # 일반 물타기는 구간 수를 비우면 자동
+    n_auto = (mode == "avg" or body.get("stop_mode") == "price") and (bool(body.get("n_auto")) or not n)   # 물타기·손절가는 구간 수를 비우면 자동
     if not symbol or not ktr:
         raise GridError("종목과 KTR 값을 넣으세요.")
     try:
@@ -434,7 +493,7 @@ async def make_plan(account_id: int, body: dict) -> dict:
     equity = float(c.get("equity") or c.get("balance") or 0)
     plan = build_plan(
         n_auto=n_auto, min_gap=min_gap(), margin_free=c.get("margin_free"),
-        stop_gap=_f(body.get("stop_gap")) or ktr_stop_gap(),
+        stop_gap=_f(body.get("stop_gap")) or ktr_stop_gap(), stop_price=_f(body.get("stop_price")),
         mode=mode, side=side, entry=entry, ktr=ktr, n=n, point_value=abs(float(c.get("profit") or 0)),
         margin_per_lot=c.get("margin"), equity=equity, digits=int(c.get("digits") or 2),
         vol_min=float(c.get("volume_min") or 0.01), vol_step=float(c.get("volume_step") or 0.01),
@@ -460,6 +519,7 @@ async def execute(db, acc, body: dict, via: str = "웹") -> dict:
     try:
         res = await worker_post(acc.id, "/grid/place", {
             "symbol": plan["symbol"], "side": plan["side"], "ktr": plan["ktr"], "stop_dist": plan["stop_dist"],
+            "sl": plan.get("stop_price"),         # 손절가를 직접 넣었으면 시세가 조금 움직여도 그 가격 그대로
             "lots": [lv["lot"] for lv in plan["levels"]], "magic": new_magic(plan["mode"]),
             "comment": "KTR" if plan["mode"] == "ktr" else "AVG"})
     except Exception as e:
