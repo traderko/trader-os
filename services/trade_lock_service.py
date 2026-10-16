@@ -47,6 +47,7 @@ REASON_PRIORITY = {
 }
 
 REASON_KR = {
+    "weekend": "주말",
     "restricted_window": "정기 재확인",
     "session_window": "집중 구간",
     "consec_loss": "연속손절",
@@ -89,6 +90,18 @@ def to_broker_wallclock(dt: datetime) -> datetime:
     """aware datetime → 브로커 서버 벽시계 시각 (naive)."""
     utc_dt = dt.astimezone(timezone.utc)
     return (utc_dt + timedelta(hours=Mt5Client._get_broker_offset(utc_dt))).replace(tzinfo=None)
+
+
+def weekend_end(now: datetime) -> datetime | None:
+    """주말(브로커 시간 토·일)이고 '주말 잠금 쉼'이 켜져 있으면 주말이 끝나는 시각(브로커 월 00:00, KST), 아니면 None.
+    브로커 시간 = 뉴욕+7 이라 한국 시간으로 토 06:00(서머타임)/07:00 ~ 월 06:00/07:00."""
+    if not lock_cfg().get("weekend_off", True):
+        return None
+    wall = to_broker_wallclock(now)
+    if wall.weekday() < 5:
+        return None
+    monday = (wall + timedelta(days=7 - wall.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
+    return broker_wallclock_to_kst(monday)
 
 
 def broker_wallclock_to_kst(wall: datetime) -> datetime:
@@ -261,16 +274,19 @@ def determine_current_reason_and_since(
         since = lock.manual_lock_since.replace(tzinfo=KST) if lock.manual_lock_since else now
         return "manual", since
  
-    block_start, _ = current_checkin_block(now)
-    candidates.append(("restricted_window", block_start))  # 하루 종일 항상 후보로 들어감
+    if weekend_end(now) is None:      # 주말(설정)에는 정기 재확인·집중 구간 잠금을 쉼
+        block_start, _ = current_checkin_block(now)
+        candidates.append(("restricted_window", block_start))  # 평일에는 하루 종일 항상 후보로 들어감
 
-    if session is not None:
-        candidates.append(("session_window", session.start))
+        if session is not None:
+            candidates.append(("session_window", session.start))
  
     if lock.consec_loss_active:
         since = lock.consec_loss_since.replace(tzinfo=KST) if lock.consec_loss_since else now
         candidates.append(("consec_loss", since))
  
+    if not candidates:
+        return None, None
     reason, since = max(candidates, key=lambda item: REASON_PRIORITY[item[0]])
 
     return reason, since
@@ -302,7 +318,18 @@ async def get_lock_state(db: AsyncSession, account_id: int) -> dict:
     lock = await _get_or_create_lock(db, account_id)
     session = await get_session_window(db, now)
  
+    wk_end = weekend_end(now)
+    if wk_end is not None:
+        session = None
     current_reason, since_kst = determine_current_reason_and_since(lock, now, session)
+    if current_reason is None:           # 주말 - 잠그지 않음 (월요일 장 시작 때 정기 재확인으로 다시 잠김)
+        from services import loss_limit
+        out = {"locked": False, "reason": "weekend", "remaining_sec": int((wk_end - now).total_seconds()),
+               "weekend_until": wk_end.isoformat(), "phrase_type": PHRASE_TYPE_CHECKIN, "phrase_types": [PHRASE_TYPE_CHECKIN]}
+        daily = loss_limit.public_info(account_id)
+        if daily is not None:
+            out["daily_loss"] = daily
+        return out
     locked_since_epoch = kst_to_broker_epoch(since_kst)
     # 해제 기록과 비교할 키: 집중 구간은 어느 구간인지까지 포함 (아시아장에서 풀어도 유로장이 되면 다시 잠김)
     reason_key = session.key if current_reason == "session_window" and session else current_reason

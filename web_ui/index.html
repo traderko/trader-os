@@ -989,7 +989,7 @@ function resetForAccountOrSymbol() {
 }
 
 // ── 잠금 상태 ──
-const REASON = { restricted_window: '정기 재확인', consec_loss: '연속 손절', manual: '수동 잠금' };
+const REASON = { weekend: '🌙 주말 · 잠금 쉼', restricted_window: '정기 재확인', consec_loss: '연속 손절', manual: '수동 잠금' };
 function reasonText(s) {
   if (s.reason && s.reason.startsWith('session_window'))
     return (s.session && s.session.names && s.session.names.length ? s.session.names.join('·') + ' ' : '') + '집중 구간';

@@ -337,6 +337,14 @@
     </div>
 
     <div class="panel">
+      <h2>주말</h2>
+      <p class="hint">브로커 시간 토·일(한국 시간 토요일 06:00~월요일 06:00, 서머타임이 아니면 07:00)에는 정기 재확인·집중 구간 잠금을 걸지 않고 그 알림도 보내지 않습니다.
+        월요일 장이 열리면 다시 잠깁니다. 수동 잠금·연속손절·일일 손실 한도 잠금은 주말에도 그대로입니다. 주말에 비트코인 등을 거래하면서 잠금을 쓰려면 끄세요.</p>
+      <div class="row"><label class="name">주말에는 잠그지 않음</label>
+        <label class="switch"><input type="checkbox" data-k="weekend_off"> 켜기</label></div>
+    </div>
+
+    <div class="panel">
       <h2>수동 잠금</h2>
       <div class="row"><label class="name">스스로 잠글 수 있는 최대 시간</label>
         <input type="number" data-k="manual_lock_max_minutes" min="1" max="10080"><span class="unit">분</span></div>
@@ -582,7 +590,7 @@
 const API = 'api/';
 let isRemote = false;   // 다른 기기에서 비밀번호로 연 화면인지 (ping 이 알려줌)
 const REASON = {
-  restricted_window: '정기 재확인', session_window: '아시아장 집중 구간',
+  weekend: '주말 (잠금 쉼)', restricted_window: '정기 재확인', session_window: '아시아장 집중 구간',
   consec_loss: '연속 손절', manual: '수동 잠금',
 };
 const $ = (id) => document.getElementById(id);
@@ -963,7 +971,7 @@ async function loadSettings() {
 let defaults = null;
 const DEF_FIELDS = [   // [칸, 기본값 가져오기]
   ...['consec_loss_threshold', 'consec_loss_lookback_hours', 'consec_loss_unlock_minutes', 'daily_loss_enabled',
-      'daily_loss_warn_pct', 'daily_loss_block_pct', 'daily_loss_close_pct', 'manual_lock_max_minutes']
+      'daily_loss_warn_pct', 'daily_loss_block_pct', 'daily_loss_close_pct', 'manual_lock_max_minutes', 'weekend_off']
     .map((k) => [`#rules [data-k="${k}"]`, (d) => d.lock[k]]),
   ['#tgLive', (d) => d.telegram.live_enabled], ['#tgLiveSec', (d) => d.telegram.live_interval_sec],
   ['#tgLivePos', (d) => d.telegram.live_position], ['#tgSim', (d) => d.telegram.trade_sim],

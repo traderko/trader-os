@@ -53,6 +53,9 @@ DEFAULTS: dict = {
         ],
         # 수동 잠금
         "manual_lock_max_minutes": 24 * 60,
+        # 주말(브로커 시간 토·일 = 한국 토 06/07시 ~ 월 06/07시)에는 정기 재확인·집중 구간 잠금과 그 알림을 쉼
+        #   수동 잠금·연속손절·일일 손실 한도 잠금은 주말에도 그대로
+        "weekend_off": True,
         # 일일 손실 한도 - 거래일(한국 시간 06:00) 시작 평가금 대비 손실률 (services/loss_limit.py)
         #   warn  : 텔레그램 경고
         #   block : 새 진입 차단 (다음 거래일 06:00까지 풀 수 없는 잠금)
@@ -272,6 +275,7 @@ def _validate(settings: dict) -> None:
             raise SettingsError(f"{_LABELS.get(key, key)}은(는) {lo}~{hi} 사이 정수여야 합니다. (입력: {v})")
 
     lock["daily_loss_enabled"] = bool(lock.get("daily_loss_enabled", False))
+    lock["weekend_off"] = bool(lock.get("weekend_off", True))
     steps = [lock[k] for k in ("daily_loss_warn_pct", "daily_loss_block_pct", "daily_loss_close_pct") if lock[k] > 0]
     if steps != sorted(steps) or len(set(steps)) != len(steps):
         raise SettingsError("일일 손실 한도는 경고 < 새 진입 차단 < 전부 청산 순서로 커져야 합니다. (안 쓰는 단계는 0)")

@@ -32,7 +32,7 @@ from db.session import AsyncSessionLocal
 from mt5.mt5Client import Mt5Client
 from services.fcm_service import FCMService, init_firebase
 from services.settings_service import lock_cfg
-from services.trade_lock_service import current_checkin_block, get_session_window
+from services.trade_lock_service import current_checkin_block, get_session_window, weekend_end
 
 KST = ZoneInfo("Asia/Seoul")
 # 연속손절 기준(횟수, 기간)은 관리 화면 설정(lock_cfg)에서 매번 읽음
@@ -127,7 +127,8 @@ async def _lock_watch_loop(mt5, account_number: str):
                         )
 
                 # 아시아장 집중 구간(목·금·지표일) 진입 알림
-                session = await get_session_window(db, now)
+                weekend = weekend_end(now) is not None      # 주말(설정)에는 정기 재확인·집중 구간 알림을 보내지 않음
+                session = None if weekend else await get_session_window(db, now)
                 session_start = (session.start, session.key) if session else None
 
                 if session is not None and session_start != last_session_start and not first_loop:
@@ -139,7 +140,7 @@ async def _lock_watch_loop(mt5, account_number: str):
                     )
 
                 # 구간이 끝나면 정기 재확인으로 돌아가며 다시 잠김 (16:00/17:00은 2시간 블록 경계가 아닐 수 있어 따로 알림)
-                session_just_ended = session is None and last_session_start is not None and not first_loop
+                session_just_ended = session is None and last_session_start is not None and not first_loop and not weekend
                 if session_just_ended:
                     _fcm.send(
                         "거래 잠금 - 아시아장 집중 구간 종료",
@@ -154,7 +155,8 @@ async def _lock_watch_loop(mt5, account_number: str):
             block_start, block_minutes = current_checkin_block(now)
 
             # 집중 구간 안에서는 2시간 블록이 바뀌어도 잠금 사유가 그대로라 알리지 않음
-            if last_block_start is not None and block_start != last_block_start and session is None and not session_just_ended:
+            if (last_block_start is not None and block_start != last_block_start and session is None and not session_just_ended
+                    and not weekend):
                 _fcm.send(
                     "거래 잠금 - 재확인 필요",
                     f"계좌 {account_number}: 새 재확인 구간에 진입해 거래가 잠겼습니다 ({block_minutes}분 단위).",

@@ -120,6 +120,8 @@ def _lock_line(s: dict | None) -> str:
         why = next((v for k, v in _REASON.items() if reason.startswith(k)), reason)
     d = s.get("daily_loss") or {}
     daily = f" · 오늘 {-d.get('pct', 0):+.1f}%" if d.get("enabled") else ""   # 일일 손실 한도를 켠 경우
+    if reason == "weekend" and not s.get("locked"):
+        return f"🌙 주말 · 잠금 쉼 ({_hm(s.get('remaining_sec', 0))} 뒤 다시){daily}"
     if s.get("locked"):
         if reason == "manual":
             what = "손실 한도 잠금" if s.get("manual_kind") == "loss_limit" else "수동 잠금"
