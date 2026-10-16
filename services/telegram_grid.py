@@ -263,7 +263,7 @@ async def cmd_grids(live, client, token, chat_id: str) -> None:
                     f"체결 {x['positions']}개 {x['lots']:g}lot" + (f" · 평단 {_fmt(x['avg'])} · <b>{x['profit']:+,.2f}</b>" if x["positions"] else "")
                     + f"\n대기 {x['pending']}개 {x['pending_lots']:g}lot" + (f" · 다음 {_fmt(x['next_price'])}" if x.get("next_price") else "")
                     + (f" · 손절 {_fmt(x['sl'])}" if x.get("sl") else ""))
-            btns = []
+            btns = [{"text": "📋 상세", "callback_data": f"grid:detail:{a.id}:{x['magic']}"}]
             if x["pending"]:
                 btns.append({"text": "대기 주문 취소", "callback_data": f"grid:pend:{a.id}:{x['magic']}"})
             btns.append({"text": "전부 청산", "callback_data": f"grid:close:{a.id}:{x['magic']}"})
@@ -274,7 +274,7 @@ async def cmd_grids(live, client, token, chat_id: str) -> None:
 
 
 async def button(live, client, token, chat_id: str, data: str, message_id) -> str:
-    """ktr:<종목>:<시세> / grid:go|no:<id> / grid:pend|close|closeok:<계좌id>:<magic>"""
+    """ktr:<종목>:<시세> / grid:go|no:<id> / grid:detail|pend|close|closeok:<계좌id>:<magic>"""
     parts = data.split(":")
     if parts[0] == "ktr":
         await cmd_ktr(live, client, token, chat_id, f"{parts[1]} {parts[2] if len(parts) > 2 else 'mt5'}", message_id)
@@ -311,6 +311,25 @@ async def button(live, client, token, chat_id: str, data: str, message_id) -> st
         aid, magic = int(parts[2]), int(parts[3])
     except (IndexError, ValueError):
         return "잘못된 버튼입니다"
+    if action in ("detail", "detailr"):     # detailr = 상세 메시지의 [새로고침] - 그 메시지를 고침
+        from db.session import AsyncSessionLocal
+        async with AsyncSessionLocal() as db:
+            try:
+                d = await grid.detail(db, aid, magic)
+            except grid.GridError as e:
+                return str(e)[:190]
+        btns = [{"text": "🔄 새로고침", "callback_data": f"grid:detailr:{aid}:{magic}"}]
+        if d["count"]["pending"]:
+            btns.append({"text": "대기 주문 취소", "callback_data": f"grid:pend:{aid}:{magic}"})
+        if d["count"]["open"] + d["count"]["pending"]:
+            btns.append({"text": "전부 청산", "callback_data": f"grid:close:{aid}:{magic}"})
+        text, markup = detail_text(d), {"inline_keyboard": [btns]}
+        if action == "detailr" and message_id:
+            await live._call(client, token, "editMessageText", chat_id=chat_id, message_id=message_id,
+                             text=text, parse_mode="HTML", reply_markup=markup)
+            return "새로 불러왔습니다"
+        await live._send(client, token, chat_id, text, reply_markup=markup)
+        return "상세 내역"
     if action == "close":
         await live._send(client, token, chat_id, "<b>이 구간매매를 전부 청산할까요?</b>\n대기 주문을 취소하고 체결된 포지션을 모두 시장가로 닫습니다.",
                          reply_markup={"inline_keyboard": [[{"text": "🛑 전부 청산", "callback_data": f"grid:closeok:{aid}:{magic}"},
@@ -326,6 +345,38 @@ async def button(live, client, token, chat_id: str, data: str, message_id) -> st
         live.force.set()
         return msg
     return ""
+
+
+def detail_text(d: dict) -> str:
+    """구간매매 묶음 상세 - 요약 몇 줄 + 구간 표 (고정폭)"""
+    dg = d.get("digits")
+    P = (lambda v: "-" if v is None else (f"{v:,.{dg}f}" if dg is not None else _fmt(v)))
+    S = (lambda v: "-" if v is None else f"{v:+,.2f}")
+    side = "매수" if d["side"] == "buy" else "매도"
+    c = d["count"]
+    head = [f"🧱📋 <b>{html.escape(d['symbol'])} {side}</b> · {html.escape(d['kind_name'])} #{d['magic'] % 100000}",
+            f"체결 {c['open']} · 대기 {c['pending']}" + (f" · 청산 {c['closed']}" if c["closed"] else "")
+            + (f" · 간격 {P(d['ktr'])}" if d.get("ktr") else ""),
+            f"보유 {d['lots']:g}lot" + (f" · 평단 {P(d['avg'])} · 평가 <b>{S(d['profit_open'])}</b>" if c["open"] else "")]
+    if c["closed"]:
+        head.append(f"청산 손익 {S(d['profit_closed'])}")
+    if d.get("sl"):
+        head.append(f"손절 {P(d['sl'])} · 지금 손절되면 {S(d['at_sl_now'])}"
+                    + (f" · 다 체결 후 {S(d['at_sl_all'])}" if c["pending"] else ""))
+    if d.get("next_price") is not None:
+        head.append(f"다음 구간 {P(d['next_price'])}" + (f" · 도달 시 {S(d['at_next'])}" if d.get("at_next") is not None else ""))
+    st = {"open": "보유", "pending": "대기", "closed": "청산"}
+    rows, cum = [], 0.0
+    for lv in d["levels"]:
+        if lv["status"] != "closed":
+            cum += lv["lot"]
+        mark = "▶" if lv["status"] == "pending" and lv["price"] == d.get("next_price") else " "
+        rows.append(mark + _pad(str(lv["no"]), 2) + " " + _pad(st[lv["status"]], 4, False) + " " + _pad(P(lv["price"]), 10)
+                    + " " + _pad(f"{lv['lot']:g}", 5) + " " + _pad("" if lv["status"] == "closed" else f"{cum:g}", 5)
+                    + " " + _pad("" if lv.get("profit") is None else f"{lv['profit']:+,.0f}", 7))
+    table = " " + _pad("#", 2) + " " + _pad("상태", 4, False) + " " + _pad("가격", 10) + " " + _pad("랏", 5) \
+        + " " + _pad("누적", 5) + " " + _pad("손익", 7) + "\n" + "\n".join(rows)
+    return "\n".join(head) + "\n<pre>" + html.escape(table) + "</pre>"
 
 
 # ── 단계별 설정 (실시간 현황의 [🧱 구간매매] 버튼) ─────────────────────────

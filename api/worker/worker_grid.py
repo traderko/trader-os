@@ -167,3 +167,28 @@ async def grid_close(request: Request, body: dict):
         return {"cancelled": cancelled, "closed": closed, "errors": errors}
 
     return await asyncio.to_thread(run)
+
+
+@router.get("/detail")
+async def grid_detail(request: Request, magic: int):
+    """한 구간매매 묶음의 체결 포지션·대기 주문 (화면의 상세 보기)"""
+    state = _state(request)
+    mt5 = state.mt5
+
+    def run():
+        pos = [p for p in (mt5.positions_get() or []) if p.magic == magic]
+        ords = [o for o in (mt5.orders_get() or []) if o.magic == magic]
+        sym = (pos or ords or [None])[0]
+        info = mt5.symbol_info(sym.symbol) if sym else None
+        tick = mt5.symbol_info_tick(sym.symbol) if sym else None
+        return {
+            "symbol": sym.symbol if sym else None, "digits": getattr(info, "digits", None),
+            "bid": getattr(tick, "bid", None), "ask": getattr(tick, "ask", None),
+            "positions": [{"ticket": p.ticket, "type": p.type, "volume": p.volume, "price_open": p.price_open,
+                           "price_current": p.price_current, "profit": p.profit, "swap": p.swap, "sl": p.sl, "tp": p.tp,
+                           "time": p.time, "comment": p.comment} for p in pos],
+            "orders": [{"ticket": o.ticket, "type": o.type, "volume": o.volume_current, "price": o.price_open,
+                        "sl": o.sl, "tp": o.tp, "time": o.time_setup, "comment": o.comment} for o in ords],
+        }
+
+    return await asyncio.to_thread(run)

@@ -397,6 +397,21 @@
   .gitem:first-child { border-top: 0; }
   .gitem .t1 { display: flex; gap: 8px; align-items: center; } .gitem .t1 .sp { flex: 1; }
   .gitem .acts { display: flex; gap: 6px; justify-content: flex-end; }
+  .gitem .t1, .gitem > .muted { cursor: pointer; }
+  .gdsum { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 6px 12px; font-size: 13px; margin: 0 0 10px; }
+  .gdsum div { display: flex; justify-content: space-between; gap: 6px; } .gdsum span { color: var(--muted); }
+  .gdtab { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .gdtab th, .gdtab td { padding: 6px 4px; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+  .gdtab th:first-child, .gdtab td:first-child, .gdtab th:nth-child(2), .gdtab td.st { text-align: left; }
+  .gdtab th { color: var(--muted); font-weight: 500; font-size: 11.5px; }
+  .gdtab tr.pending td { color: var(--muted); } .gdtab tr.closed td { opacity: .7; }
+  .gdtab tr.nxt td { background: var(--code); }
+  .gdst { font-size: 11px; border-radius: 5px; padding: 1px 6px; background: var(--code); }
+  .gdst.open { background: #e6f4ea; color: #1e7b34; } .gdst.closed { background: var(--line); }
+  :root[data-theme="dark"] .gdst.open { background: #173d22; color: #8fe0a5; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .gdst.open { background: #173d22; color: #8fe0a5; } }
+  #gdModal .sheet { max-height: 88vh; overflow: auto; }
+  #gdModal .acts { flex-wrap: wrap; }
   .cmp { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
   .cmp small { display: block; font-size: 11.5px; color: var(--muted); }
   .cmp span { font-weight: 600; font-size: 15px; }
@@ -726,6 +741,21 @@
     <div class="acts">
       <button class="btn" data-close>닫기</button>
       <button class="btn primary" id="pineCopy">복사하기</button>
+    </div>
+  </div>
+</div>
+
+<!-- 구간매매 묶음 상세 -->
+<div class="modal" id="gdModal" hidden>
+  <div class="sheet" style="max-width:600px">
+    <h3 id="gdTitle">구간매매 상세</h3>
+    <p id="gdSub"></p>
+    <div id="gdBody"><div class="empty">불러오는 중…</div></div>
+    <div class="acts">
+      <button class="btn small" id="gdSelect" hidden>이 묶음 포지션 선택</button>
+      <button class="btn small" id="gdPend" hidden>대기 주문 취소</button>
+      <button class="btn small danger" id="gdClose" hidden>전부 청산</button>
+      <button class="btn" data-close>닫기</button>
     </div>
   </div>
 </div>
@@ -1125,7 +1155,7 @@ function renderPositions() {
   previewLevels();
   if (!positions.length) { $('posList').innerHTML = '<div class="empty">보유 포지션이 없습니다.</div>'; return; }
   if (!list.length) { $('posList').innerHTML = '<div class="empty">이 가격 범위에 포지션이 없습니다.</div>'; return; }
-  // 구간매매로 넣은 포지션은 주문 묶음(매직넘버)별로, 직접 거래는 따로 - 머리줄을 누르면 그 묶음 전체 선택
+  // 구간매매로 넣은 포지션은 주문 묶음(매직넘버)별로, 직접 거래는 따로 - 구간매매 머리줄을 누르면 상세, 직접 거래 머리줄은 전체 선택
   const row = (p) => {
     const sel = selected.has(p.ticket), pl = p.profit + (p.swap || 0), slP = projected(p, p.sl);
     return `<div class="pos${sel ? ' sel' : ''}" data-t="${p.ticket}">
@@ -1142,7 +1172,7 @@ function renderPositions() {
     const lots = ps.reduce((a, p) => a + p.volume, 0), pl = ps.reduce((a, p) => a + p.profit + (p.swap || 0), 0);
     const avg = ps.reduce((a, p) => a + p.price_open * p.volume, 0) / lots;
     return `<div class="pgrp ${cls}" data-g="${key}"><span class="gl">${label}<small class="num">${ps.length}개 · ${fmt(lots)} lot · 평단 ${fmt(avg)}</small></span>
-      <b class="num ${cls_(pl)}">${signed(pl)}</b></div>`;
+      <b class="num ${cls_(pl)}">${signed(pl)}</b>${key !== 'manual' ? '<span class="muted">›</span>' : ''}</div>`;
   };
   const cls_ = cls;
   const manual = list.filter((p) => !kindOfMagic(p.magic));
@@ -1154,10 +1184,9 @@ function renderPositions() {
 
 $('posList').onclick = (e) => {
   const g = e.target.closest('.pgrp');
-  if (g) {           // 묶음 머리줄: 그 묶음 전체 선택/해제
-    const ps = filtered().filter((p) => g.dataset.g === 'manual' ? !kindOfMagic(p.magic) : String(p.magic) === g.dataset.g);
-    const all = ps.every((p) => selected.has(p.ticket));
-    ps.forEach((p) => all ? selected.delete(p.ticket) : selected.add(p.ticket));
+  if (g) {           // 구간매매 머리줄: 상세 보기 (그 안에 '묶음 선택' 버튼) · 직접 거래 머리줄: 전체 선택/해제
+    if (g.dataset.g !== 'manual') return gDetail(Number(g.dataset.g));
+    selectGroup('manual');
     return renderPositions();
   }
   const row = e.target.closest('.pos'); if (!row) return;
@@ -1165,6 +1194,12 @@ $('posList').onclick = (e) => {
   selected.has(t) ? selected.delete(t) : selected.add(t);
   renderPositions();
 };
+function selectGroup(key) {
+  const ps = filtered().filter((p) => key === 'manual' ? !kindOfMagic(p.magic) : String(p.magic) === String(key));
+  const all = ps.length && ps.every((p) => selected.has(p.ticket));
+  ps.forEach((p) => all ? selected.delete(p.ticket) : selected.add(p.ticket));
+  return ps.length;
+}
 $('selAll').onchange = () => {
   const list = filtered();
   if ($('selAll').checked) list.forEach((p) => selected.add(p.ticket)); else list.forEach((p) => selected.delete(p.ticket));
@@ -1451,7 +1486,7 @@ function renderTrades() {
       const canSel = !!t.close_time, isSel = tSel && tSel.has(t.id), ch = tChainMap && tChainMap.get(t.id);
       html += `<div class="trade${tSel ? (canSel ? (isSel ? ' sel' : '') + (tAnchor === t.id ? ' anchor' : '') : ' nosel') : ''}" data-id="${t.id}">
         <div class="t1">${tSel && canSel ? `<input type="checkbox" class="ck" ${isSel ? 'checked' : ''} tabindex="-1" aria-label="선택">` : ''}<span class="side ${t.position === 'BUY' ? 'buy' : 'sell'}" style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:${t.position === 'BUY' ? 'var(--accent-weak)' : 'var(--bad-weak)'};color:${t.position === 'BUY' ? 'var(--up)' : 'var(--down)'}">${esc(t.position)}</span>
-          <span>${esc(t.symbol)}</span><span class="num muted" style="font-weight:400">${fmt(t.volume)} lot</span>${kindOfMagic(t.magic) ? `<span class="gbadge" title="구간매매 ${GRID_KR[kindOfMagic(t.magic)]} #${t.magic % 100000}">🧱${GRID_SHORT[kindOfMagic(t.magic)]}</span>` : ''}${ch && ch.length > 1 ? `<span class="chain" title="이어서 들어간 거래 묶음">🔗${ch.length}</span>` : ''}${n.time_frame ? `<span class="chip">${TF[n.time_frame] || ''}</span>` : ''}</div>
+          <span>${esc(t.symbol)}</span><span class="num muted" style="font-weight:400">${fmt(t.volume)} lot</span>${kindOfMagic(t.magic) ? `<span class="gbadge" data-gm="${t.magic}" style="cursor:pointer" title="구간매매 ${GRID_KR[kindOfMagic(t.magic)]} #${t.magic % 100000} - 눌러서 묶음 상세">🧱${GRID_SHORT[kindOfMagic(t.magic)]}</span>` : ''}${ch && ch.length > 1 ? `<span class="chain" title="이어서 들어간 거래 묶음">🔗${ch.length}</span>` : ''}${n.time_frame ? `<span class="chip">${TF[n.time_frame] || ''}</span>` : ''}</div>
         <div class="pl">${c ? `<strong class="num ${cls(t.profit)}">${signed(t.profit)}</strong><small class="num">수수료 ${fmt(t.commission)}</small>` : '<strong class="muted" style="font-size:13px">보유 중</strong>'}</div>
         <div class="t2 num">${dayKey(o) !== k ? dayKey(o).slice(5) + ' ' : ''}${hmOf(o)}${c ? ' → ' + (dayKey(c) !== dayKey(o) ? dayKey(c).slice(5) + ' ' : '') + hmOf(c) : ''} · ${fmt(t.price_open)}${c ? ' → ' + fmt(t.price_close) : ''}</div>
         ${tags || snip || (t.images || []).length ? `<div class="t3">${tags}${(t.images || []).length ? `<span>📷 ${t.images.length}</span>` : ''}${snip ? `<span class="snip">${esc(snip)}</span>` : ''}</div>` : ''}
@@ -1461,6 +1496,8 @@ function renderTrades() {
   $('tList').innerHTML = html;
 }
 $('tList').onclick = (e) => {
+  const gb = e.target.closest('.gbadge[data-gm]');
+  if (gb) { e.stopPropagation(); return gDetail(Number(gb.dataset.gm)); }
   if (tSel) {   // 선택 모드: 거래를 누르면 선택, 날짜 줄을 누르면 그날 청산 거래 전부
     const day = e.target.closest('.day');
     if (day) {
@@ -2590,14 +2627,86 @@ $('gGo').onclick = async () => {
   gGoState();
 };
 
+// ── 구간매매 묶음 상세 (포지션 탭 머리줄 · 구간 탭 목록 · 거래내역 🧱 표시에서 열림) ──
+let gdMagic = null;
+async function gDetail(magic) {
+  if (!acc || !magic) return;
+  gdMagic = magic;
+  $('gdTitle').textContent = '🧱 구간매매 상세'; $('gdSub').textContent = `#${magic % 100000}`;
+  $('gdBody').innerHTML = '<div class="empty">불러오는 중…</div>';
+  ['gdSelect', 'gdPend', 'gdClose'].forEach((id) => $(id).hidden = true);
+  $('gdModal').hidden = false;
+  try {
+    const d = await api(`/accounts/${encodeURIComponent(acc.account_number)}/grid/detail?magic=${magic}`);
+    if (gdMagic !== magic) return;
+    gRenderDetail(d);
+  } catch (e) { $('gdBody').innerHTML = `<div class="gerr">${esc(e.message)}</div>`; }
+}
+function gRenderDetail(d) {
+  const dg = d.digits ?? 2, P = (v) => fmt(v, dg), buy = d.side === 'buy';
+  const ST = { open: '보유', pending: '대기', closed: '청산' };
+  $('gdTitle').innerHTML = `🧱 ${esc(d.kind_name)} · ${esc(d.symbol)} <span class="${buy ? 'up' : 'down'}">${buy ? '매수' : '매도'}</span>`;
+  const st = d.started ? new Date(d.started) : null;
+  $('gdSub').textContent = `#${d.magic % 100000}` + (st ? ` · 시작 ${st.getMonth() + 1}/${st.getDate()} ${String(st.getHours()).padStart(2, '0')}:${String(st.getMinutes()).padStart(2, '0')}` : '')
+    + ` · 체결 ${d.count.open} · 대기 ${d.count.pending}` + (d.count.closed ? ` · 청산 ${d.count.closed}` : '');
+  const item = (k, v, c = '') => `<div><span>${k}</span><b class="num ${c}">${v}</b></div>`;
+  const total = d.profit_open + d.profit_closed;
+  let h = '<div class="gdsum">'
+    + item('현재가', d.price_now != null ? P(d.price_now) : '-')
+    + item('구간 간격(KTR)', d.ktr ? P(d.ktr) : '-')
+    + item('보유', `${fmt(d.lots)} lot`)
+    + item('평단', d.avg != null ? P(d.avg) : '-')
+    + item('평가 손익', d.count.open ? signed(d.profit_open) : '-', cls(d.profit_open))
+    + item('청산 손익', d.count.closed ? signed(d.profit_closed) : '-', cls(d.profit_closed))
+    + item('손절가', d.sl ? P(d.sl) : '없음')
+    + item('지금 손절되면', d.at_sl_now != null ? signed(d.at_sl_now) : '-', cls(d.at_sl_now))
+    + (d.count.pending ? item('다 체결 후 평단', d.avg_all != null ? P(d.avg_all) : '-') + item('다 체결 후 손절', d.at_sl_all != null ? signed(d.at_sl_all) : '-', cls(d.at_sl_all)) : '')
+    + (d.next_price != null ? item('다음 구간', P(d.next_price)) + item('다음 구간 도달 시', d.at_next != null ? signed(d.at_next) : '-', cls(d.at_next)) : '')
+    + (d.count.closed && d.count.open ? item('합계', signed(total), cls(total)) : '')
+    + '</div>';
+  let cum = 0;
+  h += '<table class="gdtab"><thead><tr><th>#</th><th>상태</th><th>가격</th><th>랏</th><th>누적</th><th>손익</th></tr></thead><tbody>'
+    + d.levels.map((lv) => {
+      if (lv.status !== 'closed') cum += lv.lot;
+      const nxt = lv.status === 'pending' && lv.price === d.next_price;
+      const pl = lv.profit != null ? `<span class="${cls(lv.profit)}">${signed(lv.profit)}</span>` : '';
+      const sub = lv.status === 'closed' && lv.price_close != null ? `<br><small class="muted">→ ${P(lv.price_close)}</small>`
+        : lv.status === 'pending' && d.price_now != null ? `<br><small class="muted">${signed(Math.abs(lv.price - d.price_now)).replace('+', '')} 남음</small>` : '';
+      return `<tr class="${lv.status}${nxt ? ' nxt' : ''}"><td>${lv.no}${lv.no === 1 ? ' <small class="muted">시장가</small>' : ''}</td>
+        <td class="st"><span class="gdst ${lv.status}">${ST[lv.status]}${nxt ? ' · 다음' : ''}</span></td>
+        <td class="num">${P(lv.price)}${sub}</td><td class="num">${fmt(lv.lot)}</td>
+        <td class="num">${lv.status === 'closed' ? '' : fmt(cum)}</td><td class="num">${pl}</td></tr>`;
+    }).join('') + '</tbody></table>';
+  $('gdBody').innerHTML = h;
+  const live = d.count.open + d.count.pending > 0;
+  $('gdSelect').hidden = !d.count.open; $('gdPend').hidden = !d.count.pending; $('gdClose').hidden = !live;
+}
+$('gdSelect').onclick = async () => {
+  $('gdModal').hidden = true;
+  if (tab !== 'pos') { showTab('pos'); try { await loadPositions(); } catch {} }
+  const n = selectGroup(gdMagic);
+  renderPositions();
+  if (!n) toast('지금 가격 범위 필터에 걸린 포지션이 없습니다.', true);
+};
+$('gdPend').onclick = $('gdClose').onclick = async (e) => {
+  const pend = e.currentTarget.id === 'gdPend', magic = gdMagic;
+  if (!(await ask(pend ? '대기 주문 취소' : '구간매매 전부 청산',
+    pend ? '아직 체결되지 않은 리밋 주문을 모두 취소합니다. 체결된 포지션은 그대로 둡니다.' : '대기 주문을 취소하고 체결된 포지션을 모두 시장가로 청산합니다.'))) return;
+  try {
+    const r = await api(`/accounts/${encodeURIComponent(acc.account_number)}/grid/close`, { method: 'POST', body: JSON.stringify({ magic, pending_only: pend }) });
+    toast(`취소 ${r.cancelled}개 · 청산 ${r.closed}개` + (r.errors.length ? ` · 실패 ${r.errors.length}개` : ''), !!r.errors.length);
+  } catch (err) { toast(err.message, true); }
+  gLoadList(); loadPositions(); gDetail(magic);
+};
+
 async function gLoadList() {
   if (!acc || viewOnly()) { $('gList').innerHTML = '<div class="empty">MT5 가 연결된 계좌에서만 볼 수 있습니다.</div>'; return; }
   try {
     const list = await api(`/accounts/${encodeURIComponent(acc.account_number)}/grid/list`);
-    $('gList').innerHTML = list.length ? list.map((x) => `<div class="gitem">
+    $('gList').innerHTML = list.length ? list.map((x) => `<div class="gitem" data-magic="${x.magic}" title="눌러서 상세 보기">
       <div class="t1"><b>${esc(x.symbol)}</b><span class="${x.side === 'buy' ? 'up' : 'down'}">${x.side === 'buy' ? '매수' : '매도'}</span>
         <span class="muted">${esc(x.comment === 'AVG' ? '일반 물타기' : x.comment === 'KTR' ? 'KTR 거래' : x.comment)}</span><span class="sp"></span>
-        <b class="num ${cls(x.profit)}">${x.positions ? signed(x.profit) : ''}</b></div>
+        <b class="num ${cls(x.profit)}">${x.positions ? signed(x.profit) : ''}</b><span class="muted">›</span></div>
       <div class="muted num">체결 ${x.positions}개 ${fmt(x.lots)}lot${x.positions ? ` · 평단 ${fmt(x.avg)}` : ''} · 대기 ${x.pending}개 ${fmt(x.pending_lots)}lot${x.next_price ? ` · 다음 ${fmt(x.next_price)}` : ''}${x.sl ? ` · 손절 ${fmt(x.sl)}` : ''}</div>
       <div class="acts">${x.pending ? `<button class="btn small" data-gpend="${x.magic}">대기 주문 취소</button>` : ''}
         <button class="btn small danger" data-gclose="${x.magic}">전부 청산</button></div>
@@ -2606,7 +2715,7 @@ async function gLoadList() {
 }
 $('gList').onclick = async (e) => {
   const pend = e.target.closest('[data-gpend]'), all = e.target.closest('[data-gclose]');
-  if (!pend && !all) return;
+  if (!pend && !all) { const it = e.target.closest('.gitem'); if (it) gDetail(Number(it.dataset.magic)); return; }
   const magic = Number((pend || all).dataset.gpend || (pend || all).dataset.gclose);
   if (!(await ask(pend ? '대기 주문 취소' : '구간매매 전부 청산',
     pend ? '아직 체결되지 않은 리밋 주문을 모두 취소합니다. 체결된 포지션은 그대로 둡니다.' : '대기 주문을 취소하고 체결된 포지션을 모두 시장가로 청산합니다.'))) return;

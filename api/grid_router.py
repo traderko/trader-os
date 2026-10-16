@@ -7,6 +7,7 @@
 #   POST /accounts/{번호}/grid/plan      미리보기 (주문 안 함)
 #   POST /accounts/{번호}/grid/execute   주문 - 거래 잠금 중이면 거절, 지금 시세로 다시 계산해서 넣음
 #   GET  /accounts/{번호}/grid/list      진행 중인 구간매매
+#   GET  /accounts/{번호}/grid/detail?magic=…  묶음 상세 (구간마다 보유·대기·청산, 손절·다음 구간 손익)
 #   POST /accounts/{번호}/grid/close     {magic, pending_only}
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -65,6 +66,12 @@ async def grid_execute(account_number: int, body: dict, db: AsyncSession = Depen
 async def grid_list(account_number: int, db: AsyncSession = Depends(get_db)):
     acc = await _account(db, account_number)
     return await _run(grid.grids(acc.id))
+
+
+@router.get("/{account_number}/grid/detail")
+async def grid_detail(account_number: int, magic: int, db: AsyncSession = Depends(get_db)):
+    acc = await _account(db, account_number)
+    return await _run(grid.detail(db, acc.id, magic))
 
 
 @router.post("/{account_number}/grid/close")

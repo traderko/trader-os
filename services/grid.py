@@ -413,3 +413,97 @@ async def close(account_id: int, magic: int, pending_only: bool) -> dict:
         return await worker_post(account_id, "/grid/close", {"magic": magic, "pending_only": pending_only})
     except Exception as e:
         raise GridError(_detail(e))
+
+
+async def detail(db, account_id: int, magic: int) -> dict:
+    """구간매매 묶음 상세: 구간마다 체결(보유)·대기·청산 상태, 손절가, 평단, 손절·다음 구간에서의 손익"""
+    from statistics import median
+    from sqlalchemy import select
+    from db.models.trade import Trade
+    from services.worker_client import worker_get
+    kind = kind_of(magic)
+    if not kind:
+        raise GridError("구간매매 주문 번호가 아닙니다.")
+    try:
+        live = await worker_get(account_id, "/grid/detail", {"magic": magic})
+    except Exception:
+        live = {"symbol": None, "positions": [], "orders": []}
+    closed = (await db.execute(select(Trade).where(Trade.account_id == account_id, Trade.magic == magic)
+                               .order_by(Trade.open_time))).scalars().all()
+    open_tickets = {p["ticket"] for p in live["positions"]}
+    symbol = live.get("symbol") or (closed[0].symbol if closed else None)
+    if not symbol:
+        raise GridError("이 구간매매의 포지션·주문·기록을 찾지 못했습니다.")
+    if live["positions"]:
+        side = "buy" if live["positions"][0]["type"] == 0 else "sell"
+    elif live["orders"]:
+        side = "buy" if live["orders"][0]["type"] in (2, 4) else "sell"
+    else:
+        side = "buy" if (closed[0].position or "BUY").upper() == "BUY" else "sell"
+    sgn = 1 if side == "buy" else -1
+
+    pv = None                                     # 1랏이 가격 1만큼 움직일 때 손익
+    try:
+        price = live.get("bid") or (live["positions"][0]["price_current"] if live["positions"] else None)
+        if price:
+            c = await worker_get(account_id, "/calc", {"symbol": symbol, "side": side, "volume": 1,
+                                                       "price_open": price, "price_close": price + sgn})
+            pv = abs(float(c.get("profit") or 0)) or None
+    except Exception:
+        pass
+
+    def no_of(comment):
+        try:
+            return int(str(comment or "").rsplit(" ", 1)[-1])
+        except ValueError:
+            return None
+
+    levels = []
+    for t in closed:
+        if t.ticket in open_tickets:
+            continue
+        levels.append({"status": "closed" if t.close_time else "open", "price": t.price_open, "lot": t.volume,
+                       "profit": (t.profit or 0) + (t.commission or 0) if t.close_time else None,
+                       "price_close": t.price_close, "time": t.open_time.isoformat() if t.open_time else None,
+                       "close_time": t.close_time.isoformat() if t.close_time else None, "no": None})
+    for p in live["positions"]:
+        levels.append({"status": "open", "price": p["price_open"], "lot": p["volume"], "profit": p["profit"] + (p.get("swap") or 0),
+                       "price_current": p["price_current"], "ticket": p["ticket"], "no": no_of(p.get("comment"))})
+    for o in live["orders"]:
+        levels.append({"status": "pending", "price": o["price"], "lot": o["volume"], "profit": None,
+                       "ticket": o["ticket"], "no": no_of(o.get("comment"))})
+    levels = [lv for lv in levels if not (lv["status"] == "open" and "ticket" not in lv)]   # DB 기록만 있고 MT5엔 없는 '보유'는 뺌
+    levels.sort(key=lambda x: (-sgn * x["price"], x["status"] != "closed"))   # 매수는 위(첫 진입)에서 아래로
+
+    prices = sorted({round(lv["price"], 6) for lv in levels})
+    gaps = [b - a for a, b in zip(prices, prices[1:]) if b - a > 0]
+    ktr = median(gaps) if gaps else None
+    # 청산된 기록엔 구간 번호(주석)가 없으니, 번호를 아는 구간에서 KTR 간격으로 셈
+    anchor = next((lv for lv in levels if lv["no"]), None)
+    for i, lv in enumerate(levels, 1):
+        if not lv["no"]:
+            lv["no"] = max(1, anchor["no"] + round(sgn * (anchor["price"] - lv["price"]) / ktr)) if (anchor and ktr) else i
+    sl = next((x.get("sl") for x in live["positions"] + live["orders"] if x.get("sl")), None)
+    opn = [lv for lv in levels if lv["status"] == "open"]
+    pend = [lv for lv in levels if lv["status"] == "pending"]
+    lots = sum(lv["lot"] for lv in opn)
+    avg = sum(lv["price"] * lv["lot"] for lv in opn) / lots if lots else None
+    all_lots = lots + sum(lv["lot"] for lv in pend)
+    avg_all = (sum(lv["price"] * lv["lot"] for lv in opn + pend) / all_lots) if all_lots else None
+
+    def pnl_at(px, rows):
+        return sum(sgn * (px - lv["price"]) * lv["lot"] * pv for lv in rows) if (pv and px is not None) else None
+
+    nxt = max(pend, key=lambda x: sgn * x["price"]) if pend else None     # 다음에 체결될 대기 주문
+    return {
+        "magic": magic, "kind": kind, "kind_name": MODE_KR[kind], "symbol": symbol, "side": side,
+        "digits": live.get("digits"), "ktr": ktr, "sl": sl, "levels": levels,
+        "count": {"open": len(opn), "pending": len(pend), "closed": len([lv for lv in levels if lv["status"] == "closed"]), "all": len(levels)},
+        "lots": lots, "avg": avg, "avg_all": avg_all, "all_lots": all_lots,
+        "profit_open": sum(lv["profit"] or 0 for lv in opn),
+        "profit_closed": sum(lv["profit"] or 0 for lv in levels if lv["status"] == "closed"),
+        "at_sl_now": pnl_at(sl, opn) if sl else None, "at_sl_all": pnl_at(sl, opn + pend) if sl else None,
+        "next_price": nxt["price"] if nxt else None, "at_next": pnl_at(nxt["price"], opn) if nxt else None,
+        "price_now": (live.get("bid") if side == "buy" else live.get("ask")),
+        "started": min((lv.get("time") for lv in levels if lv.get("time")), default=None),
+    }
