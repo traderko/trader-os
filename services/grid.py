@@ -231,7 +231,7 @@ def build_plan(*, mode: str, side: str, entry: float, ktr: float, n: int | None,
                risk_pct: float | None = None, method: str = "equal",
                lot: float | None = None, stop_mode: str = "ktr", stop_ktr: float | None = None,
                n_auto: bool = False, min_gap: float = 1.0, margin_free: float | None = None,
-               stop_gap: float = 0.5) -> dict:
+               stop_gap: float = 1.0) -> dict:
     """구간별 가격·랏·손절 손실. point_value = 1랏이 가격 1만큼 움직일 때 손익(계좌 통화)
     KTR 거래 손절 = 마지막 구간에서 stop_gap KTR 더 간 곳 (첫 진입에서 (n-1+stop_gap) KTR)
     일반 물타기는 n_auto 면 구간 수를 자동으로 정함 (avg_options)"""
@@ -391,12 +391,12 @@ def _f(v) -> float | None:
 
 
 def ktr_stop_gap() -> float:
-    """KTR 거래 기본 손절 여유: 마지막 구간에서 몇 KTR 더 가면 손절 (관리 화면 설정, 기본 0.5)"""
+    """KTR 거래 기본 손절 여유: 마지막 구간에서 몇 KTR 더 가면 손절 (관리 화면 설정, 기본 1)"""
     try:
         from services.settings_service import get_settings
-        return float((get_settings().get("grid") or {}).get("ktr_stop_gap") or 0.5)
+        return float((get_settings().get("grid") or {}).get("ktr_stop_gap") or 1.0)
     except Exception:
-        return 0.5
+        return 1.0
 
 
 def min_gap() -> float:

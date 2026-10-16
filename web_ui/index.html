@@ -651,7 +651,7 @@
       <label data-m="avg">구간마다 랏<input id="gLot" inputmode="decimal" autocomplete="off" placeholder="예: 0.1"></label>
       <label class="gnl">구간 수 (진입 횟수)<span class="gnrow"><span class="seg mini" id="gNMode" style="margin:0" data-m="avg"><button data-v="auto" class="on">자동</button><button data-v="manual">직접</button></span>
         <input id="gN" inputmode="numeric" autocomplete="off" placeholder="예: 5"></span></label>
-      <label data-m="ktr">손절 (마지막 구간 뒤 KTR)<input id="gStopGap" inputmode="decimal" autocomplete="off" placeholder="기본값"></label>
+      <label data-m="ktr">손절 (마지막 구간 뒤 KTR)<span class="seg mini" id="gStopGap" style="margin:0"><button data-v="0.5">0.5</button><button data-v="1">1</button><button data-v="1.5">1.5</button></span></label>
       <label data-m="ktr">랏 배분<span class="seg mini" id="gMethod" style="margin:0"><button data-v="equal" class="on">동일손실</button><button data-v="half">차등손실</button></span></label>
       <label data-m="avg">손절<span class="seg mini" id="gStopMode" style="margin:0"><button data-v="ktr" class="on">KTR 배수</button><button data-v="pct">손실 %</button></span></label>
       <label data-m="avg" data-s="ktr">손절 거리 (KTR 배수)<input id="gStopKtr" inputmode="decimal" autocomplete="off" placeholder="예: 6"></label>
@@ -2496,33 +2496,33 @@ function drawSeq(el, vals, labelAt) {
 // KTR(장 시작 봉 크기) 간격으로 시장가 1개 + 리밋 N-1개, 손절은 모두 같은 가격. 계산·주문은 서버 (services/grid.py)
 const G = {
   sym: store.get('gsym', 'nasdaq'), side: 'buy', mode: store.get('gmode', 'ktr'),
-  src: store.get('gsrc', 'mt5'), tf: store.get('gtf', '2m'), sess: 'auto', method: 'equal', stopMode: 'ktr', nMode: 'auto',
+  src: store.get('gsrc', 'mt5'), tf: store.get('gtf', '2m'), sess: 'auto', method: 'equal', stopMode: 'ktr', nMode: 'auto', stopGap: null, defGap: '1',
   plan: null, seq: 0, timer: 0, table: null,
 };
 const gKey = () => 'gset.' + G.sym + '.' + G.mode;
 function gSegs() {
   const set = (id, v) => document.querySelectorAll(`#${id} button`).forEach((b) => b.classList.toggle('on', b.dataset.v === v));
   set('gSide', G.side); set('gMode', G.mode); set('gSrc', G.src);
-  set('gMethod', G.method); set('gStopMode', G.stopMode); set('gNMode', G.nMode);
+  set('gMethod', G.method); set('gStopMode', G.stopMode); set('gNMode', G.nMode); set('gStopGap', G.stopGap || G.defGap);
   const nAuto = G.mode === 'avg' && G.nMode === 'auto';
   $('gN').disabled = nAuto; $('gN').placeholder = nAuto ? '자동' : '예: 5';
   $('gSyms').innerHTML = SYMBOLS.map((x) => `<button data-v="${esc(x.key)}" class="${x.key === G.sym ? 'on' : ''}">${esc(x.label)}</button>`).join('');
   document.querySelectorAll('#tab-grid [data-m]').forEach((el) => el.hidden = el.dataset.m !== G.mode
     || (el.dataset.s && el.dataset.s !== G.stopMode));
   $('gModeHint').textContent = G.mode === 'ktr'
-    ? '손실 %를 먼저 정하면 구간마다 랏을 계산합니다. 손절 = 마지막 구간에서 손절 칸만큼(KTR) 더 간 곳 (비우면 관리 화면 기본값). 동일손실: 진입마다 손절 손실이 같게 / 차등손실: 남은 예산의 절반씩.'
+    ? '손실 %를 먼저 정하면 구간마다 랏을 계산합니다. 손절 = 마지막 구간에서 0.5 / 1 / 1.5 KTR 더 간 곳 (기본 1). 동일손실: 진입마다 손절 손실이 같게 / 차등손실: 남은 예산의 절반씩.'
     : '구간마다 같은 랏으로 들어갑니다. 손절은 KTR 배수로 정하거나, 손실 %를 넣으면 다 체결된 채 손절일 때 그 %가 되도록 자동으로 정합니다.'
       + ' 구간 수 자동: 마지막 구간과 손절선 사이에 여유를 두고 증거금 안에서 가장 많이. 아래 N별 표에서 줄을 누르면 그 구간 수로 바꿉니다.';
 }
 function gLoadInputs() {
   const v = store.get(gKey(), {});
   $('gRisk').value = v.risk ?? ''; $('gRisk2').value = v.risk2 ?? ''; $('gLot').value = v.lot ?? '';
-  $('gN').value = v.n ?? ''; $('gStopKtr').value = v.stopKtr ?? ''; $('gStopGap').value = v.stopGap ?? '';
+  $('gN').value = v.n ?? ''; $('gStopKtr').value = v.stopKtr ?? ''; G.stopGap = ['0.5', '1', '1.5'].includes(String(v.stopGap)) ? String(v.stopGap) : null;   // 안 고르면 관리 화면 기본값
   G.method = v.method || 'equal'; G.stopMode = v.stopMode || 'ktr'; G.nMode = v.nMode || 'auto';
 }
 function gSaveInputs() {
   store.set(gKey(), { risk: $('gRisk').value, risk2: $('gRisk2').value, lot: $('gLot').value, n: $('gN').value,
-    stopKtr: $('gStopKtr').value, stopGap: $('gStopGap').value, method: G.method, stopMode: G.stopMode, nMode: G.nMode });
+    stopKtr: $('gStopKtr').value, stopGap: G.stopGap, method: G.method, stopMode: G.stopMode, nMode: G.nMode });
 }
 const gNum = (id) => { const v = parseFloat(String($(id).value).replace(/,/g, '')); return isFinite(v) ? v : null; };
 
@@ -2571,7 +2571,7 @@ function gBody() {
   const nAuto = G.mode === 'avg' && G.nMode === 'auto';
   return { symbol: G.sym, side: G.side, mode: G.mode, ktr: gNum('gKtr'), n: nAuto ? null : gNum('gN'), n_auto: nAuto, method: G.method,
     risk_pct: G.mode === 'ktr' ? gNum('gRisk') : (G.stopMode === 'pct' ? gNum('gRisk2') : null),
-    lot: gNum('gLot'), stop_mode: G.stopMode, stop_ktr: gNum('gStopKtr'), stop_gap: G.mode === 'ktr' ? gNum('gStopGap') : null };
+    lot: gNum('gLot'), stop_mode: G.stopMode, stop_ktr: gNum('gStopKtr'), stop_gap: G.mode === 'ktr' && G.stopGap ? Number(G.stopGap) : null };
 }
 function gReady(b) {
   if (!b.ktr || (!b.n && !b.n_auto)) return false;
@@ -2590,7 +2590,7 @@ async function gPlan() {
       $('gPlan').innerHTML = `<div class="gerr">${esc(p.invalid)}</div>` + gOptsHtml(p);
     } else {
       G.plan = p; gRenderPlan(p);
-      if (p.stop_gap != null && !$('gStopGap').value) $('gStopGap').placeholder = `기본 ${p.stop_gap}`;
+      if (p.stop_gap != null && !G.stopGap) { G.defGap = String(p.stop_gap); gSegs(); }
       if (p.n_is_auto) { G.lastAutoN = p.n; $('gN').value = ''; $('gN').placeholder = `자동 → ${p.n}`; }
     }
   } catch (e) {
@@ -2781,11 +2781,11 @@ function gSeg(id, key, after) {
   };
 }
 gSeg('gSyms', 'sym', () => { $('gKtr').value = ''; gLoadKtr(); });
-gSeg('gSide', 'side'); gSeg('gMode', 'mode'); gSeg('gMethod', 'method'); gSeg('gStopMode', 'stopMode');
+gSeg('gSide', 'side'); gSeg('gMode', 'mode'); gSeg('gMethod', 'method'); gSeg('gStopMode', 'stopMode'); gSeg('gStopGap', 'stopGap');
 gSeg('gNMode', 'nMode', () => { if (G.nMode === 'manual' && !$('gN').value && G.lastAutoN) $('gN').value = G.lastAutoN; gSaveInputs(); gSchedule(0); });
 gSeg('gSrc', 'src', gLoadKtr);
 $('gKtrLoad').onclick = gLoadKtr;
-['gKtr', 'gRisk', 'gRisk2', 'gLot', 'gN', 'gStopKtr', 'gStopGap'].forEach((id) => $(id).addEventListener('input', () => { gSaveInputs(); gSchedule(); }));
+['gKtr', 'gRisk', 'gRisk2', 'gLot', 'gN', 'gStopKtr'].forEach((id) => $(id).addEventListener('input', () => { gSaveInputs(); gSchedule(); }));
 let gInit = false;
 function gridEnter() {
   if (!gInit) { gInit = true; gLoadInputs(); }

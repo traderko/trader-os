@@ -3,7 +3,7 @@
 # 텔레그램 구간매매 (services/telegram_live.py 가 명령·버튼을 넘겨줌). 계산·주문은 services/grid.py - 웹 '구간' 탭과 같음.
 #
 #   /ktr [종목] [oanda]        장 3개 × 시간봉 5개 KTR 표 (종목·시세 버튼으로 바꾸기)
-#   /grid 나스닥 매수 5% 5구간              KTR 거래 (손실 %로 랏 계산, 손절 = 마지막 구간 뒤 0.5 KTR - '여유1' 처럼 바꿈)
+#   /grid 나스닥 매수 5% 5구간              KTR 거래 (손실 %로 랏 계산, 손절 = 마지막 구간 뒤 1 KTR - '여유0.5' 처럼 바꿈)
 #   /grid 골드 매도 물타기 0.1랏 5구간 손절6  일반 물타기 (손절 KTR 배수) - '손실5%' 로 쓰면 손실 %로 손절 자동
 #     물타기는 구간 수를 빼면 자동 (손절선과 최소 여유를 두고 증거금 안에서 가장 많이)
 #     더 넣을 수 있는 것: 아시아/유로/미장, 2분/5분/10분/1시간/2시간 (기본: 지금 장 · 2분), 차등, oanda, ktr=62.4, #계좌번호
@@ -27,7 +27,7 @@ TF_KR = {"2m": "2분", "5m": "5분", "10m": "10분", "1h": "1시간", "2h": "2�
 
 HELP = ("<b>/grid 구간매매</b>\n"
         "• <code>/grid 나스닥 매수 5% 5구간</code> - KTR 거래: 손실 5% 안에서 구간마다 랏 계산\n"
-        "• <code>/grid 나스닥 매수 5% 5구간 여유1</code> - 손절을 마지막 구간에서 1 KTR 뒤로 (안 쓰면 기본값)\n"
+        "• <code>/grid 나스닥 매수 5% 5구간 여유0.5</code> - 손절을 마지막 구간에서 0.5 KTR 뒤로 (안 쓰면 기본 1)\n"
         "• <code>/grid 골드 매도 물타기 0.1랏 5구간 손절6</code> - 일반 물타기: 같은 랏, 손절 6 KTR\n"
         "• <code>/grid 골드 매도 물타기 0.1랏 5구간 손실5%</code> - 손절을 손실 %로 자동\n"
         "• <code>/grid 골드 매도 물타기 0.1랏 손실5%</code> - 구간 수도 자동 (손절선과 여유를 두고 가장 많이)\n"
@@ -574,7 +574,7 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
         gaps = []
         if w["mode"] == "ktr":                 # 손절 여유 (마지막 구간 뒤 KTR) 바로 바꾸기
             cur = p.get("stop_gap")
-            gaps = [[_b(wid, "손절 여유", "noop")] + [_b(wid, ("✓ " if cur == v else "") + f"{v:g}", "gap", v) for v in (0.5, 1, 1.5, 2)]]
+            gaps = [[_b(wid, "손절 여유", "noop")] + [_b(wid, ("✓ " if cur == v else "") + f"{v:g}", "gap", v) for v in (0.5, 1, 1.5)]]
         return (f"계좌 {html.escape(str(w['acc']))}\n" + q,
                 {"inline_keyboard": gaps + [[_b(wid, "✅ 주문 실행", "go")], [_b(wid, "◀ 뒤로", "back"), _b(wid, "↻ 다시 계산", "noop2"), _b(wid, "✖ 그만", "quit")]]})
     return head + "\n\n" + q, {"inline_keyboard": kb + [nav]}
