@@ -435,7 +435,7 @@ def _steps(w: dict) -> list[str]:
     if w.get("mode") == "avg":
         s += ["lot", "stop", "n"]              # 손절을 먼저 정해야 구간 수 자동·비교가 됨
     else:
-        s += ["risk", "n", "method"]
+        s += ["risk", "stopby", "n", "method"]   # 손실 % → 손절 기준(구간 수로 / 손절가) → 구간 수 → 배분
     return s + ["preview"]
 
 
@@ -443,6 +443,8 @@ def _done(w: dict, step: str) -> bool:
     if step == "stop":
         return ((w.get("stop_mode") == "ktr" and bool(w.get("stop_ktr"))) or (w.get("stop_mode") == "pct" and bool(w.get("stop_pct")))
                 or (w.get("stop_mode") == "price" and bool(w.get("stop_price"))))
+    if step == "stopby":
+        return w.get("stop_mode") == "ktr" or (w.get("stop_mode") == "price" and bool(w.get("stop_price")))
     if step == "preview":
         return False
     return w.get(step) is not None
@@ -558,10 +560,14 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
             kb += _rows([_b(wid, str(v) + ("*" if v == p.get("n_auto") else ""), "n", v) for v in pick], 7)
         kb.append([_b(wid, "✏️ 직접 입력", "input", "n")])
     elif step == "n":
-        q = ("구간 수 (진입 횟수)를 고르세요. 첫 진입은 시장가, 나머지는 KTR 간격 리밋입니다.\n"
-             "주요 고점·저점을 손절로 보려면 <b>📍 손절가로</b> - 그 안에 들어가는 구간 수를 자동으로 계산합니다.")
-        kb = _rows([_b(wid, str(v), "n", v) for v in N_CHOICES], 4) + [[_b(wid, "✏️ 직접 입력", "input", "n"),
-                                                                       _b(wid, "📍 손절가로", "input", "stop_price")]]
+        q = "구간 수 (진입 횟수)를 고르세요. 첫 진입은 시장가, 나머지는 KTR 간격 리밋입니다."
+        kb = _rows([_b(wid, str(v), "n", v) for v in N_CHOICES], 4) + [[_b(wid, "✏️ 직접 입력", "input", "n")]]
+    elif step == "stopby":
+        q = ("손절을 어떻게 정할까요?\n"
+             "• <b>구간 수로</b>: 구간 수를 고르면 손절은 마지막 구간에서 여유(기본 1 KTR) 더 간 곳\n"
+             "• <b>손절가로</b>: 주요 고점·저점·매물대를 손절가로 넣으면, 그 안에 들어가는 구간 수를 자동으로 계산\n"
+             f"손실 {w.get('risk', 0):g}%는 어느 쪽이든 그 손절 기준으로 나눠 랏을 계산합니다.")
+        kb = [[_b(wid, "📏 구간 수로", "stopby", "ktr")], [_b(wid, "📍 손절가 입력 (구간 수 자동)", "input", "stop_price")]]
     elif step == "method":
         q = "랏 배분을 고르세요.\n• <b>동일손실</b>: 진입마다 손절 손실이 같게\n• <b>차등손실</b>: 남은 예산의 절반씩 (앞 진입이 크게)"
         kb = [[_b(wid, "동일손실", "method", "equal"), _b(wid, "차등손실", "method", "half")]]
@@ -719,6 +725,9 @@ async def wiz_button(live, client, token, chat_id: str, data: str, message_id) -
         else:
             w["stop_mode"], w["stop_pct"] = "pct", float(value[1:])
             changed = ["stop_mode", "stop_pct"]
+    elif field == "stopby":
+        w["stop_mode"] = value
+        changed = ["stop_mode"]
     elif field in ("acc", "sym", "side", "mode", "method"):
         w[field] = value
         changed = [field]
