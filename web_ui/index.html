@@ -633,7 +633,7 @@
   <section class="panel">
     <div class="gtop">
       <div class="seg two" id="gSide"><button data-v="buy" class="on">매수 BUY</button><button data-v="sell">매도 SELL</button></div>
-      <div class="seg two" id="gMode"><button data-v="ktr" class="on">KTR 거래</button><button data-v="avg">일반 물타기</button></div>
+      <div class="seg two" id="gMode"><button data-v="ktr" class="on">KTR 거래</button><button data-v="avg">고정 랏 분할</button></div>
     </div>
     <p class="hint2" id="gModeHint"></p>
   </section>
@@ -811,7 +811,7 @@ const signed = (v, d = 2) => v == null ? '-' : (v > 0 ? '+' : '') + fmt(v, d);
 const cls = (v) => v > 0 ? 'up' : v < 0 ? 'down' : '';
 // 구간매매로 넣은 주문 = MT5 매직넘버 71700000~71799999 (서버 services/grid.py 와 같은 규칙)
 const kindOfMagic = (m) => (m >= 71700000 && m < 71800000) ? (m >= 71750000 ? 'avg' : 'ktr') : null;
-const GRID_KR = { ktr: 'KTR 거래', avg: '일반 물타기' }, GRID_SHORT = { ktr: 'KTR', avg: '물타기' };
+const GRID_KR = { ktr: 'KTR 거래', avg: '고정 랏 분할' }, GRID_SHORT = { ktr: 'KTR', avg: '고정랏' };
 const hm = (sec) => { sec = Math.max(0, sec | 0); const h = sec / 3600 | 0, m = (sec % 3600) / 60 | 0; return h ? `${h}시간 ${m}분` : `${m}분 ${sec % 60}초`; };
 const store = { get(k, d) { try { return JSON.parse(localStorage.getItem('traderos.' + k)) ?? d; } catch { return d; } },
                 set(k, v) { try { localStorage.setItem('traderos.' + k, JSON.stringify(v)); } catch {} } };
@@ -2584,7 +2584,7 @@ function gBody() {
     stop_price: G.stopMode === 'price' ? gNum('gStopPrice') : null,
     lot: gNum('gLot'), stop_mode: G.stopMode, stop_ktr: gNum('gStopKtr'), stop_gap: G.mode === 'ktr' && G.stopGap ? Number(G.stopGap) : null };
 }
-// 구간 수 자동이 되는 경우: 일반 물타기, 또는 KTR 거래를 손절가로 할 때
+// 구간 수 자동이 되는 경우: 고정 랏 분할, 또는 KTR 거래를 손절가로 할 때
 const gNAutoable = () => G.mode === 'avg' || G.stopMode === 'price';
 function gReady(b) {
   if (!b.ktr || (!b.n && !b.n_auto)) return false;
@@ -2637,7 +2637,7 @@ function gRenderPlan(p) {
       · 1랏이 1 움직이면 ${fmt(p.point_value)}${p.mode === 'ktr' ? ` · 손실 예산 ${fmt(p.budget)}` : ''} · 주문할 때 지금 시세로 다시 계산</p>
     ${(p.warnings || []).map((w) => `<div class="gwarn">⚠ ${esc(w)}</div>`).join('')}${gOptsHtml(p)}`;
 }
-// 일반 물타기 N별 비교 (서버 grid.avg_options). 줄을 누르면 그 구간 수로 '직접'
+// 고정 랏 분할 N별 비교 (서버 grid.avg_options). 줄을 누르면 그 구간 수로 '직접'
 function gOptsHtml(p) {
   const o = p.options; if (!o || !o.length) return '';
   const cur = p.levels ? p.n : null;
@@ -2682,7 +2682,7 @@ $('gGo').onclick = async () => {
   const p = G.plan; if (!p) return;
   const d = p.digits ?? 2;
   const ok = await ask(`${p.symbol} ${p.side === 'buy' ? '매수' : '매도'} 구간매매`,
-    `${G.mode === 'ktr' ? 'KTR 거래' : '일반 물타기'} · KTR ${fmt(p.ktr, d)} × ${p.n}구간${p.n_is_auto ? ' (자동)' : ''}\n`
+    `${G.mode === 'ktr' ? 'KTR 거래' : '고정 랏 분할'} · KTR ${fmt(p.ktr, d)} × ${p.n}구간${p.n_is_auto ? ' (자동)' : ''}\n`
     + `시장가 ${fmt(p.levels[0].lot)}lot + 리밋 ${p.n - 1}개 (총 ${fmt(p.total_lot)}lot)\n`
     + `손절 ${fmt(p.sl, d)} · 다 체결되고 손절이면 ${signed(-p.total_loss)}${p.total_loss_pct != null ? ` (${p.total_loss_pct.toFixed(2)}%)` : ''}\n\n`
     + '지금 시세로 다시 계산해서 바로 주문합니다.');
@@ -2775,7 +2775,7 @@ async function gLoadList() {
     const list = await api(`/accounts/${encodeURIComponent(acc.account_number)}/grid/list`);
     $('gList').innerHTML = list.length ? list.map((x) => `<div class="gitem" data-magic="${x.magic}" title="눌러서 상세 보기">
       <div class="t1"><b>${esc(x.symbol)}</b><span class="${x.side === 'buy' ? 'up' : 'down'}">${x.side === 'buy' ? '매수' : '매도'}</span>
-        <span class="muted">${esc(x.comment === 'AVG' ? '일반 물타기' : x.comment === 'KTR' ? 'KTR 거래' : x.comment)}</span><span class="sp"></span>
+        <span class="muted">${esc(x.comment === 'AVG' ? '고정 랏 분할' : x.comment === 'KTR' ? 'KTR 거래' : x.comment)}</span><span class="sp"></span>
         <b class="num ${cls(x.profit)}">${x.positions ? signed(x.profit) : ''}</b><span class="muted">›</span></div>
       <div class="muted num">체결 ${x.positions}개 ${fmt(x.lots)}lot${x.positions ? ` · 평단 ${fmt(x.avg)}` : ''} · 대기 ${x.pending}개 ${fmt(x.pending_lots)}lot${x.next_price ? ` · 다음 ${fmt(x.next_price)}` : ''}${x.sl ? ` · 손절 ${fmt(x.sl)}` : ''}</div>
       <div class="acts">${x.pending ? `<button class="btn small" data-gpend="${x.magic}">대기 주문 취소</button>` : ''}

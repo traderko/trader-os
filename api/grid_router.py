@@ -4,7 +4,7 @@
 #
 #   GET  /accounts/{번호}/grid/ktr?symbol=nasdaq&source=mt5|oanda&tf=2m&session=auto|asia|euro|us
 #   GET  /accounts/{번호}/grid/ktr-table?symbol=nasdaq&source=mt5   장 3개 × 시간봉 5개 표
-#   POST /accounts/{번호}/grid/plan      미리보기 (주문 안 함). 일반 물타기는 n 을 비우면 자동, 막히면 {invalid, options, n_auto}
+#   POST /accounts/{번호}/grid/plan      미리보기 (주문 안 함). 고정 랏 분할는 n 을 비우면 자동, 막히면 {invalid, options, n_auto}
 #   POST /accounts/{번호}/grid/execute   주문 - 거래 잠금 중이면 거절, 지금 시세로 다시 계산해서 넣음
 #   GET  /accounts/{번호}/grid/list      진행 중인 구간매매
 #   GET  /accounts/{번호}/grid/detail?magic=…  묶음 상세 (구간마다 보유·대기·청산, 손절·다음 구간 손익)

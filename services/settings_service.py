@@ -127,7 +127,7 @@ DEFAULTS: dict = {
     "oanda": {"token": "", "env": "practice"},   # env: practice(연습 계좌) | live(실계좌)
     # 구간매매 (KTR 배수)
     #   ktr_stop_gap: KTR 거래 손절 = 마지막 구간에서 이만큼 더 간 곳 (주문할 때 바꿀 수 있음)
-    #   min_gap_ktr : 일반 물타기에서 구간 수 자동일 때 마지막 구간과 손절선 사이 최소 여유
+    #   min_gap_ktr : 고정 랏 분할에서 구간 수 자동일 때 마지막 구간과 손절선 사이 최소 여유
     "grid": {"ktr_stop_gap": 1.0, "min_gap_ktr": 1.0},
     # 경제지표 - 이름에 이 단어가 들어가면 '주요 지표'로 강조 (services/key_events.py). 대소문자 구분 없음
     "events": {

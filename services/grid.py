@@ -15,7 +15,7 @@
 #   첫 진입은 시장가, 그다음부터 KTR 간격으로 리밋 주문 (매수면 아래로, 매도면 위로). 손절은 모두 같은 가격.
 #   KTR 거래   : 손실 %(잔고 대비)를 먼저 정하고 랏을 계산. 손절 = 첫 진입가에서 N KTR.
 #                동일손실 - 모든 진입이 손절에서 같은 금액을 잃게 / 차등손실 - 남은 예산의 절반씩 (마지막은 전부)
-#   일반 물타기 : 구간마다 같은 랏. 손절은 KTR 배수로 직접, 또는 손실 %로 자동
+#   고정 랏 분할 : 구간마다 같은 랏. 손절은 KTR 배수로 직접, 또는 손실 %로 자동
 #                (N개가 다 체결된 채 손절에 닿으면 총손실 = 잔고 × %가 되는 거리)
 #   1랏이 가격 1만큼 움직일 때 손익·증거금은 MT5 로 계산 (브로커 계약 크기·환율 반영).
 
@@ -37,7 +37,7 @@ TIMEFRAMES = {"2m": ("M2", 2), "5m": ("M5", 5), "10m": ("M10", 10), "1h": ("H1",
 OANDA_NAMES = {"gold": "XAU_USD", "nasdaq": "NAS100_USD", "oil": "WTICO_USD", "btc": "BTC_USD"}
 OANDA_BASE = {"practice": "https://api-fxpractice.oanda.com/v3", "live": "https://api-fxtrade.oanda.com/v3"}
 MAGIC_BASE = 71_700_000          # 구간매매 주문 magic = 71700000 ~ 71799999 (주문 묶음마다 하나)
-#   71700000~71749999 = KTR 거래, 71750000~71799999 = 일반 물타기  (웹 화면도 같은 규칙: kindOfMagic)
+#   71700000~71749999 = KTR 거래, 71750000~71799999 = 고정 랏 분할  (웹 화면도 같은 규칙: kindOfMagic)
 MAX_LEVELS = 30
 
 
@@ -206,7 +206,7 @@ def _floor_step(v: float, step: float) -> float:
 def avg_options(*, lot: float, point_value: float, ktr: float, stop_mode: str, stop_ktr: float | None,
                 budget: float | None, equity: float, margin_per_lot: float | None, margin_free: float | None,
                 min_gap: float) -> tuple[list[dict], int | None]:
-    """일반 물타기: 구간 수 N 마다 손절 거리·여유·손실·증거금 + 자동 N.
+    """고정 랏 분할: 구간 수 N 마다 손절 거리·여유·손실·증거금 + 자동 N.
     자동 N = 마지막 구간과 손절선 사이가 min_gap KTR 이상이고, 다 체결돼도 여유 증거금 안인 가장 큰 N.
     손실 % 방식이면 손실은 N과 상관없이 예산 그대로 - N을 늘릴수록 손절선이 가까워짐."""
     rows = []
@@ -236,8 +236,8 @@ def build_plan(*, mode: str, side: str, entry: float, ktr: float, n: int | None,
     KTR 거래 손절 = 마지막 구간에서 stop_gap KTR 더 간 곳 (첫 진입에서 (n-1+stop_gap) KTR)
     stop_mode="price" 면 손절가(주요 고점·저점·매물대)를 직접 받고 구간 수를 자동으로 정함
       KTR 거래: 마지막 구간과 손절가 사이가 stop_gap KTR 이상인 가장 큰 N (증거금 안)
-      일반 물타기: 손절 KTR 배수 = 손절가까지 거리 / KTR 로 바꿔서 avg_options
-    일반 물타기는 n_auto 면 구간 수를 자동으로 정함 (avg_options)"""
+      고정 랏 분할: 손절 KTR 배수 = 손절가까지 거리 / KTR 로 바꿔서 avg_options
+    고정 랏 분할는 n_auto 면 구간 수를 자동으로 정함 (avg_options)"""
     side = "buy" if side.lower().startswith("b") else "sell"
     sgn = -1 if side == "buy" else 1                     # 다음 구간 방향 (매수는 아래로)
     if not (ktr > 0):
@@ -422,7 +422,7 @@ def kind_of(magic) -> str | None:
 
 
 # ── 계좌 워커와 함께 (웹 API·텔레그램이 같이 씀) ─────────────────────────
-MODE_KR = {"ktr": "KTR 거래", "avg": "일반 물타기"}
+MODE_KR = {"ktr": "KTR 거래", "avg": "고정 랏 분할"}
 
 
 class GridLocked(GridError):
@@ -459,7 +459,7 @@ def ktr_stop_gap() -> float:
 
 
 def min_gap() -> float:
-    """일반 물타기 자동 구간 수: 마지막 구간과 손절선 사이 최소 여유 (KTR, 관리 화면 설정)"""
+    """고정 랏 분할 자동 구간 수: 마지막 구간과 손절선 사이 최소 여유 (KTR, 관리 화면 설정)"""
     try:
         from services.settings_service import get_settings
         return float((get_settings().get("grid") or {}).get("min_gap_ktr") or 1.0)
@@ -474,7 +474,7 @@ async def make_plan(account_id: int, body: dict) -> dict:
     side = "buy" if str(body.get("side", "buy")).lower().startswith("b") else "sell"
     ktr, n = _f(body.get("ktr")), int(_f(body.get("n")) or 0)
     mode = str(body.get("mode") or "ktr")
-    n_auto = (mode == "avg" or body.get("stop_mode") == "price") and (bool(body.get("n_auto")) or not n)   # 물타기·손절가는 구간 수를 비우면 자동
+    n_auto = (mode == "avg" or body.get("stop_mode") == "price") and (bool(body.get("n_auto")) or not n)   # 고정 랏 분할·손절가는 구간 수를 비우면 자동
     if not symbol or not ktr:
         raise GridError("종목과 KTR 값을 넣으세요.")
     try:

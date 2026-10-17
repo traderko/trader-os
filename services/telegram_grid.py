@@ -4,9 +4,9 @@
 #
 #   /ktr [종목] [oanda]        장 3개 × 시간봉 5개 KTR 표 (종목·시세 버튼으로 바꾸기)
 #   /grid 나스닥 매수 5% 5구간              KTR 거래 (손실 %로 랏 계산, 손절 = 마지막 구간 뒤 1 KTR - '여유0.5' 처럼 바꿈)
-#   /grid 골드 매도 물타기 0.1랏 5구간 손절6  일반 물타기 (손절 KTR 배수) - '손실5%' 로 쓰면 손실 %로 손절 자동
-#     물타기는 구간 수를 빼면 자동 (손절선과 최소 여유를 두고 증거금 안에서 가장 많이)
-#     손절가20430 - 주요 고점·저점을 손절가로 (KTR 거래·물타기 둘 다), 구간 수 자동
+#   /grid 골드 매도 고정랏 0.1랏 5구간 손절6  고정 랏 분할 (손절 KTR 배수) - '손실5%' 로 쓰면 손실 %로 손절 자동
+#     고정 랏 분할은 구간 수를 빼면 자동 (손절선과 최소 여유를 두고 증거금 안에서 가장 많이)
+#     손절가20430 - 주요 고점·저점을 손절가로 (KTR 거래·고정 랏 분할 둘 다), 구간 수 자동
 #     더 넣을 수 있는 것: 아시아/유로/미장, 2분/5분/10분/1시간/2시간 (기본: 지금 장 · 2분), 차등, oanda, ktr=62.4, #계좌번호
 #   → 미리보기 + [주문 실행] 버튼 (지금 시세로 다시 계산해서 주문, 거래 잠금 중이면 거절)
 #   /grids                    진행 중인 구간매매 + [대기 주문 취소] [전부 청산]
@@ -29,10 +29,10 @@ TF_KR = {"2m": "2분", "5m": "5분", "10m": "10분", "1h": "1시간", "2h": "2�
 HELP = ("<b>/grid 구간매매</b>\n"
         "• <code>/grid 나스닥 매수 5% 5구간</code> - KTR 거래: 손실 5% 안에서 구간마다 랏 계산\n"
         "• <code>/grid 나스닥 매수 5% 5구간 여유0.5</code> - 손절을 마지막 구간에서 0.5 KTR 뒤로 (안 쓰면 기본 1)\n"
-        "• <code>/grid 골드 매도 물타기 0.1랏 5구간 손절6</code> - 일반 물타기: 같은 랏, 손절 6 KTR\n"
-        "• <code>/grid 골드 매도 물타기 0.1랏 5구간 손실5%</code> - 손절을 손실 %로 자동\n"
-        "• <code>/grid 골드 매도 물타기 0.1랏 손실5%</code> - 구간 수도 자동 (손절선과 여유를 두고 가장 많이)\n"
-        "• <code>/grid 나스닥 매수 1% 손절가20430</code> - 주요 고점·저점을 손절가로, 그 안에 들어가는 구간 수 자동 (물타기도 됨)\n"
+        "• <code>/grid 골드 매도 고정랏 0.1랏 5구간 손절6</code> - 고정 랏 분할: 같은 랏, 손절 6 KTR\n"
+        "• <code>/grid 골드 매도 고정랏 0.1랏 5구간 손실5%</code> - 손절을 손실 %로 자동\n"
+        "• <code>/grid 골드 매도 고정랏 0.1랏 손실5%</code> - 구간 수도 자동 (손절선과 여유를 두고 가장 많이)\n"
+        "• <code>/grid 나스닥 매수 1% 손절가20430</code> - 주요 고점·저점을 손절가로, 그 안에 들어가는 구간 수 자동 (고정 랏 분할도 됨)\n"
         "더 넣을 수 있는 것: <code>아시아/유로/미장</code> <code>2분/5분/10분/1시간/2시간</code> (기본: 지금 장 · 2분), "
         "<code>차등</code> (KTR 거래 랏 배분), <code>oanda</code>, <code>ktr=62.4</code> (직접), <code>#계좌번호</code>\n"
         "미리보기를 보고 <b>주문 실행</b>을 눌러야 주문합니다. <code>/grid</code> 만 보내면 버튼으로 하나씩 고릅니다.\n"
@@ -89,7 +89,7 @@ def parse(args: str) -> dict:
             b["side"] = "buy"
         elif w in ("매도", "sell", "s", "숏", "short"):
             b["side"] = "sell"
-        elif w in ("물타기", "avg", "일반", "일반물타기"):
+        elif w in ("고정랏", "고정", "분할", "고정랏분할", "물타기", "avg", "일반", "일반물타기"):   # 예전 이름도 받음
             b["mode"] = "avg"
         elif w in ("ktr", "ktr거래"):
             b["mode"] = "ktr"
@@ -135,7 +135,7 @@ def parse(args: str) -> dict:
 
 
 def _opts_text(p: dict) -> str:
-    """일반 물타기 구간 수별 비교 (자동 N 근처만)"""
+    """고정 랏 분할 구간 수별 비교 (자동 N 근처만)"""
     o = p.get("options") or []
     if not o:
         return ""
@@ -190,7 +190,7 @@ async def cmd_grid(live, client, token, chat_id: str, args: str) -> None:
         miss.append("종목 (예: 나스닥)")
     if not b["side"]:
         miss.append("매수/매도")
-    if not b.get("n") and b["mode"] != "avg" and b.get("stop_mode") != "price":   # 물타기·손절가는 빼면 자동
+    if not b.get("n") and b["mode"] != "avg" and b.get("stop_mode") != "price":   # 고정 랏 분할·손절가는 빼면 자동
         miss.append("구간 수 (예: 5구간)")
     if b["mode"] == "ktr" and not b.get("risk_pct"):
         miss.append("손실 % (예: 5%)")
@@ -296,7 +296,7 @@ async def cmd_grids(live, client, token, chat_id: str) -> None:
             continue
         for x in items:
             side = "매수" if x["side"] == "buy" else "매도"
-            kind = {"KTR": "KTR 거래", "AVG": "일반 물타기"}.get(x.get("comment"), x.get("comment") or "")
+            kind = {"KTR": "KTR 거래", "AVG": "고정 랏 분할"}.get(x.get("comment"), x.get("comment") or "")
             text = (f"🧱 <b>{html.escape(x['symbol'])} {side}</b> · {html.escape(kind)} · 계좌 {html.escape(str(a.account_number))}\n"
                     f"체결 {x['positions']}개 {x['lots']:g}lot" + (f" · 평단 {_fmt(x['avg'])} · <b>{x['profit']:+,.2f}</b>" if x["positions"] else "")
                     + f"\n대기 {x['pending']}개 {x['pending_lots']:g}lot" + (f" · 다음 {_fmt(x['next_price'])}" if x.get("next_price") else "")
@@ -423,7 +423,7 @@ def detail_text(d: dict) -> str:
 #   버튼 데이터: gw:<id>:<항목>:<값>
 WIZ: dict[str, dict] = {}
 WIZ_TTL = 1800
-RISK_CHOICES = [1, 5, 10, 33]                 # 손실 % 기본 버튼 (KTR 거래 손실 %, 물타기 손절 손실 %)
+RISK_CHOICES = [1, 5, 10, 33]                 # 손실 % 기본 버튼 (KTR 거래 손실 %, 고정 랏 분할 손절 손실 %)
 N_CHOICES = [3, 4, 5, 6]                       # KTR 거래 구간 수 기본 버튼 (웹과 같음, 다른 값은 직접 입력)
 LOT_CHOICES = [0.01, 0.05, 0.1, 0.2, 0.5, 1]
 FIELD_KR = {"risk": "손실 %", "lot": "구간마다 랏", "n": "구간 수", "stop_ktr": "손절 (KTR 배수)", "stop_pct": "손실 % (손절 자동)", "stop_price": "손절가 (주요 고점·저점·매물대)",
@@ -508,8 +508,8 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
         kb = [[_b(wid, "📈 매수 (아래로 분할 진입)", "side", "buy"), _b(wid, "📉 매도 (위로 분할 진입)", "side", "sell")]]
     elif step == "mode":
         q = ("방식을 고르세요.\n• <b>KTR 거래</b>: 손실 %를 먼저 정하면 구간마다 랏을 계산 (손절 = 마지막 구간 뒤 기본 여유, 미리보기에서 바꿈)\n"
-             "• <b>일반 물타기</b>: 구간마다 같은 랏, 손절은 KTR 배수 또는 손실 %")
-        kb = [[_b(wid, "KTR 거래", "mode", "ktr"), _b(wid, "일반 물타기", "mode", "avg")]]
+             "• <b>고정 랏 분할</b>: 구간마다 같은 랏, 손절은 KTR 배수 또는 손실 %")
+        kb = [[_b(wid, "KTR 거래", "mode", "ktr"), _b(wid, "고정 랏 분할", "mode", "avg")]]
     elif step == "ktr":
         acc = await _account(w.get("acc"))
         try:
