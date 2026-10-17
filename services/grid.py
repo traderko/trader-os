@@ -170,15 +170,67 @@ async def compute_ktr(account_id: int, group: str, broker_symbol: str, source: s
     return _ktr_from(candles, sid, opened, tf, source)
 
 
+# ── 주요 지표 발표 KTR: ⭐ 주요 지표(services/key_events.py) 발표 시각을 품은 봉의 고가 − 저가 ──
+async def key_event_slots(now: datetime, past_hours: int = 24, ahead_hours: int = 24) -> list[dict]:
+    """표에 넣을 주요 지표 발표 시각: 지난 24시간에 나온 것 최근 2개 + 다음 24시간 안 첫 예정 1개.
+    같은 시각에 여러 지표가 나오면 한 줄로 (CPI + 근원 CPI 등)."""
+    from sqlalchemy import select
+    from db.models.economic_event import EconomicEvent
+    from db.session import AsyncSessionLocal
+    from services.key_events import is_key, words
+    lo, hi = (now - timedelta(hours=past_hours)).astimezone(timezone.utc), (now + timedelta(hours=ahead_hours)).astimezone(timezone.utc)
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(select(EconomicEvent.event_name, EconomicEvent.event_time)
+                                 .where(EconomicEvent.event_time >= lo, EconomicEvent.event_time <= hi)
+                                 .order_by(EconomicEvent.event_time))).all()
+    slots: dict[int, dict] = {}
+    for name, t in rows:
+        name = (name or "").replace("[FF] ", "").strip()
+        if not is_key(name):
+            continue
+        t = t if t.tzinfo else t.replace(tzinfo=timezone.utc)
+        ts = int(t.timestamp()) // 60 * 60
+        sl = slots.setdefault(ts, {"id": f"ev{ts}", "time": datetime.fromtimestamp(ts, KST).isoformat(), "names": [], "ts": ts})
+        if name not in sl["names"]:
+            sl["names"].append(name)
+    low = [w for w in words()]
+    for sl in slots.values():
+        first = sl["names"][0]
+        hit = next((w for w in low if w.lower() in first.lower()), first)   # 짧은 이름: 맞은 강조 단어 (CPI, FOMC …)
+        sl["name"] = hit + (f" 외 {len(sl['names']) - 1}" if len(sl["names"]) > 1 else "")
+        sl["pending"] = sl["ts"] > now.timestamp()
+    ordered = sorted(slots.values(), key=lambda x: x["ts"])
+    past = [x for x in ordered if not x["pending"]][-2:]
+    ahead = [x for x in ordered if x["pending"]][:1]
+    return past + ahead
+
+
+def _ktr_event(candles: list[dict], ts: int, tf: str, now: datetime) -> dict:
+    mins = TIMEFRAMES[tf][1]
+    c = next((c for c in candles if c["t"] <= ts < c["t"] + mins * 60), None)
+    if c is None:
+        raise GridError("발표 봉을 아직 찾지 못했습니다.")
+    return {"ktr": c["h"] - c["l"], "high": c["h"], "low": c["l"],
+            "live": now.timestamp() < c["t"] + mins * 60}      # 봉이 아직 안 끝남 (값이 더 커질 수 있음)
+
+
 async def ktr_table(account_id: int, group: str, source: str, now: datetime | None = None) -> dict:
-    """장 3개 × 시간봉 5개 KTR 표. 시간봉마다 봉을 한 번만 받아서 세 장을 다 계산"""
+    """장 3개 × 시간봉 5개 KTR 표 + ⭐ 주요 지표 발표 줄. 시간봉마다 봉을 한 번만 받아서 다 계산"""
     now = now or datetime.now(KST)
     opens = {sid: session_open(sid, now) for sid in SESSIONS}
     cells: dict = {sid: {} for sid in SESSIONS}
     errors: dict = {}
+    try:
+        events = await key_event_slots(now)
+    except Exception as e:
+        print(f"[grid] 주요 지표 불러오기 실패: {e}")
+        events = []
+    for ev in events:
+        cells[ev["id"]] = {}
+    ev_times = [datetime.fromtimestamp(ev["ts"], KST) for ev in events if not ev["pending"]]
     for tf in TIMEFRAMES:
         try:
-            start, end = _window(list(opens.values()), tf, now)
+            start, end = _window(list(opens.values()) + ev_times, tf, now)
             candles = await _candles(account_id, group, source, tf, start, end)
         except GridError as e:
             errors[tf] = str(e)
@@ -191,9 +243,17 @@ async def ktr_table(account_id: int, group: str, source: str, now: datetime | No
                 cells[sid][tf] = {"ktr": r["ktr"], "high": r["high"], "low": r["low"]}
             except GridError as e:
                 cells[sid][tf] = {"error": str(e)}
+        for ev in events:
+            if ev["pending"]:
+                continue
+            try:
+                cells[ev["id"]][tf] = _ktr_event(candles, ev["ts"], tf, now)
+            except GridError as e:
+                cells[ev["id"]][tf] = {"error": str(e)}
     return {
         "symbol": group, "source": source, "current": current_session(now),
         "sessions": [{"id": sid, "name": SESSIONS[sid][0], "open": opens[sid].isoformat()} for sid in SESSIONS],
+        "events": [{k: ev[k] for k in ("id", "name", "names", "time", "pending")} for ev in events],
         "tfs": list(TIMEFRAMES), "cells": cells, "errors": errors,
     }
 

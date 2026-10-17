@@ -377,6 +377,7 @@
   .ktbl td.on { background: var(--accent); border-color: var(--accent); color: #fff; font-weight: 700; }
   .ktbl td.err { color: var(--muted); cursor: default; }
   .ktbl tr.cur th.s { color: var(--accent); font-weight: 700; }
+  .ktbl tr.ev th.s { color: #b7791f; } .ktbl td.live { border-style: dashed; }
   #tab-grid .gktr { display: flex; gap: 8px; margin: 10px 0 6px; } #tab-grid .gktr input { flex: 1; min-width: 0; font-size: 18px; font-weight: 600; }
   #tab-grid [hidden] { display: none !important; }
   .gtbl { width: 100%; border-collapse: collapse; font-size: 13px; }
@@ -2559,7 +2560,14 @@ function gRenderTable() {
         const c = (t.cells[x.id] || {})[tf] || { error: (t.errors || {})[tf] || '-' };
         return c.ktr == null ? `<td class="err" title="${esc(c.error || '')}">-</td>`
           : `<td data-s="${x.id}" data-tf="${tf}" class="${x.id === G.sess && tf === G.tf ? 'on' : ''}">${kfmt(c.ktr)}</td>`;
-      }).join('') + '</tr>').join('') + '</table>'
+      }).join('') + '</tr>').join('')
+    // ⭐ 주요 지표 발표 줄 - 발표 시각을 품은 봉의 고가 − 저가 (예정이면 시각만)
+    + (t.events || []).map((ev) => `<tr class="ev"><th class="s" title="${esc(ev.names.join(' · '))}">⭐ ${esc(ev.name)}<small>${tm(ev.time)}${ev.pending ? ' 예정' : ''}</small></th>`
+      + (ev.pending ? `<td class="err" colspan="${t.tfs.length}">발표 전</td>` : t.tfs.map((tf) => {
+        const c = (t.cells[ev.id] || {})[tf] || {};
+        return c.ktr == null ? `<td class="err" title="${esc(c.error || '')}">-</td>`
+          : `<td data-s="${ev.id}" data-tf="${tf}" class="${ev.id === G.sess && tf === G.tf ? 'on' : ''}${c.live ? ' live' : ''}" title="${c.live ? '봉이 아직 안 끝남' : ''}">${kfmt(c.ktr)}${c.live ? '…' : ''}</td>`;
+      }).join('')) + '</tr>').join('') + '</table>'
     + (Object.keys(t.errors || {}).length ? `<div class="gerr" style="font-size:12px">${esc(Object.values(t.errors)[0])}</div>` : '');
 }
 function gPickCell(sid, tf) {
@@ -2567,10 +2575,11 @@ function gPickCell(sid, tf) {
   const c = (t.cells[sid] || {})[tf];
   G.sess = sid; G.tf = tf; store.set('gtf', tf);
   gRenderTable();
-  const x = t.sessions.find((v) => v.id === sid);
+  const x = t.sessions.find((v) => v.id === sid) || (t.events || []).find((v) => v.id === sid);
+  const isEv = sid.startsWith('ev');
   if (!c || c.ktr == null) { $('gKtrInfo').innerHTML = `<span class="gerr">${esc((c && c.error) || '이 칸은 값이 없습니다')}</span>`; return; }
   $('gKtr').value = +c.ktr.toFixed(c.ktr >= 100 ? 1 : c.ktr >= 1 ? 2 : 4);
-  $('gKtrInfo').innerHTML = `<b>${esc(x.name)}</b> ${TF_KR[tf]}봉 ${sid === 'asia' ? '직전+첫 봉' : '첫 봉'} 고 ${fmt(c.high)} − 저 ${fmt(c.low)} = <b>${kfmt(c.ktr)}</b>`
+  $('gKtrInfo').innerHTML = `<b>${isEv ? '⭐ ' : ''}${esc(x.name)}</b> ${TF_KR[tf]}봉 ${isEv ? '발표 봉' : sid === 'asia' ? '직전+첫 봉' : '첫 봉'}${c.live ? ' (아직 안 끝남)' : ''} 고 ${fmt(c.high)} − 저 ${fmt(c.low)} = <b>${kfmt(c.ktr)}</b>`
     + ` (${t.source === 'oanda' ? 'OANDA' : 'MT5'}) · ● = 지금 장`;
   gSaveInputs(); gSchedule(0);
 }

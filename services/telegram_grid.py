@@ -244,12 +244,24 @@ def _table_text(t: dict) -> str:
         name = short.get(x["id"], x["name"]) + ("*" if x["id"] == t["current"] else "")
         rows.append(_pad(name, 8, False) + "".join(_pad(_k(cells.get(tf, {}).get("ktr")), 8) for tf in t["tfs"]))
     from datetime import datetime
+    evs = t.get("events") or []
+    for ev in evs:                          # ⭐ 주요 지표 발표 봉 (예정이면 시각만)
+        cells = t["cells"].get(ev["id"], {})
+        label = "⭐" + ev["name"].split(" 외")[0][:5]
+        if ev["pending"]:
+            rows.append(_pad(label, 8, False) + f"{datetime.fromisoformat(ev['time']):%H:%M} 발표 예정")
+        else:
+            rows.append(_pad(label, 8, False) + "".join(_pad(_k(cells.get(tf, {}).get("ktr")) + ("…" if cells.get(tf, {}).get("live") else ""), 8)
+                                                       for tf in t["tfs"]))
     opens = " · ".join(f"{x['name']} {datetime.fromisoformat(x['open']):%m/%d %H:%M}" for x in t["sessions"])
     errs = "".join(f"\n⚠ {html.escape(v)}" for v in list((t.get("errors") or {}).values())[:1])
     label = (symbols.group_by_key(t["symbol"]) or {}).get("label", t["symbol"])
     return (f"📏 <b>{html.escape(label)} KTR</b> ({'OANDA' if t['source'] == 'oanda' else 'MT5'}) · * 지금 장\n"
             f"<pre>{html.escape(head)}\n" + "\n".join(html.escape(r) for r in rows) + "</pre>"
-            f"<i>{html.escape(opens)} 시작 · 아시아장은 직전+첫 봉</i>{errs}")
+            f"<i>{html.escape(opens)} 시작 · 아시아장은 직전+첫 봉</i>"
+            + "".join(f"\n<i>⭐ {datetime.fromisoformat(ev['time']):%m/%d %H:%M} {html.escape(' · '.join(ev['names']))}</i>" for ev in evs)
+            + (f"\n<i>… = 발표 봉이 아직 안 끝남</i>" if any(c.get("live") for ev in evs for c in t["cells"].get(ev["id"], {}).values()) else "")
+            + errs)
 
 
 def _table_markup(sym: str, src: str) -> dict:
@@ -529,6 +541,15 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
                     v = cells.get(tf, {}).get("ktr")
                     row.append(_b(wid, _k(v), "cell", f"{x['id']}.{tf}") if v is not None else _b(wid, "-", "noop"))
                 kb.append(row)
+            for ev in t.get("events") or []:       # ⭐ 주요 지표 발표 봉
+                if ev["pending"]:
+                    continue
+                cells = t["cells"].get(ev["id"], {})
+                row = [_b(wid, "⭐" + ev["name"].split(" 외")[0][:6], "noop")]
+                for tf in t["tfs"]:
+                    v = cells.get(tf, {}).get("ktr")
+                    row.append(_b(wid, _k(v), "cell", f"{ev['id']}.{tf}") if v is not None else _b(wid, "-", "noop"))
+                kb.append(row)
         other = "oanda" if w.get("src", "mt5") == "mt5" else "mt5"
         kb.append([_b(wid, f"시세: {'OANDA' if other == 'oanda' else 'MT5'}", "src", other), _b(wid, "✏️ 직접 입력", "input", "ktr")])
     elif step == "risk":
@@ -716,7 +737,8 @@ async def wiz_button(live, client, token, chat_id: str, data: str, message_id) -
         if c.get("ktr") is None:
             return "값이 없는 칸입니다"
         names = {"asia": "아시아장", "euro": "유로장", "us": "미장"}
-        w["ktr"], w["ktr_info"] = c["ktr"], f"{names[sid]} {TF_KR[tf]}봉" + (" · OANDA" if w.get("src") == "oanda" else "")
+        names.update({ev["id"]: f"⭐ {ev['name']}" for ev in (w.get("table") or {}).get("events") or []})
+        w["ktr"], w["ktr_info"] = c["ktr"], f"{names.get(sid, sid)} {TF_KR[tf]}봉" + (" · OANDA" if w.get("src") == "oanda" else "")
         changed = ["ktr", "ktr_info"]
     elif field == "stop":
         if value.startswith("k"):
