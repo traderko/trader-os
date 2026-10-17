@@ -423,7 +423,7 @@ def detail_text(d: dict) -> str:
 #   버튼 데이터: gw:<id>:<항목>:<값>
 WIZ: dict[str, dict] = {}
 WIZ_TTL = 1800
-RISK_CHOICES = [0.5, 1, 2, 3, 5, 10]
+RISK_CHOICES = [1, 5, 10, 33]                 # 손실 % 기본 버튼 (KTR 거래 손실 %, 물타기 손절 손실 %)
 N_CHOICES = [2, 3, 4, 5, 6, 8, 10]
 LOT_CHOICES = [0.01, 0.05, 0.1, 0.2, 0.5, 1]
 FIELD_KR = {"risk": "손실 %", "lot": "구간마다 랏", "n": "구간 수", "stop_ktr": "손절 (KTR 배수)", "stop_pct": "손실 % (손절 자동)", "stop_price": "손절가 (주요 고점·저점·매물대)",
@@ -503,7 +503,7 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
         kb = _rows([_b(wid, g.get("label", g["key"]), "sym", g["key"]) for g in symbols.groups()], 4)
     elif step == "side":
         q = "방향을 고르세요."
-        kb = [[_b(wid, "📈 매수 (아래로 물타기)", "side", "buy"), _b(wid, "📉 매도 (위로 물타기)", "side", "sell")]]
+        kb = [[_b(wid, "📈 매수 (아래로 분할 진입)", "side", "buy"), _b(wid, "📉 매도 (위로 분할 진입)", "side", "sell")]]
     elif step == "mode":
         q = ("방식을 고르세요.\n• <b>KTR 거래</b>: 손실 %를 먼저 정하면 구간마다 랏을 계산 (손절 = 마지막 구간 뒤 기본 여유, 미리보기에서 바꿈)\n"
              "• <b>일반 물타기</b>: 구간마다 같은 랏, 손절은 KTR 배수 또는 손실 %")
@@ -531,7 +531,7 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
         kb.append([_b(wid, f"시세: {'OANDA' if other == 'oanda' else 'MT5'}", "src", other), _b(wid, "✏️ 직접 입력", "input", "ktr")])
     elif step == "risk":
         q = "손실 %를 고르세요 (잔고 대비, 다 체결되고 손절이면 이만큼 잃음)."
-        kb = _rows([_b(wid, f"{v:g}%", "risk", v) for v in RISK_CHOICES], 6) + [[_b(wid, "✏️ 직접 입력", "input", "risk")]]
+        kb = _rows([_b(wid, f"{v:g}%", "risk", v) for v in RISK_CHOICES], 4) + [[_b(wid, "✏️ 직접 입력", "input", "risk")]]
     elif step == "lot":
         q = "구간마다 넣을 랏을 고르세요."
         kb = _rows([_b(wid, f"{v:g}", "lot", v) for v in LOT_CHOICES], 6) + [[_b(wid, "✏️ 직접 입력", "input", "lot")]]
@@ -569,7 +569,7 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
         q = ("손절을 정하세요. 다음 단계에서 구간 수를 자동으로 정하거나 고릅니다.\n• <b>KTR 배수</b>: 첫 진입에서 몇 KTR\n"
              "• <b>손실 %</b>: 다 체결되고 손절이면 잔고의 이만큼 잃도록 손절선 자동")
         kb = [[_b(wid, f"{v} KTR", "stop", f"k{v}") for v in (3, 4, 5, 6, 8, 10)],
-              [_b(wid, f"손실 {v:g}%", "stop", f"p{v}") for v in (1, 2, 3, 5)],
+              [_b(wid, f"손실 {v:g}%", "stop", f"p{v}") for v in RISK_CHOICES],
               [_b(wid, "✏️ KTR 배수", "input", "stop_ktr"), _b(wid, "✏️ 손실 %", "input", "stop_pct")],
               [_b(wid, "📍 손절가 (주요 고점·저점)", "input", "stop_price")]]
     else:  # preview
