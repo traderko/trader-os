@@ -360,6 +360,7 @@
   .meter i { display: block; height: 100%; background: var(--warn); border-radius: 3px; }
   .brow .s { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
   .hint2 { font-size: 11.5px; color: var(--muted); line-height: 1.6; margin: 0 0 6px; }
+  #gModeHint { padding-top: 10px; }   /* 방향·방식 버튼과 띄움 (margin 은 겹쳐서 padding) */
   /* 구간매매 */
   #tab-grid .gtop { display: grid; gap: 8px; }
   #tab-grid .gtop .seg { margin: 0; }
@@ -390,6 +391,9 @@
   .gsum div { display: flex; flex-direction: column; } .gsum small { color: var(--muted); font-size: 11.5px; }
   .gsum b { font-size: 15px; }
   .gwarn { color: var(--warn, #c77700); font-size: 12.5px; margin-top: 8px; }
+  .qpick { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 2px; }
+  .qpick button { font: inherit; font-size: 12px; padding: 3px 7px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+  .qpick button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   #gNMode[hidden] { display: none; } .cgrid label.gnl { grid-column: 1 / -1; }
   .gnrow { display: flex; gap: 6px; align-items: center; } .gnrow input { flex: 1; min-width: 0; }
   .gnrow input:disabled { opacity: .75; }
@@ -647,17 +651,17 @@
 
   <section class="panel">
     <div class="cgrid">
-      <label data-m="ktr">손실 % (잔고 대비)<input id="gRisk" inputmode="decimal" autocomplete="off" placeholder="예: 5"></label>
+      <label data-m="ktr">손실 % (잔고 대비)<input id="gRisk" inputmode="decimal" autocomplete="off" placeholder="예: 5"><span class="qpick" data-for="gRisk" data-vals="1,5,10,33" data-suf="%"></span></label>
       <label data-m="avg">구간마다 랏<input id="gLot" inputmode="decimal" autocomplete="off" placeholder="예: 0.1"></label>
       <label data-m="ktr">손절 기준<span class="seg mini" id="gKStop" style="margin:0"><button data-v="ktr" class="on">구간 수로</button><button data-v="price">손절가로</button></span></label>
       <label data-m="*" data-s="price">손절가 <small>주요 고점·저점·매물대</small><input id="gStopPrice" inputmode="decimal" autocomplete="off" placeholder="예: 20430"></label>
       <label class="gnl">구간 수 (진입 횟수)<span class="gnrow"><span class="seg mini" id="gNMode" style="margin:0"><button data-v="auto" class="on">자동</button><button data-v="manual">직접</button></span>
-        <input id="gN" inputmode="numeric" autocomplete="off" placeholder="예: 5"></span></label>
+        <input id="gN" inputmode="numeric" autocomplete="off" placeholder="예: 5"></span><span class="qpick" data-for="gN" data-vals="3,4,5,6" data-suf="구간"></span></label>
       <label data-m="ktr"><span id="gGapLab">손절 (마지막 구간 뒤 KTR)</span><span class="seg mini" id="gStopGap" style="margin:0"><button data-v="0.5">0.5</button><button data-v="1">1</button><button data-v="1.5">1.5</button></span></label>
       <label data-m="ktr">랏 배분<span class="seg mini" id="gMethod" style="margin:0"><button data-v="equal" class="on">동일손실</button><button data-v="half">차등손실</button></span></label>
       <label data-m="avg">손절<span class="seg mini" id="gStopMode" style="margin:0"><button data-v="ktr" class="on">KTR 배수</button><button data-v="pct">손실 %</button><button data-v="price">손절가</button></span></label>
       <label data-m="avg" data-s="ktr">손절 거리 (KTR 배수)<input id="gStopKtr" inputmode="decimal" autocomplete="off" placeholder="예: 6"></label>
-      <label data-m="avg" data-s="pct">손실 % (잔고 대비)<input id="gRisk2" inputmode="decimal" autocomplete="off" placeholder="예: 5"></label>
+      <label data-m="avg" data-s="pct">손실 % (잔고 대비)<input id="gRisk2" inputmode="decimal" autocomplete="off" placeholder="예: 5"><span class="qpick" data-for="gRisk2" data-vals="1,5,10,33" data-suf="%"></span></label>
     </div>
   </section>
 
@@ -2507,7 +2511,7 @@ function gSegs() {
   set('gSide', G.side); set('gMode', G.mode); set('gSrc', G.src);
   set('gMethod', G.method); set('gStopMode', G.stopMode); set('gNMode', G.nMode); set('gStopGap', G.stopGap || G.defGap);
   const nAuto = gNAutoable() && G.nMode === 'auto';
-  $('gN').disabled = nAuto; $('gN').placeholder = nAuto ? '자동' : '예: 5';
+  $('gN').disabled = nAuto; if (typeof gQuickPicks === 'function') gQuickPicks(); $('gN').placeholder = nAuto ? '자동' : '예: 5';
   $('gSyms').innerHTML = SYMBOLS.map((x) => `<button data-v="${esc(x.key)}" class="${x.key === G.sym ? 'on' : ''}">${esc(x.label)}</button>`).join('');
   if (G.mode === 'ktr' && !['ktr', 'price'].includes(G.stopMode)) G.stopMode = 'ktr';
   set('gKStop', G.stopMode);
@@ -2648,6 +2652,23 @@ function gOptsHtml(p) {
   return `<div class="gopts"><h4>구간 수별 비교 <small>손절 여유 ${fmt(p.min_gap, 1)} KTR 이상 · 줄을 누르면 그 구간 수로</small></h4>
     <div class="gwrap"><table class="gtbl"><tr><th>N</th><th>손절 KTR</th><th>여유</th><th>총 랏</th><th>손절 손실</th><th>증거금</th></tr>${rows}</table></div></div>`;
 }
+// 자주 쓰는 값 버튼 (손실 % · 구간 수) - 누르면 칸에 채움. 구간 수 버튼은 '직접'으로 바꿈
+function gQuickPicks() {
+  document.querySelectorAll('#tab-grid .qpick').forEach((q) => {
+    const inp = $(q.dataset.for), cur = parseFloat(inp.value);
+    const auto = q.dataset.for === 'gN' && gNAutoable() && G.nMode === 'auto';
+    q.innerHTML = q.dataset.vals.split(',').map((v) =>
+      `<button type="button" data-v="${v}" class="${!auto && +v === cur ? 'on' : ''}">${v}${q.dataset.suf === '%' ? '%' : ''}</button>`).join('');
+  });
+}
+$('tab-grid').addEventListener('click', (e) => {
+  const b = e.target.closest('.qpick button'); if (!b) return;
+  e.preventDefault();
+  const id = b.closest('.qpick').dataset.for;
+  if (id === 'gN' && gNAutoable()) G.nMode = 'manual';
+  $(id).value = b.dataset.v;
+  gSegs(); gSaveInputs(); gSchedule(0);
+});
 $('gPlan').addEventListener('click', (e) => {
   const tr = e.target.closest('.gopts tr[data-n]'); if (!tr) return;
   G.nMode = 'manual'; $('gN').value = tr.dataset.n; gSegs(); gSaveInputs(); gSchedule(0);
@@ -2795,7 +2816,7 @@ gSeg('gSide', 'side'); gSeg('gMode', 'mode'); gSeg('gMethod', 'method'); gSeg('g
 gSeg('gNMode', 'nMode', () => { if (G.nMode === 'manual' && !$('gN').value && G.lastAutoN) $('gN').value = G.lastAutoN; gSaveInputs(); gSchedule(0); });
 gSeg('gSrc', 'src', gLoadKtr);
 $('gKtrLoad').onclick = gLoadKtr;
-['gKtr', 'gRisk', 'gRisk2', 'gLot', 'gN', 'gStopKtr', 'gStopPrice'].forEach((id) => $(id).addEventListener('input', () => { gSaveInputs(); gSchedule(); }));
+['gKtr', 'gRisk', 'gRisk2', 'gLot', 'gN', 'gStopKtr', 'gStopPrice'].forEach((id) => $(id).addEventListener('input', () => { gSaveInputs(); gQuickPicks(); gSchedule(); }));
 let gInit = false;
 function gridEnter() {
   if (!gInit) { gInit = true; gLoadInputs(); }
