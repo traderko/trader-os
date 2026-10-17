@@ -424,7 +424,7 @@ def detail_text(d: dict) -> str:
 WIZ: dict[str, dict] = {}
 WIZ_TTL = 1800
 RISK_CHOICES = [1, 5, 10, 33]                 # 손실 % 기본 버튼 (KTR 거래 손실 %, 물타기 손절 손실 %)
-N_CHOICES = [2, 3, 4, 5, 6, 8, 10]
+N_CHOICES = [3, 4, 5, 6]                       # KTR 거래 구간 수 기본 버튼 (웹과 같음, 다른 값은 직접 입력)
 LOT_CHOICES = [0.01, 0.05, 0.1, 0.2, 0.5, 1]
 FIELD_KR = {"risk": "손실 %", "lot": "구간마다 랏", "n": "구간 수", "stop_ktr": "손절 (KTR 배수)", "stop_pct": "손실 % (손절 자동)", "stop_price": "손절가 (주요 고점·저점·매물대)",
             "ktr": "KTR 값"}
@@ -560,7 +560,7 @@ async def _wiz_screen(wid: str) -> tuple[str, dict]:
     elif step == "n":
         q = ("구간 수 (진입 횟수)를 고르세요. 첫 진입은 시장가, 나머지는 KTR 간격 리밋입니다.\n"
              "주요 고점·저점을 손절로 보려면 <b>📍 손절가로</b> - 그 안에 들어가는 구간 수를 자동으로 계산합니다.")
-        kb = _rows([_b(wid, str(v), "n", v) for v in N_CHOICES], 7) + [[_b(wid, "✏️ 직접 입력", "input", "n"),
+        kb = _rows([_b(wid, str(v), "n", v) for v in N_CHOICES], 4) + [[_b(wid, "✏️ 직접 입력", "input", "n"),
                                                                        _b(wid, "📍 손절가로", "input", "stop_price")]]
     elif step == "method":
         q = "랏 배분을 고르세요.\n• <b>동일손실</b>: 진입마다 손절 손실이 같게\n• <b>차등손실</b>: 남은 예산의 절반씩 (앞 진입이 크게)"
