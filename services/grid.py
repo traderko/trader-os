@@ -440,16 +440,27 @@ def build_plan(*, mode: str, side: str, entry: float, ktr: float, n: int | None,
 
     sl = stop_price if stop_mode == "price" or extra.get("stop_price") else entry + sgn * stop_dist
     levels, cum_lot, cum_px, cum_loss = [], 0.0, 0.0, 0.0
+    d = -sgn                                             # 이익 방향 (매수 +1, 매도 -1)
+
+    def group_pnl(px: float, k: int) -> float:
+        """1~k번까지 체결된 묶음 전체를 px 에서 닫을 때 손익"""
+        return sum(lots[j] * d * (px - prices[j]) * point_value for j in range(k))
+
     for i, (p, lv) in enumerate(zip(prices, lots)):
         loss = lv * abs(sl - p) * point_value
         cum_lot += lv
         cum_px += lv * p
         cum_loss += loss
+        avg = cum_px / cum_lot
         levels.append({
             "no": i + 1, "price": round(p, digits), "lot": lv, "dist_ktr": round(abs(sl - p) / ktr, 3),
-            "loss": loss, "cum_lot": round(cum_lot, 8), "avg": round(cum_px / cum_lot, digits), "cum_loss": cum_loss,
+            "loss": loss, "cum_lot": round(cum_lot, 8), "avg": round(avg, digits), "cum_loss": cum_loss,
             "margin": margin_per_lot * cum_lot if margin_per_lot else None,
-            "profit_1ktr": lv * ktr * point_value,
+            # 여기까지 체결된 뒤 되돌림 - 묶음 전체 기준 (포지션 하나의 '1KTR 수익'은 앞 포지션 손실을 빼먹어 뜻이 없음)
+            "to_avg_ktr": abs(p - avg) / ktr,                       # 본전(평단)까지 몇 KTR 되돌려야 하나
+            "to_avg_pts": abs(p - avg),                             # 같은 거리를 가격(포인트)으로
+            "rebound_1ktr": group_pnl(p + d * ktr, i + 1),         # 1 KTR 되돌리면 묶음 손익
+            "at_entry": group_pnl(prices[0], i + 1),                # 첫 진입가까지 돌아오면 묶음 손익
         })
     total_lot = cum_lot
     out = {
@@ -710,5 +721,9 @@ async def detail(db, account_id: int, magic: int) -> dict:
         "at_sl_now": pnl_at(sl, opn) if sl else None, "at_sl_all": pnl_at(sl, opn + pend) if sl else None,
         "next_price": nxt["price"] if nxt else None, "at_next": pnl_at(nxt["price"], opn) if nxt else None,
         "price_now": (live.get("bid") if side == "buy" else live.get("ask")),
+        "to_avg_ktr": (abs((live.get("bid") if side == "buy" else live.get("ask")) - avg) / ktr
+                       if (avg and ktr and live.get("bid")) else None),
+        "to_avg_pts": (abs((live.get("bid") if side == "buy" else live.get("ask")) - avg)
+                       if (avg and live.get("bid")) else None),
         "started": min((lv.get("time") for lv in levels if lv.get("time")), default=None),
     }

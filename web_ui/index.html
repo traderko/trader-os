@@ -2623,17 +2623,17 @@ async function gPlan() {
   gGoState();
 }
 function gRenderPlan(p) {
-  const d = p.digits ?? 2;
+  const d = p.digits ?? 2, last = p.levels[p.levels.length - 1];
   const rows = p.levels.map((l) => `<tr>
     <td>${l.no}${l.no === 1 ? '<small>시장가</small>' : '<small>리밋</small>'}</td>
     <td class="num">${fmt(l.price, d)}</td>
     <td class="num">${fmt(l.lot)}</td>
     <td class="num down">${signed(-l.loss)}<small>${fmt(l.dist_ktr, 2)} KTR</small></td>
-    <td class="num">${fmt(l.cum_lot)}<small>평단 ${fmt(l.avg, d)}</small></td>
+    <td class="num" title="평단 ${fmt(l.avg, d)} · 1 KTR 되돌리면 묶음 전체 ${signed(l.rebound_1ktr)} · 첫 진입가면 ${signed(l.at_entry)}">${fmt(l.cum_lot)}<small>${l.no === 1 ? '평단 = 진입가' : `본전 ${fmt(l.to_avg_ktr, 1)}K · ${fmt(l.to_avg_pts, l.to_avg_pts >= 100 ? 0 : 1)}p`}</small><small>1K반등 <span class="${cls(l.rebound_1ktr)}">${l.rebound_1ktr >= 0 ? '+' : '−'}${Math.round(Math.abs(l.rebound_1ktr)).toLocaleString('en-US')}</span></small></td>
   </tr>`).join('');
   const pct = (v) => v == null ? '' : ` (${v.toFixed(2)}%)`;
   $('gPlan').innerHTML = `<div class="gwrap"><table class="gtbl">
-      <tr><th>#</th><th>가격</th><th>랏</th><th>손절 손실</th><th>누적 랏</th></tr>${rows}
+      <tr><th>#</th><th>가격</th><th>랏</th><th>손절 손실</th><th title="아래: 여기까지 체결된 뒤 본전(평단)까지 거리 · 1 KTR 되돌렸을 때 묶음 전체 손익">누적 랏</th></tr>${rows}
       <tr class="sl"><td>손절${p.stop_price ? '<small>손절가</small>' : ''}</td><td class="num">${fmt(p.sl, d)}</td><td colspan="3" class="num">${fmt(p.stop_ktr, 2)} KTR<small>첫 진입에서 ${fmt(p.stop_dist, d)}</small></td></tr>
     </table></div>
     <div class="gsum">
@@ -2644,6 +2644,8 @@ function gRenderPlan(p) {
     </div>
     <p class="hint2" style="margin-top:8px">${esc(p.symbol)} · 지금 ${p.side === 'buy' ? '매수가' : '매도가'} ${fmt(p.entry, d)} 기준 · KTR ${fmt(p.ktr, d)}
       · 1랏이 1 움직이면 ${fmt(p.point_value)}${p.mode === 'ktr' ? ` · 손실 예산 ${fmt(p.budget)}` : ''} · 주문할 때 지금 시세로 다시 계산</p>
+    <p class="hint2">누적 랏 아래: 그 구간까지 체결된 뒤 <b>본전(평단)까지 거리</b> (KTR·포인트) · <b>1 KTR 되돌렸을 때 묶음 전체 손익</b> (앞 구간 손실 포함).
+      다 체결된 뒤 첫 진입가로 돌아오면 <b class="${cls(last.at_entry)}">${signed(last.at_entry)}</b></p>
     ${(p.warnings || []).map((w) => `<div class="gwarn">⚠ ${esc(w)}</div>`).join('')}${gOptsHtml(p)}`;
 }
 // 고정 랏 분할 N별 비교 (서버 grid.avg_options). 줄을 누르면 그 구간 수로 '직접'
@@ -2734,7 +2736,7 @@ function gRenderDetail(d) {
     + item('현재가', d.price_now != null ? P(d.price_now) : '-')
     + item('구간 간격(KTR)', d.ktr ? P(d.ktr) : '-')
     + item('보유', `${fmt(d.lots)} lot`)
-    + item('평단', d.avg != null ? P(d.avg) : '-')
+    + item('평단', d.avg != null ? P(d.avg) + (d.to_avg_ktr != null ? ` (${fmt(d.to_avg_ktr, 2)}K · ${P(d.to_avg_pts)})` : '') : '-')
     + item('평가 손익', d.count.open ? signed(d.profit_open) : '-', cls(d.profit_open))
     + item('청산 손익', d.count.closed ? signed(d.profit_closed) : '-', cls(d.profit_closed))
     + item('손절가', d.sl ? P(d.sl) : '없음')

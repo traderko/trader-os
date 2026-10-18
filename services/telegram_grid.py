@@ -169,6 +169,14 @@ def _plan_text(p: dict, info: str) -> str:
              + f" · 총 {p['total_lot']:g}lot · 평단 {_fmt(p['levels'][-1]['avg'], d)}",
              f"필요 증거금 {_fmt(p.get('margin_total'))} / 여유 {_fmt(p.get('margin_free'))}"
              + (f" · 손실 예산 {_fmt(p.get('budget'))}" if p["mode"] == "ktr" else "")]
+    if len(p["levels"]) > 1 and "to_avg_ktr" in p["levels"][0]:
+        # 되돌림 - 그 구간까지 체결된 뒤 묶음 전체 기준 (포지션 하나의 '1KTR 수익'은 앞 구간 손실을 빼먹어 뜻이 없음)
+        rb = [" " + _pad("#", 2) + _pad("본전", 7) + _pad("포인트", 8) + _pad("1KTR반등", 10) + _pad("진입가", 8)]
+        for lv in p["levels"][1:]:
+            pts = lv.get("to_avg_pts") or 0
+            rb.append(" " + _pad(str(lv["no"]), 2) + _pad(f"{lv['to_avg_ktr']:.2f}K", 7) + _pad(f"{pts:,.0f}" if pts >= 100 else f"{pts:.1f}", 8)
+                      + _pad(f"{lv['rebound_1ktr']:+,.0f}", 10) + _pad(f"{lv['at_entry']:+,.0f}", 8))
+        lines.append("↩️ 되돌림 (그 구간까지 체결된 뒤 · 묶음 전체)\n<pre>" + html.escape("\n".join(rb)) + "</pre>")
     lines += [f"⚠ {html.escape(w)}" for w in p.get("warnings") or []]
     if p.get("options"):
         lines.append(_opts_text(p))
