@@ -11,6 +11,7 @@
 #      Claude writes this file when it changes files; it is deleted after a successful push.
 #   3) else made from the changed paths, e.g. "update: web_ui, services/guidelines (3 files)"
 # Release tag message: commit titles since the previous tag (made automatically).
+# Release page text: .github/workflows/release.yml writes it from the full commit messages since the previous tag.
 #
 # Safety: stops before committing if data/, secrets/, uploads/, logs/, venv/ or a .env file would be committed,
 # or if a changed file looks like it contains a secret (tools/check_secrets.py).

@@ -1,6 +1,7 @@
 # 태그(v0.1.0 같은)를 올리면 배포용 zip을 만들어 GitHub Release 에 붙인다.
 #   git tag v0.1.2 && git push origin v0.1.2
 # zip 안에 release.json(버전·저장소)을 넣는다 → 설치본의 자동 업데이트가 이걸 보고 새 버전을 확인함 (services/updater.py)
+# 릴리스 설명 = 직전 태그 이후 커밋 메시지 (제목 + 본문 - publish.msg 로 쓴 변경 내용 그대로)
 name: Release
 
 on:
@@ -15,6 +16,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # 직전 태그를 찾고 그 뒤 커밋들을 모으려면 전체 기록이 필요
+
+      - name: Release notes
+        run: |
+          PREV=$(git describe --tags --abbrev=0 --match 'v*' "${GITHUB_REF_NAME}^" 2>/dev/null || true)
+          RANGE="${PREV:+$PREV..}${GITHUB_REF_NAME}"
+          {
+            echo "## 변경 사항"
+            echo
+            git log --no-merges --format='### %s%n%n%b' "$RANGE" | sed -e '/^Co-Authored-By:/d' -e '/^Claude-Session:/d'
+            if [ -n "$PREV" ]; then
+              echo
+              echo "전체 비교: https://github.com/${GITHUB_REPOSITORY}/compare/${PREV}...${GITHUB_REF_NAME}"
+            fi
+          } > notes.md
+          cat notes.md
 
       - name: Make zip
         run: |
@@ -29,4 +47,4 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: TraderOS-${{ github.ref_name }}.zip
-          generate_release_notes: true
+          body_path: notes.md
