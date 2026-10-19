@@ -207,6 +207,20 @@
   }
   nav.tabs button .i { font-size: 19px; line-height: 1.2; }
   nav.tabs button.on { color: var(--accent); font-weight: 600; }
+  /* 지표 탭 */
+  .evtop { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; margin: 2px 0 8px; }
+  .evko { display: flex; gap: 6px; align-items: center; font-weight: 600; }
+  .evnext { border: 1.5px solid var(--accent); border-radius: 10px; padding: 10px 12px; margin-bottom: 10px; font-size: 13.5px; }
+  .evnext b { color: var(--accent); }
+  .evdays { display: grid; gap: 8px; }
+  .evday { border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; font-size: 13px; }
+  .evday.today { border-color: var(--accent); border-width: 1.5px; }
+  .evday.none { color: var(--muted); }
+  .evday > b { display: block; margin-bottom: 4px; }
+  .evday .ev { display: flex; gap: 8px; padding: 2px 0; } .evday .ev time { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
+  .evday .ev.key span { font-weight: 700; color: var(--accent); }
+  .evday .ev.past { opacity: .5; }
+  .evday .lk { margin-top: 6px; color: var(--warn, #c77700); font-size: 12px; }
   @media (min-width: 900px) {
     nav.tabs { position: static; border: 0; background: transparent; padding: 0; gap: 2px; }
     nav.tabs button { flex: none; flex-direction: row; gap: 6px; padding: 8px 12px; font-size: 13.5px; border-radius: 8px; }
@@ -677,6 +691,21 @@
     <div id="gList"><div class="empty">불러오는 중…</div></div>
   </section>
 </section>
+
+<!-- 이번 주 경제지표 (고영향 USD, 한국 시간) -->
+<section class="tab" id="tab-events">
+  <section class="panel">
+    <div class="risk-head"><h2>이번 주 지표</h2><button class="btn small ghost" id="evReload">↻</button></div>
+    <div class="evtop">
+      <label class="evko"><input type="checkbox" id="evKeyOnly" checked> ⭐ 주요 지표만</label>
+      <span class="muted" id="evSub"></span>
+    </div>
+    <div id="evNext"></div>
+    <div id="evHealth"></div>
+    <div id="evDays"><div class="empty">불러오는 중…</div></div>
+    <p class="hint2" style="margin-top:8px">고영향 USD 지표 · 한국 시간 · 하루 = 브로커 거래일. ⭐ = 관리 화면에서 정한 강조 단어가 들어간 지표. 🔒 = 지표일이라 잠기는 집중 구간.</p>
+  </section>
+</section>
 </main>
 
 <nav class="tabs" id="tabs">
@@ -685,6 +714,7 @@
   <button data-tab="pnl"><span class="i">📅</span>손익</button>
   <button data-tab="stats"><span class="i">📊</span>통계</button>
   <button data-tab="grid"><span class="i">🧱</span>구간</button>
+  <button data-tab="events"><span class="i">📰</span>지표</button>
 </nav>
 
 <!-- 거래 상세·기록 -->
@@ -1396,7 +1426,7 @@ $('tpGo').onclick = () => applyLevel('tp');
 
 // ── 주기적 갱신: 화면이 보일 때만, 대화상자가 열려 있으면 쉼 ──
 const busy = () => document.hidden || !$('unlockModal').hidden || !$('askModal').hidden || tab !== 'pos';
-function refreshAll() { if (tab === 'trades') return loadTrades(); if (tab === 'pnl') return loadPnl(); if (tab === 'stats') return loadStats(); if (tab === 'grid') return gridEnter(); loadLock(); loadRisk(); loadPositions(); }
+function refreshAll() { if (tab === 'trades') return loadTrades(); if (tab === 'pnl') return loadPnl(); if (tab === 'stats') return loadStats(); if (tab === 'grid') return gridEnter(); if (tab === 'events') return loadEvents(); loadLock(); loadRisk(); loadPositions(); }
 setInterval(() => { if (!busy()) loadLock(); }, 3000);
 setInterval(() => { if (!busy()) { loadPositions(); loadRisk(); } }, 5000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAll(); });
@@ -2708,6 +2738,47 @@ $('gGo').onclick = async () => {
   gGoState();
 };
 
+// ── 이번 주 지표 (서버 /events/week = 관리 화면 대시보드와 같음) ──
+let EV = null;
+async function loadEvents() {
+  try { EV = await api('/events/week'); } catch (e) { $('evDays').innerHTML = `<div class="gerr">${esc(e.message)}</div>`; return; }
+  $('evSub').textContent = `⭐ ${EV.key_total}개 · 전체 ${EV.total}개`;
+  const warns = [];
+  for (const [k, label] of [['einfomax', 'einfomax'], ['ff', 'Forex Factory']]) {
+    const h = EV.health && EV.health[k];
+    if (h && h.error) warns.push(`${label} 지표 받기 실패 중`);
+  }
+  if (!EV.total) warns.push('이번 주 저장된 지표가 없습니다 (휴일 주간이 아니면 지표 받기 문제 - 관리 화면 대시보드 확인).');
+  $('evHealth').innerHTML = warns.map((w) => `<div class="gwarn">⚠ ${esc(w)}</div>`).join('');
+  renderEvents();
+}
+function renderEvents() {
+  if (!EV) return;
+  const keyOnly = $('evKeyOnly').checked, now = Date.now();
+  const md = (iso) => { const d = new Date(iso); return `${d.getMonth() + 1}/${d.getDate()}`; };
+  const hm = (iso) => hmOf(new Date(iso));
+  // 다음 발표 (주요 지표만 보기면 ⭐ 중에서)
+  const all = EV.days.flatMap((d) => d.events).filter((e) => !keyOnly || e.key);
+  const nx = all.find((e) => new Date(e.time).getTime() > now);
+  if (nx) {
+    const mins = Math.round((new Date(nx.time).getTime() - now) / 60000);
+    const left = mins >= 1440 ? `${Math.floor(mins / 1440)}일 ${Math.floor(mins % 1440 / 60)}시간` : mins >= 60 ? `${Math.floor(mins / 60)}시간 ${mins % 60}분` : `${mins}분`;
+    const same = all.filter((e) => e.time === nx.time);
+    $('evNext').innerHTML = `<div class="evnext">다음 발표 <b>${md(nx.time)} ${hm(nx.time)}</b> · ${left} 뒤<br>${same.map((e) => `${e.key ? '⭐ ' : ''}${esc(e.name.replace(/^\[FF\] /, ''))}`).join(' · ')}</div>`;
+  } else $('evNext').innerHTML = '';
+  $('evDays').innerHTML = '<div class="evdays">' + EV.days.map((d) => {
+    const list = keyOnly ? d.events.filter((e) => e.key) : d.events;
+    const evs = list.map((e) => `<div class="ev${e.key ? ' key' : ''}${new Date(e.time).getTime() < now ? ' past' : ''}"><time>${hm(e.time)}</time><span>${e.key ? '⭐ ' : ''}${esc(e.name.replace(/^\[FF\] /, ''))}</span></div>`).join('');
+    const lk = d.locks.map((l) => `🔒 ${esc(l.name)} ${md(l.start)} ${hm(l.start)}~${hm(l.end)}`).join('<br>');
+    const more = keyOnly && d.events.length > list.length ? `<small class="muted">그 밖의 지표 ${d.events.length - list.length}개</small>` : '';
+    return `<div class="evday${d.today ? ' today' : ''}${d.events.length ? '' : ' none'}"><b>${esc(d.weekday)} ${d.broker_date.slice(5).replace('-', '/')}${d.today ? ' · 오늘' : ''}</b>
+      ${evs || (d.events.length ? '' : '지표 없음')}${more}${lk ? `<div class="lk">${lk}</div>` : ''}</div>`;
+  }).join('') + '</div>';
+}
+try { if (store.get('evKeyOnly', true) === false) $('evKeyOnly').checked = false; } catch {}
+$('evKeyOnly').onchange = () => { store.set('evKeyOnly', $('evKeyOnly').checked); renderEvents(); };
+$('evReload').onclick = loadEvents;
+
 // ── 구간매매 묶음 상세 (포지션 탭 머리줄 · 구간 탭 목록 · 거래내역 🧱 표시에서 열림) ──
 let gdMagic = null;
 async function gDetail(magic) {
@@ -2838,7 +2909,7 @@ function gridEnter() {
 
 (async () => {
   renderSyms(); renderTSyms();
-  const h = location.hash.slice(1); if (h === 'trades' || h === 'pnl' || h === 'stats' || h === 'grid') { tab = h; document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab)); document.querySelectorAll('main .tab').forEach((s) => s.classList.toggle('on', s.id === 'tab-' + tab)); }
+  const h = location.hash.slice(1); if (h === 'trades' || h === 'pnl' || h === 'stats' || h === 'grid' || h === 'events') { tab = h; document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab)); document.querySelectorAll('main .tab').forEach((s) => s.classList.toggle('on', s.id === 'tab-' + tab)); }
   try {
     await loadAccounts();
     if (!acc) { $('posList').innerHTML = '<div class="empty">등록된 계좌가 없습니다. 이 PC의 관리 화면에서 계좌를 추가하세요.</div>'; return; }

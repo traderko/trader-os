@@ -495,6 +495,12 @@ for _name in ("trade_report", "signal_edge_sheet", "trade_ktr", "server", "test"
             raise
 
 
+# 이번 주 경제지표 (웹 화면 '지표' 탭) - 관리 화면 대시보드와 같은 내용 (⭐ 주요 지표, 지표일 잠금 구간)
+@app.get("/events/week")
+async def events_week(db: AsyncSession = Depends(get_db)):
+    return await admin_router.week_events(db)
+
+
 # 종목 묶음 (웹 화면 종목 버튼용 - services/symbols.py)
 @app.get("/symbols")
 def list_symbols():
