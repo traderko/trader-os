@@ -2,7 +2,7 @@
 #
 # 체결 알림에서 진입·청산 근거 고르기 (태그). 웹 화면 거래 상세의 태그(trade_tags · trade_tag_map)와 같은 것.
 #   진입 알림  [🏷 진입 근거]  → 진입 태그 목록 (누를 때마다 켜기·끄기, 바로 저장)
-#   청산 알림  [🏷 청산 근거]  → 청산 태그 (손실이면 손실 태그도)
+#   청산 알림  [🏷 청산 근거]  → 청산 태그 + 손실 태그(🔻)
 #   [➕ 새 근거] 채팅으로 이름을 보내면 태그를 만들고 바로 선택 · [✏️ 메모] 근거 글(진입/청산 근거 칸) · [✅ 완료]
 #   [⚙️ 관리] 근거 이름 바꾸기 · 지우기 (붙은 거래 수를 보여 주고, 다른 근거로 옮기고 지울 수도 있음)
 # 여러 건이 한 알림으로 묶였으면 그 거래들에 같이 저장.
@@ -83,7 +83,7 @@ async def _screen(db, kind: str, ids: list[int], tok: str) -> tuple[str, dict]:
     t0 = trades[0]
     net = sum((t.profit or 0) + (t.commission or 0) for t in trades if t.close_time)
     loss = kind == "c" and net < 0
-    show_types = [x for x in types if x != "loss" or loss]
+    show_types = types                          # 청산이면 손실 근거도 항상 (익절 묶음 안의 손실 건에도 달 수 있게)
     from db.models.trade_tag import TagType
     tags = (await db.execute(select(TradeTag).where(TradeTag.type.in_([TagType(x) for x in show_types])).order_by(TradeTag.type, TradeTag.id))).scalars().all()
     chosen = set((await db.execute(select(TradeTagMap.tag_id).where(TradeTagMap.trade_id == t0.id))).scalars().all())
@@ -117,7 +117,7 @@ async def _screen(db, kind: str, ids: list[int], tok: str) -> tuple[str, dict]:
                {"text": "✏️ 메모", "callback_data": f"tg:{kind}:{tok}:memo"},
                {"text": "⚙️ 관리", "callback_data": f"tg:{kind}:{tok}:m"},
                {"text": "✅ 완료", "callback_data": f"tg:{kind}:{tok}:done"}])
-    if loss:
+    if any(g.type.value == "loss" for g in tags):
         lines.append("🔻 = 손실 근거")
     return "\n".join(lines), {"inline_keyboard": kb}
 

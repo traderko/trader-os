@@ -246,6 +246,10 @@
 
   /* 거래내역 */
   .month { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+  /* 거래내역 윗부분(달·종목·보기) 고정 - 스크롤해도 보이게. 넓은 화면은 요약(순손익 등)까지 */
+  .tbar { position: sticky; top: var(--hdr, 52px); z-index: 4; background: var(--bg); margin: -12px -12px 0; padding: 12px 12px 2px; }
+  .tbar .seg { margin-bottom: 8px; } .tbar .seg.mini2 { margin-top: 0; }
+  @media (min-width: 900px) { .tsumP { position: sticky; top: calc(var(--hdr, 52px) + var(--tbar, 130px)); z-index: 3; box-shadow: 0 6px 8px -6px rgba(0,0,0,.25); } }
   .month .btn.small { padding-left: 9px; padding-right: 9px; white-space: nowrap; flex-shrink: 0; }
   @media (max-width: 420px) { .month { gap: 4px; } .month strong { font-size: 15px; } }
   .month strong { font-size: 16px; min-width: 96px; text-align: center; }
@@ -598,6 +602,7 @@
 
 <!-- 거래내역 -->
 <section class="tab" id="tab-trades">
+  <div class="tbar" id="tBar">
   <div class="month">
     <button class="btn" id="mPrev" aria-label="이전 달">‹</button>
     <strong class="num" id="mLabel"></strong>
@@ -610,7 +615,8 @@
   </div>
   <div class="seg" id="tSyms"></div>
   <div class="seg mini2" id="tOrigin"><button data-o="all" class="on">전체</button><button data-o="manual">✋ 직접 거래</button><button data-o="grid">🧱 구간매매</button><button id="tNoReason" title="진입 근거가 없거나, 청산했는데 청산·손실 근거가 없는 거래만">🏷 근거 없음</button></div>
-  <section class="panel">
+  </div>
+  <section class="panel tsumP">
     <div class="tsum">
       <div><small>순손익</small><span class="num" id="tNet">-</span></div>
       <div><small>거래 · 승률</small><span class="num" id="tCount">-</span></div>
@@ -837,7 +843,7 @@
 <div class="modal" id="tagModal" hidden>
   <div class="sheet" style="max-width:560px">
     <h3>🏷 근거 태그</h3>
-    <p>미리 만들어 두면 텔레그램 체결 알림의 <b>[🏷 진입 근거]</b> <b>[🏷 청산 근거]</b> 버튼과 거래 상세에서 바로 고를 수 있습니다. 손실 근거는 손실로 끝난 청산에만 나옵니다. 이름을 누르면(✎) 바꿀 수 있고, 이미 붙은 거래에도 새 이름으로 보입니다.</p>
+    <p>미리 만들어 두면 텔레그램 체결 알림의 <b>[🏷 진입 근거]</b> <b>[🏷 청산 근거]</b> 버튼과 거래 상세에서 바로 고를 수 있습니다. 손실 근거는 청산 근거와 같이 나옵니다(🔻). 이름을 누르면(✎) 바꿀 수 있고, 이미 붙은 거래에도 새 이름으로 보입니다.</p>
     <div id="tagMgr"></div>
     <div class="acts"><button class="btn" data-close>닫기</button></div>
   </div>
@@ -1918,8 +1924,7 @@ $('tagMgr').addEventListener('click', async (e) => {
 let taPick = new Set();
 function renderTagApply() {
   const sel = [...tSel.values()];
-  const anyLoss = sel.some((t) => (t.profit || 0) + (t.commission || 0) < 0);
-  $('taBody').innerHTML = TAG_TYPES.filter(([type]) => type !== 'loss' || anyLoss).map(([type, label]) => {
+  $('taBody').innerHTML = TAG_TYPES.map(([type, label]) => {
     const list = (allTags || []).filter((g) => g.type === type);
     return `<div class="tgsec"><h4>${label} 근거</h4>
       <div class="tachips">${list.map((g) => `<button data-ta="${g.id}" class="${taPick.has(g.id) ? 'on' : ''}">${esc(g.name)}</button>`).join('') || '<span class="muted" style="font-size:12.5px">없음</span>'}</div>
@@ -1931,7 +1936,7 @@ function renderTagApply() {
 $('tTagGo').onclick = async () => {
   const sel = [...tSel.values()]; if (!sel.length) return;
   taPick = new Set();
-  $('taWhat').textContent = `고른 ${sel.length}건에 근거를 더합니다. 이미 붙은 근거는 그대로 둡니다. (손실 근거는 손실로 끝난 거래가 있을 때만)`;
+  $('taWhat').textContent = `고른 ${sel.length}건에 근거를 더합니다. 이미 붙은 근거는 그대로 둡니다.`;
   $('tagApplyModal').hidden = false; $('taBody').innerHTML = '<div class="empty">불러오는 중…</div>';
   try { await loadTags(); renderTagApply(); } catch (e) { $('taBody').innerHTML = `<div class="gerr">${esc(e.message)}</div>`; }
 };
@@ -2895,6 +2900,16 @@ $('gGo').onclick = async () => {
   } catch (e) { toast(e.message, true); }
   gGoState();
 };
+
+// 고정한 윗부분 높이 (머리글·거래내역 필터) → CSS 변수 (sticky 위치)
+function setStickyVars() {
+  const h = document.querySelector('body > header'), b = $('tBar');
+  if (h) document.documentElement.style.setProperty('--hdr', h.offsetHeight + 'px');
+  if (b && b.offsetHeight) document.documentElement.style.setProperty('--tbar', b.offsetHeight + 'px');
+}
+addEventListener('resize', setStickyVars);
+setTimeout(setStickyVars, 0);
+new ResizeObserver(setStickyVars).observe($('tBar'));
 
 // ── 이번 주 지표 (서버 /events/week = 관리 화면 대시보드와 같음) ──
 let EV = null;
