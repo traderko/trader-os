@@ -396,6 +396,11 @@
   .meter { height: 6px; border-radius: 3px; background: var(--code); overflow: hidden; }
   .meter i { display: block; height: 100%; background: var(--warn); border-radius: 3px; }
   .brow .s { font-size: 11.5px; color: var(--muted); margin-top: 3px; }
+  .tagrow { cursor: pointer; border-radius: 8px; } .tagrow:hover { background: var(--accent-weak); }
+  .tagrow.on { background: var(--accent-weak); box-shadow: inset 3px 0 0 var(--accent); padding-left: 6px; }
+  .tagrow.none .l { color: var(--muted); font-weight: 500; }
+  .tagf { font-weight: 500; font-size: 13px; color: var(--accent); } .tagf .btn { margin-left: 4px; }
+  .stags { color: var(--accent); }
   .hint2 { font-size: 11.5px; color: var(--muted); line-height: 1.6; margin: 0 0 6px; }
   #gModeHint { padding-top: 10px; }   /* 방향·방식 버튼과 띄움 (margin 은 겹쳐서 padding) */
   /* 구간매매 */
@@ -2386,6 +2391,7 @@ let stYear = new Date().getFullYear();
 let stRaw = null;        // { trades, report }
 let stMode = 'symbol';
 let stShow = 50;
+let stTagType = 'entry', stTagPick = null;     // 근거별 성과: 보는 종류 / 눌러서 목록을 거른 근거 (id, 0 = 근거 없음)
 
 // 기간: week(이번 주, 월요일 06:00부터) / 1m / 3m (지금부터 거꾸로) / year(연도별)
 let stPeriod = (() => { try { return localStorage.getItem('stPeriod') || '3m'; } catch { return '3m'; } })();
@@ -2411,7 +2417,7 @@ $('sPeriod').onclick = (e) => {
 $('sPrev').onclick = () => { stYear--; loadStats(); };
 $('sNext').onclick = () => { stYear++; loadStats(); };
 $('sAll').onchange = () => loadStats();
-$('sGroup').onchange = () => { stShow = 50; renderStats(); };
+$('sGroup').onchange = () => { stShow = 50; stTagPick = null; renderStats(); };
 
 async function loadStats() {
   if (!acc) return;
@@ -2462,8 +2468,13 @@ function buildStatTrades(trades, grouped) {
   const groups = [];
   if (!grouped) closed.forEach((t) => groups.push([t]));
   else {
-    const active = new Map(), end = new Map();
+    const active = new Map(), end = new Map(), byGid = new Map();
     for (const t of closed) {
+      if (t.group_id) {                         // 거래내역에서 [📦 묶기] 한 거래는 시간과 상관없이 한 트레이드
+        const g = byGid.get(t.group_id);
+        if (g) g.push(t); else { const ng = [t]; byGid.set(t.group_id, ng); groups.push(ng); }
+        continue;
+      }
       const k = `${t.symbol}|${isBuyT(t)}`, g = active.get(k), e = end.get(k);
       if (g && e && t._o <= e && t._o - g[0]._o <= ENTRY_WINDOW_MS) {
         g.push(t); if (t._c > e) end.set(k, t._c);
@@ -2635,6 +2646,45 @@ const fix2 = (v) => v == null ? '-' : fmt(v);
 const BREAKDOWNS = [
   ['symbol', '종목'], ['month', '월'], ['weekday', '요일'], ['session', '세션'], ['dst', '서머타임×세션'], ['hour', '진입 시간'],
 ];
+// 근거별 성과 - 트레이드(분할 진입이면 묶은 거래 전부)에 붙은 근거마다. 근거가 여럿이면 각각에 셈
+const stTagsOf = (t, type) => {
+  const m = new Map();
+  for (const x of t.members) for (const g of x.tags || []) if (g.type === type) m.set(g.id, g.name);
+  return m;
+};
+function tagStats(ts, type) {
+  const b = new Map(), none = [];
+  for (const t of ts) {
+    const tags = stTagsOf(t, type);
+    if (!tags.size) { none.push(t); continue; }
+    for (const [id, name] of tags) { if (!b.has(id)) b.set(id, { id, name, ts: [] }); b.get(id).ts.push(t); }
+  }
+  const rows = [...b.values()].map((r) => ({ ...r, s: summarize(r.ts) })).sort((a, c) => c.ts.length - a.ts.length || c.s.net - a.s.net);
+  return { rows, none: none.length ? { id: 0, name: '근거 없음', ts: none, s: summarize(none) } : null };
+}
+function tagStatsHtml(ts) {
+  const has = ts.some((t) => t.members.some((x) => (x.tags || []).length));
+  if (!has) return `<h3 class="sec">근거별 성과</h3><section class="panel"><p class="hint2" style="margin:0">아직 근거를 단 거래가 없습니다. 텔레그램 체결 알림이나 거래내역 [🏷 근거 달기] 로 근거를 달면 여기서 근거마다 승률·손익을 볼 수 있습니다.</p></section>`;
+  const { rows, none } = tagStats(ts, stTagType);
+  const loss = stTagType === 'loss';
+  const tagged = ts.length - (none ? none.ts.length : 0);
+  const row = (r) => `<div class="brow tagrow${stTagPick === r.id ? ' on' : ''}${r.id ? '' : ' none'}" data-tagpick="${r.id}">
+      <div class="l">${esc(r.name)}<small>${r.s.trades}건${loss ? '' : ` · ${r.s.wins}승 ${r.s.losses}패`}</small></div>
+      <div>${loss ? `<div class="s num" style="margin:0">평균 ${fix2(r.s.trades ? r.s.net / r.s.trades : null)} · 0.01랏당 ${fix2(r.s.exp001)}</div>`
+        : `<div class="meter"><i style="width:${((r.s.winRate || 0) * 100).toFixed(1)}%"></i></div>
+        <div class="s num">승률 ${pct1(r.s.winRate)} · 손익비 ${fix2(r.s.payoff)} · 기대값 ${fix2(r.s.exp)} · PF ${fix2(r.s.pf)}</div>`}</div>
+      <div class="r num ${cls(r.s.net)}">${signed(r.s.net)}</div>
+    </div>`;
+  return `<h3 class="sec">근거별 성과</h3>
+    <section class="panel">
+      <div class="seg" id="sTagType">${TAG_TYPES.map(([k, l]) => `<button data-tt="${k}" class="${k === stTagType ? 'on' : ''}">${l} 근거</button>`).join('')}</div>
+      <p class="hint2">${loss ? '손실 근거(실수)마다 손익 합계 - 어떤 실수가 가장 비쌌는지.' : `${TAG_TYPES.find(([k]) => k === stTagType)[1]} 근거를 단 트레이드 ${tagged}건 / 전체 ${ts.length}건.`}
+        한 트레이드에 근거가 여럿이면 각 근거에 모두 셉니다${$('sGroup').checked ? ' · 분할 진입은 묶은 거래들의 근거를 합쳐서' : ''}. 누르면 아래 트레이드 목록을 그 근거로 거릅니다.</p>
+      ${rows.length ? rows.map(row).join('') : `<div class="empty" style="padding:10px">이 기간에 ${TAG_TYPES.find(([k]) => k === stTagType)[1]} 근거를 단 트레이드가 없습니다.</div>`}
+      ${none && !loss ? row(none) : ''}
+    </section>`;
+}
+
 function breakdownFor(ts) {
   switch (stMode) {
     case 'symbol': return breakdown(ts, (t) => t.name, (k) => k);
@@ -2656,7 +2706,9 @@ function renderStats() {
     ? `서머타임: ${schedule(new Date(Date.UTC(y, 6, 15, 3)))}<br>표준시: ${schedule(new Date(Date.UTC(y, 0, 15, 3)))}<br>전환기: 미국·영국 중 한쪽만 서머타임인 3월·10~11월 기간 · 진입 시각 기준 (KST)`
     : '하루 = 06:00 ~ 다음날 06:00 (KST), 손익 탭과 같은 기준';
   const maxAbs = ex ? Math.max(0, ...ex.byOrder.map((o) => Math.abs(o.avg))) : 0;
-  const list = [...ts].reverse();
+  const pickName = stTagPick === null ? null : stTagPick === 0 ? '근거 없음' : (ts.flatMap((t) => [...stTagsOf(t, stTagType)]).find(([id]) => id === stTagPick) || [])[1];
+  if (stTagPick !== null && pickName == null) stTagPick = null;   // 기간을 바꿔서 그 근거가 없어졌으면 풂
+  const list = [...ts].reverse().filter((t) => stTagPick === null ? true : stTagPick === 0 ? !stTagsOf(t, stTagType).size : stTagsOf(t, stTagType).has(stTagPick));
 
   $('sBody').innerHTML = recapHtml(S, ts) + sessionWinsHtml(ts) + `
     <h3 class="sec">자세히</h3>
@@ -2690,6 +2742,8 @@ function renderStats() {
       </div>`).join('')}
     </section>
 
+    ${tagStatsHtml(ts)}
+
     ${ex && ex.split ? `<h3 class="sec">청산 분석 · 분할 트레이드 ${ex.split}건</h3>
     <section class="panel">
       <div class="cmp">
@@ -2704,13 +2758,16 @@ function renderStats() {
         <span class="n num ${cls(o.avg)}">${fmt(o.avg)}</span><span class="m num">${o.count}건 · ${pct1(o.winRate)}</span></div>`).join('')}
     </section>` : ''}
 
-    <h3 class="sec">트레이드 목록</h3>
+    <h3 class="sec" id="sListHead">트레이드 목록${stTagPick !== null ? ` · <span class="tagf">🏷 ${esc(pickName)} ${list.length}건 <button class="btn small" id="sTagClear">전체 보기</button></span>` : ''}</h3>
     <section class="panel list" style="padding:0">
       ${list.slice(0, stShow).map((t) => `<div class="srow">
         <div><span class="side ${t.isBuy ? 'buy' : 'sell'}" style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:${t.isBuy ? 'var(--accent-weak)' : 'var(--bad-weak)'};color:${t.isBuy ? 'var(--up)' : 'var(--down)'}">${t.isBuy ? 'BUY' : 'SELL'}</span>
           ${esc(t.name)} <span class="num muted">${fmt(t.volume)} lot${t.members.length > 1 ? ` · ${t.members.length}분할` : ''}</span></div>
         <div class="v num ${cls(t.net)}">${signed(t.net)}</div>
-        <div class="x num">${dayKey(t.close).slice(5)} ${hmOf(t.close)} 청산 · ${fmt(t.openPrice)} → ${fmt(t.closePrice)}</div>
+        <div class="x num">${dayKey(t.close).slice(5)} ${hmOf(t.close)} 청산 · ${fmt(t.openPrice)} → ${fmt(t.closePrice)}${(() => {
+          const names = TAG_TYPES.flatMap(([k]) => [...stTagsOf(t, k).values()].map((n) => (k === 'loss' ? '🔻' : '') + n));
+          return names.length ? ` · <span class="stags">🏷 ${esc(names.join(', '))}</span>` : '';
+        })()}</div>
       </div>`).join('')}
       ${list.length > stShow ? `<div style="padding:10px;text-align:center"><button class="btn small" id="sMore">더 보기 (${list.length - stShow}건 남음)</button></div>` : ''}
     </section>`;
@@ -2720,7 +2777,15 @@ function renderStats() {
 }
 $('sBody').addEventListener('click', (e) => {
   const m = e.target.closest('button[data-m]'); if (m) { stMode = m.dataset.m; renderStats(); return; }
-  if (e.target.id === 'sMore') { stShow += 100; renderStats(); }
+  if (e.target.id === 'sMore') { stShow += 100; renderStats(); return; }
+  const tt = e.target.closest('button[data-tt]'); if (tt) { stTagType = tt.dataset.tt; stTagPick = null; renderStats(); return; }
+  if (e.target.id === 'sTagClear') { stTagPick = null; renderStats(); return; }
+  const tp = e.target.closest('[data-tagpick]');
+  if (tp) {
+    const id = Number(tp.dataset.tagpick);
+    stTagPick = stTagPick === id ? null : id; stShow = 50; renderStats();
+    if (stTagPick !== null) $('sListHead').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
 });
 
 // 트레이드 순서대로 그리는 선 차트 (x = 몇 번째 트레이드)
