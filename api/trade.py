@@ -327,6 +327,11 @@ async def _group_message(db: AsyncSession, account_id: int, account_number: str,
     last_id, last_data, last_time = items[-1]
     last_trade = await db.get(Trade, last_id)
     _, last_body, buttons = await _trade_message(db, account_id, account_number, last_trade, last_data, last_time)
+    # 근거 버튼은 묶인 거래 전부에 저장되게
+    kind = "o" if last_data.entry_type == "OPEN" else "c"
+    group_row = _tag_button(kind, list(dict.fromkeys(tid for tid, _, _ in items)))
+    buttons = [r for r in (buttons or []) if not (r and str(r[0].get("callback_data", "")).startswith("tg:"))] + ([group_row] if group_row else [])
+    buttons = buttons or None
     trades = [(await db.get(Trade, tid), d, t) for tid, d, t in items]
     n, symbol = len(items), last_data.symbol
     from services.grid import kind_of, MODE_KR
@@ -533,6 +538,9 @@ async def _trade_message(db: AsyncSession, account_id: int, account_number: str,
             buttons.append([{"text": f"🛑 SL 전체 {len(same)}개", "callback_data": f"pos:sl:a:{key}"},
                             {"text": f"🎯 TP 전체", "callback_data": f"pos:tp:a:{key}"},
                             {"text": "⚖️ 평단 SL", "callback_data": f"pos:be:a:{key}"}])
+        tag_row = _tag_button("o", [trade.id] if trade is not None else [])
+        if tag_row:
+            buttons.append(tag_row)
         return title, "\n".join(lines), buttons
 
     # CLOSE - 진입 방향·가격은 기록된 거래에서 (청산 체결의 방향은 반대라서)
@@ -568,7 +576,17 @@ async def _trade_message(db: AsyncSession, account_id: int, account_number: str,
     remain = await _symbol_positions(account_id, data.symbol)
     if remain:
         lines.append("남은 포지션: " + _side_summary(remain))
-    return title, "\n".join(lines), None
+    tag_row = _tag_button("c", [trade.id] if trade is not None else [])
+    return title, "\n".join(lines), ([tag_row] if tag_row else None)
+
+
+def _tag_button(kind: str, ids: list[int]) -> list[dict] | None:
+    """체결 알림의 [🏷 진입/청산 근거] 버튼 (services/telegram_tags.py)"""
+    try:
+        from services.telegram_tags import button
+        return button(kind, ids)
+    except Exception:
+        return None
 
 @router.get("/annual")
 async def get_annual_trades(

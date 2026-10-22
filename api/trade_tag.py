@@ -50,6 +50,7 @@ async def update_tag(tag_id: int, data: TagCreate, db: AsyncSession = Depends(ge
 
 @router.delete("/{tag_id}")
 async def delete_tag(tag_id: int, db: AsyncSession = Depends(get_db)):
+    await db.execute(delete(TradeTagMap).where(TradeTagMap.tag_id == tag_id))   # 거래에 붙은 것도 같이 (남으면 빈 태그가 됨)
     await db.execute(delete(TradeTag).where(TradeTag.id == tag_id))
     await db.commit()
     return {"ok": True}

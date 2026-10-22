@@ -873,7 +873,8 @@ class TelegramLive:
                 elif mine and text.startswith("/cancel"):
                     p = self.pending.pop(cid, None)
                     if p:
-                        await self._send(client, token, cid, {"pos": "SL/TP 설정을 그만뒀습니다.", "grid": "직접 입력을 그만뒀습니다. 설정 메시지의 버튼은 그대로 쓸 수 있습니다."}
+                        await self._send(client, token, cid, {"pos": "SL/TP 설정을 그만뒀습니다.", "grid": "직접 입력을 그만뒀습니다. 설정 메시지의 버튼은 그대로 쓸 수 있습니다.",
+                                          "tag": "입력을 그만뒀습니다. 근거 메시지의 버튼은 그대로 쓸 수 있습니다."}
                                          .get(p.get("type"), "잠금 풀기를 그만뒀습니다."))
                 elif mine and raw and not raw.startswith("/") and cid in self.pending:
                     if self.pending[cid].get("type") == "pos":
@@ -881,6 +882,9 @@ class TelegramLive:
                     elif self.pending[cid].get("type") == "grid":
                         from services import telegram_grid
                         await telegram_grid.wiz_text(self, client, token, cid, raw)
+                    elif self.pending[cid].get("type") == "tag":
+                        from services import telegram_tags
+                        await telegram_tags.text_input(self, client, token, cid, raw)
                     else:
                         await self.try_unlock(client, token, cid, raw, int(msg.get("date") or time.time()))
                 elif text.startswith("/start") or text.startswith("/id"):
@@ -918,6 +922,16 @@ class TelegramLive:
                         try:
                             fn = telegram_grid.wiz_button if data.startswith("gw:") else telegram_grid.button
                             answer = await fn(self, client, token, cid, data, (cb.get("message") or {}).get("message_id"))
+                        except Exception as e:
+                            answer = f"실패: {e}"[:190]
+                elif data.startswith("tg:"):          # 체결 알림의 진입·청산 근거 (services/telegram_tags.py)
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        from services import telegram_tags
+                        try:
+                            answer = await telegram_tags.button_pressed(self, client, token, cid, data,
+                                                                        (cb.get("message") or {}).get("message_id"))
                         except Exception as e:
                             answer = f"실패: {e}"[:190]
                 elif data.startswith("upd:"):
