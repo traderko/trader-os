@@ -35,6 +35,22 @@ async def update_trade_tags(data: TradeTagUpdate, db: AsyncSession = Depends(get
 
     return {"ok": True}
 
+@router.post("/apply")
+async def apply_tags(data: dict, db: AsyncSession = Depends(get_db)):
+    """여러 거래에 근거 태그를 더함 (이미 붙은 다른 태그는 그대로) - 웹 거래내역 선택 → [🏷 근거 달기]"""
+    trade_ids = [int(x) for x in data.get("trade_ids") or []]
+    tag_ids = [int(x) for x in data.get("tag_ids") or []]
+    have = set((await db.execute(select(TradeTagMap.trade_id, TradeTagMap.tag_id).where(
+        TradeTagMap.trade_id.in_(trade_ids), TradeTagMap.tag_id.in_(tag_ids)))).all())
+    added = 0
+    for t in trade_ids:
+        for g in tag_ids:
+            if (t, g) not in have:
+                db.add(TradeTagMap(trade_id=t, tag_id=g))
+                added += 1
+    await db.commit()
+    return {"ok": True, "added": added}
+
 @router.put("/{tag_id}")
 async def update_tag(tag_id: int, data: TagCreate, db: AsyncSession = Depends(get_db)):
     result = await db.execute(

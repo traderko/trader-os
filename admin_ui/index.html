@@ -105,6 +105,7 @@
   .kv dt { color: var(--muted); } .kv dd { margin: 0; text-align: right; }
 
   /* 폼 */
+  .row[hidden] { display: none !important; }
   .row { display: flex; align-items: center; gap: 12px; padding: 10px 0; border-top: 1px solid var(--line); flex-wrap: wrap; }
   .row:first-of-type { border-top: 0; }
   .row label.name { flex: 1 1 240px; }
@@ -444,6 +445,20 @@
         <input type="text" id="tgSimMult" style="width:110px" placeholder="예: 5, 10"><span class="unit">배</span></div>
       <div class="row"><label class="name">나눠 체결된 알림 묶기<small>이 시간 안에 같은 종목·방향으로 여러 번 체결되면 알림 하나로 (0 = 하나씩 따로)</small></label>
         <input type="number" id="tgBatch" min="0" max="30" style="width:80px"><span class="unit">초</span></div>
+      <h3 style="margin:16px 0 4px;font-size:14px">🏷 근거 알림</h3>
+      <p class="hint">진입·청산 근거 태그를 안 단 최근 거래를 모아서 보냅니다 (없으면 안 보냄). 메시지의 버튼으로 바로 근거를 고를 수 있습니다.
+        봇 명령 <code>/근거</code> 로 언제든 볼 수도 있습니다.</p>
+      <div class="row"><label class="name">근거 알림</label><label class="switch"><input type="checkbox" id="rrOn"> 켜기</label></div>
+      <div class="row"><label class="name">보내는 때</label>
+        <select id="rrMode"><option value="times">매일 정해진 시각</option><option value="interval">시간대 안에서 주기적으로</option></select></div>
+      <div class="row" data-rr="times"><label class="name">시각<small>한국 시간, 여러 개는 쉼표로 (예: 12:00, 22:00)</small></label>
+        <input type="text" id="rrTimes" style="width:160px" placeholder="22:00"></div>
+      <div class="row" data-rr="interval"><label class="name">주기</label>
+        <select id="rrEvery"><option value="0.5">30분마다</option><option value="1">1시간마다</option><option value="2">2시간마다</option><option value="3">3시간마다</option><option value="4">4시간마다</option><option value="6">6시간마다</option><option value="12">12시간마다</option></select></div>
+      <div class="row" data-rr="interval"><label class="name">시간대<small>이 시간 안에서만 (시작 시각부터 주기마다). 끝이 시작보다 이르면 자정을 넘김</small></label>
+        <input type="time" id="rrStart" style="width:110px"> ~ <input type="time" id="rrEnd" style="width:110px"></div>
+      <div class="row"><label class="name">볼 기간<small>이 시간 안에 진입한 거래 중 근거가 빠진 것</small></label>
+        <select id="rrLook"><option value="12">최근 12시간</option><option value="24">최근 24시간</option><option value="48">최근 2일</option><option value="72">최근 3일</option><option value="168">최근 7일</option></select></div>
       <div class="actions">
         <button class="btn danger" id="tgClear">토큰 지우기</button>
         <button class="btn" id="tgDef" title="토큰·chat id 를 뺀 알림 설정을 기본값으로 (저장해야 적용)">기본값</button>
@@ -976,6 +991,10 @@ const DEF_FIELDS = [   // [칸, 기본값 가져오기]
   ['#tgLive', (d) => d.telegram.live_enabled], ['#tgLiveSec', (d) => d.telegram.live_interval_sec],
   ['#tgLivePos', (d) => d.telegram.live_position], ['#tgSim', (d) => d.telegram.trade_sim],
   ['#tgSimMult', (d) => (d.telegram.trade_sim_mult || []).join(', ')], ['#tgBatch', (d) => d.telegram.trade_batch_sec],
+  ['#rrOn', (d) => d.telegram.reason_remind.enabled], ['#rrMode', (d) => d.telegram.reason_remind.mode],
+  ['#rrTimes', (d) => d.telegram.reason_remind.times.join(', ')], ['#rrEvery', (d) => String(d.telegram.reason_remind.every_hours)],
+  ['#rrStart', (d) => d.telegram.reason_remind.start], ['#rrEnd', (d) => d.telegram.reason_remind.end],
+  ['#rrLook', (d) => String(d.telegram.reason_remind.lookback_hours)],
   ['#acDays', (d) => d.access.session_days], ['#arDays', (d) => d.admin_remote.session_days],
   ['#gdCooldown', (d) => d.guidelines.cooldown_min],
   ['#evKw', (d) => d.events.highlight.join(', ')],
@@ -1160,6 +1179,13 @@ function fillTelegram() {
   $('tgSim').checked = t.trade_sim !== false;
   $('tgSimMult').value = (t.trade_sim_mult || [10]).join(', ');
   $('tgBatch').value = t.trade_batch_sec ?? 3;
+  const rr = t.reason_remind || {};
+  $('rrOn').checked = !!rr.enabled; $('rrMode').value = rr.mode || 'times';
+  $('rrTimes').value = (rr.times || ['22:00']).join(', ');
+  $('rrEvery').value = String(rr.every_hours ?? 2); if (!$('rrEvery').value) $('rrEvery').value = '2';
+  $('rrStart').value = rr.start || '08:00'; $('rrEnd').value = rr.end || '23:00';
+  $('rrLook').value = String(rr.lookback_hours ?? 24); if (!$('rrLook').value) $('rrLook').value = '24';
+  rrShow();
   $('tgTokenNow').textContent = t.has_bot_token ? `저장됨: ${t.bot_token_masked} (바꿀 때만 새로 입력)`
     : t.env_fallback ? '.env 파일의 토큰을 쓰는 중' : '아직 없음';
 }
@@ -1167,11 +1193,16 @@ async function saveTelegram(extra = {}) {
   const telegram = { chat_id: $('tgChat').value.trim(), live_enabled: $('tgLive').checked,
     live_interval_sec: Number($('tgLiveSec').value) || 10, live_position: $('tgLivePos').value,
     trade_sim: $('tgSim').checked, trade_batch_sec: Math.max(0, Math.round(Number($('tgBatch').value) || 0)),
-    trade_sim_mult: $('tgSimMult').value, ...extra };
+    trade_sim_mult: $('tgSimMult').value,
+    reason_remind: { enabled: $('rrOn').checked, mode: $('rrMode').value, times: $('rrTimes').value,
+      every_hours: Number($('rrEvery').value), start: $('rrStart').value, end: $('rrEnd').value, lookback_hours: Number($('rrLook').value) },
+    ...extra };
   const tok = $('tgToken').value.trim(); if (tok) telegram.bot_token = tok;
   settings = await api('settings', { method: 'PUT', body: JSON.stringify({ telegram }) });
   fillTelegram();
 }
+function rrShow() { document.querySelectorAll('[data-rr]').forEach((el) => el.hidden = el.dataset.rr !== $('rrMode').value); }
+$('rrMode').addEventListener('change', rrShow);
 $('tgSave').onclick = async () => { try { await saveTelegram(); toast('저장했습니다.'); loadStatus(); } catch (e) { toast(e.message, true); } };
 $('tgClear').onclick = async () => {
   if (!confirm('저장된 봇 토큰을 지울까요?')) return;

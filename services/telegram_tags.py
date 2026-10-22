@@ -7,7 +7,10 @@
 # 여러 건이 한 알림으로 묶였으면 그 거래들에 같이 저장.
 #
 # 버튼 데이터 (서버를 재시작해도 그대로 쓰이게 거래 번호를 버튼에 넣음 - 64바이트 안):
-#   tg:<o|c>:<거래id.거래id…>:<show | t.<태그id> | new | memo | done>
+#   tg:<o|c>:<거래 번호들>:<show | t.<태그id> | new | memo | done>   번호들 = 12.15-18.20 (연속이면 범위로)
+#
+# /근거 (/reasons) [12시간|3일]  근거 없는 최근 거래를 묶음별로 + 버튼. 같은 목록을 정해진 시각·주기로 보내는 알림은
+#   remind_loop() (관리 화면 텔레그램 탭 '근거 알림', 기본 꺼짐)
 
 import html
 
@@ -18,15 +21,39 @@ TYPE_KR = {"entry": "진입", "exit": "청산", "loss": "손실"}
 MAX_DATA = 64
 
 
+def _encode(ids: list[int]) -> str:
+    ids = sorted(set(ids))
+    segs, i = [], 0
+    while i < len(ids):
+        j = i
+        while j + 1 < len(ids) and ids[j + 1] == ids[j] + 1:
+            j += 1
+        segs.append(str(ids[i]) if i == j else f"{ids[i]}-{ids[j]}")
+        i = j + 1
+    return ".".join(segs)
+
+
+def _decode(tok: str) -> list[int]:
+    out = []
+    for seg in tok.split("."):
+        if "-" in seg:
+            a, b = seg.split("-", 1)
+            if a.isdigit() and b.isdigit() and int(b) - int(a) < 500:
+                out.extend(range(int(a), int(b) + 1))
+        elif seg.isdigit():
+            out.append(int(seg))
+    return out
+
+
 def ids_token(ids: list[int]) -> str | None:
-    """버튼에 넣을 거래 번호들 - 너무 길면 앞에서부터 들어가는 만큼만 (보통 1~5건)"""
+    """버튼에 넣을 거래 번호들 (연속 번호는 범위로) - 그래도 너무 길면 앞에서부터 들어가는 만큼만"""
+    ids = sorted(set(i for i in ids if i))
     out = []
     for i in ids:
-        cand = ".".join(str(x) for x in out + [i])
-        if len(f"tg:c:{cand}:t.99999") > MAX_DATA:
+        if len(f"tg:c:{_encode(out + [i])}:t.99999") > MAX_DATA:
             break
         out.append(i)
-    return ".".join(str(x) for x in out) if out else None
+    return _encode(out) if out else None
 
 
 def button(kind: str, ids: list[int]) -> list[dict] | None:
@@ -40,7 +67,7 @@ def button(kind: str, ids: list[int]) -> list[dict] | None:
 def _parse(data: str):
     parts = data.split(":")
     kind, tok, act = parts[1], parts[2], ":".join(parts[3:])
-    return kind, [int(x) for x in tok.split(".") if x.isdigit()], tok, act
+    return kind, _decode(tok), tok, act
 
 
 async def _screen(db, kind: str, ids: list[int], tok: str) -> tuple[str, dict]:
@@ -198,3 +225,141 @@ async def text_input(live, client, token, chat_id: str, text: str) -> None:
     if old:
         await live._call(client, token, "deleteMessage", chat_id=chat_id, message_id=old)
     await _show(live, client, token, chat_id, kind, ids, tok, new=True)
+
+
+# ── 근거 없는 거래 모아 보기 (/근거 · 근거 알림) ──────────────────────────
+def _hours_arg(args: str, default: float) -> float:
+    import re
+    m = re.search(r"(\d+(?:\.\d+)?)\s*(일|d|시간|h)?", args or "")
+    if not m:
+        return default
+    v = float(m.group(1))
+    return v * 24 if (m.group(2) or "일") in ("일", "d") else v
+
+
+async def untagged_groups(hours: float, gap_min: int = 30) -> list[dict]:
+    """최근 hours 시간 안에 진입한 거래 중 근거가 빠진 것 - 같은 계좌·종목·방향으로 gap_min 분 안에 이어 들어간 건 한 묶음"""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    from sqlalchemy.orm import selectinload
+    from db.models.trade import Trade
+    from db.models.trade_tag_map import TradeTagMap
+    from db.session import AsyncSessionLocal
+    since = (datetime.now(ZoneInfo("Asia/Seoul")) - timedelta(hours=hours))
+    async with AsyncSessionLocal() as db:
+        rows = (await db.execute(select(Trade).where(Trade.open_time >= since).order_by(Trade.open_time)
+                                 .options(selectinload(Trade.tags).selectinload(TradeTagMap.tag)))).scalars().all()
+    groups: list[dict] = []
+    last: dict = {}
+    for t in rows:
+        types = {getattr(m.tag.type, "value", m.tag.type) for m in t.tags if m.tag is not None}
+        miss_o = "entry" not in types
+        miss_c = bool(t.close_time) and not ({"exit", "loss"} & types)
+        if not (miss_o or miss_c):
+            continue
+        key = (t.account_id, t.symbol, t.position)
+        g = last.get(key)
+        if g is None or (t.open_time - g["last"]).total_seconds() > gap_min * 60:
+            g = {"symbol": t.symbol, "side": t.position, "start": t.open_time, "last": t.open_time,
+                 "ids": [], "open": [], "close": [], "vol": 0.0, "net": 0.0, "closed": 0}
+            groups.append(g)
+            last[key] = g
+        g["last"] = t.open_time
+        g["ids"].append(t.id)
+        g["vol"] += t.volume or 0
+        if t.close_time:
+            g["closed"] += 1
+            g["net"] += (t.profit or 0) + (t.commission or 0)
+        if miss_o:
+            g["open"].append(t.id)
+        if miss_c:
+            g["close"].append(t.id)
+    return groups
+
+
+def _period(hours: float) -> str:
+    return f"최근 {hours / 24:g}일" if hours >= 24 and hours % 24 == 0 else f"최근 {hours:g}시간"
+
+
+async def untagged_message(hours: float, limit: int = 10) -> tuple[str, dict] | None:
+    """근거 없는 거래 목록 메시지 (없으면 None)"""
+    from zoneinfo import ZoneInfo
+    groups = await untagged_groups(hours)
+    if not groups:
+        return None
+    n = sum(len(g["ids"]) for g in groups)
+    lines = [f"🏷 <b>근거 없는 거래</b> · {_period(hours)} · {n}건 ({len(groups)}묶음)"]
+    kb = []
+    for i, g in enumerate(groups[-limit:][::-1], 1):          # 최근 것부터
+        st = g["start"] if g["start"].tzinfo else g["start"].replace(tzinfo=ZoneInfo("Asia/Seoul"))
+        st = st.astimezone(ZoneInfo("Asia/Seoul"))
+        miss = " · ".join(x for x in (f"진입 {len(g['open'])}" if g["open"] else "", f"청산 {len(g['close'])}" if g["close"] else "") if x)
+        lines.append(f"{i}. {st:%m/%d %H:%M} {html.escape(g['symbol'] or '')} {g['side']} {g['vol']:g}lot"
+                     + (f" ({len(g['ids'])}건)" if len(g["ids"]) > 1 else "")
+                     + (f" · {g['net']:+,.2f}" if g["closed"] else " · 보유 중")
+                     + f"\n    빠진 근거: {miss}")
+        row = []
+        if g["open"]:
+            tok = ids_token(g["open"])
+            row.append({"text": f"{i}. 🏷 진입", "callback_data": f"tg:o:{tok}:show"})
+        if g["close"]:
+            tok = ids_token(g["close"])
+            row.append({"text": f"{i}. 🏷 청산", "callback_data": f"tg:c:{tok}:show"})
+        kb.append(row)
+    if len(groups) > limit:
+        lines.append(f"\n외 {len(groups) - limit}묶음 - 웹 거래내역 [🏷 근거 없음] 에서 한꺼번에 달 수 있습니다.")
+    return "\n".join(lines), {"inline_keyboard": kb}
+
+
+async def cmd_reasons(live, client, token, chat_id: str, args: str) -> None:
+    """/근거 [12시간|3일] - 기본은 근거 알림 설정의 기간 (없으면 24시간)"""
+    from services.settings_service import telegram_cfg
+    hours = _hours_arg(args, float((telegram_cfg().get("reason_remind") or {}).get("lookback_hours") or 24))
+    r = await untagged_message(hours)
+    if r is None:
+        await live._send(client, token, chat_id, f"✅ {_period(hours)} 근거 없는 거래가 없습니다.")
+        return
+    await live._send(client, token, chat_id, r[0], reply_markup=r[1])
+
+
+# ── 근거 알림 (관리 화면 텔레그램 탭 '근거 알림') ─────────────────────────
+def remind_slots(rr: dict) -> list[int]:
+    """보낼 시각들 (하루 중 분, 한국 시간)"""
+    def mins(hhmm: str) -> int:
+        h, m = (hhmm or "00:00").split(":")
+        return int(h) * 60 + int(m)
+    if rr.get("mode") == "interval":
+        start, end = mins(rr.get("start", "08:00")), mins(rr.get("end", "23:00"))
+        span = (end - start) % 1440 or 1440               # 끝이 시작보다 이르면 자정을 넘김
+        step = max(30, int(float(rr.get("every_hours", 2)) * 60))
+        return sorted({(start + k) % 1440 for k in range(0, span + 1, step)})
+    return sorted({mins(t) for t in rr.get("times") or []})
+
+
+async def remind_loop() -> None:
+    """정해진 시각(분)이 되면 근거 없는 거래 목록을 보냄. 하나도 없으면 안 보냄. 같은 분에는 한 번만."""
+    import asyncio
+    import re
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    from services.settings_service import telegram_cfg
+    from services.telegram_service import TelegramService
+    sent: set[str] = set()
+    while True:
+        try:
+            cfg = telegram_cfg()
+            rr = cfg.get("reason_remind") or {}
+            now = datetime.now(ZoneInfo("Asia/Seoul"))
+            key = now.strftime("%Y-%m-%d %H:%M")
+            if rr.get("enabled") and key not in sent and now.hour * 60 + now.minute in remind_slots(rr):
+                sent.add(key)
+                if len(sent) > 200:
+                    sent = {key}
+                r = await untagged_message(float(rr.get("lookback_hours") or 24))
+                if r is not None:
+                    text = html.unescape(re.sub(r"<[^>]+>", "", r[0]))      # 알림 전송은 글자 그대로 (굵게 없음)
+                    TelegramService().send("", text + "\n\n(근거 알림 · 관리 화면 텔레그램 탭에서 끄기·시각 변경)",
+                                           r[1]["inline_keyboard"])
+        except Exception as e:
+            print(f"[근거 알림] {e}")
+        await asyncio.sleep(20)

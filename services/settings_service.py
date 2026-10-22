@@ -77,6 +77,12 @@ DEFAULTS: dict = {
         "trade_sim": True,           # 알림 아래에 랏 배수 시뮬레이션 ("10배였다면" 손익·증거금·오늘 누적)
         "trade_sim_mult": [10],      # 몇 배로 볼지 (여러 개 가능, 예: [5, 10])
         "trade_batch_sec": 3,        # 이 초 안에 같은 종목·방향으로 나눠 체결된 건 알림 하나로 (0 = 하나씩)
+        # 근거 알림 - 근거 태그가 빠진 최근 거래를 모아서 보냄 (services/telegram_tags.py, 없으면 안 보냄)
+        #   mode times   : 매일 times 의 시각에 (한국 시간 "HH:MM")
+        #   mode interval: start~end 시간대 안에서 every_hours 시간마다 (start 부터)
+        #   lookback_hours: 몇 시간 안에 진입한 거래를 볼지 (/근거 명령의 기본 기간도 이것)
+        "reason_remind": {"enabled": False, "mode": "times", "times": ["22:00"],
+                          "every_hours": 2, "start": "08:00", "end": "23:00", "lookback_hours": 24},
     },
     # 바깥(폰 등)에서 웹 화면·API 접속 (services/access_service.py)
     #   open      : 제한 없음 (예전 동작)
@@ -309,6 +315,31 @@ def _validate(settings: dict) -> None:
     bs = tg.get("trade_batch_sec", 3)
     if not _int(bs) or not (0 <= bs <= 30):
         raise SettingsError(f"나눠 체결된 알림 묶기는 0~30초여야 합니다. (입력: {bs})")
+    rr = tg.get("reason_remind") or {}
+    rr["enabled"] = bool(rr.get("enabled", False))
+    if rr.get("mode", "times") not in ("times", "interval"):
+        raise SettingsError("근거 알림 방식은 times(정해진 시각) 또는 interval(주기)이어야 합니다.")
+    times = rr.get("times", ["22:00"])
+    if isinstance(times, str):
+        times = times.replace("\n", ",").split(",")
+    times = sorted(dict.fromkeys(_hhmm(t, "근거 알림 시각") for t in times if str(t).strip()))
+    if rr["mode"] == "times" and rr["enabled"] and not times:
+        raise SettingsError("근거 알림 시각을 하나 이상 넣으세요. (예: 22:00)")
+    if len(times) > 12:
+        raise SettingsError("근거 알림 시각은 12개까지 넣을 수 있습니다.")
+    rr["times"] = times
+    try:
+        rr["every_hours"] = float(rr.get("every_hours", 2))
+        rr["lookback_hours"] = float(rr.get("lookback_hours", 24))
+    except (TypeError, ValueError):
+        raise SettingsError("근거 알림 주기·기간은 숫자여야 합니다.")
+    if not (0.5 <= rr["every_hours"] <= 24):
+        raise SettingsError("근거 알림 주기는 0.5~24시간이어야 합니다.")
+    if not (1 <= rr["lookback_hours"] <= 24 * 31):
+        raise SettingsError("근거 알림 기간은 1시간~31일이어야 합니다.")
+    rr["start"] = _hhmm(rr.get("start", "08:00"), "근거 알림 시작 시각")
+    rr["end"] = _hhmm(rr.get("end", "23:00"), "근거 알림 끝 시각")
+    tg["reason_remind"] = rr
 
     ac = settings["access"]
     if ac.get("mode") not in ("open", "tailscale", "lan", "public"):
@@ -398,6 +429,18 @@ def _validate_guidelines(g: dict) -> None:
             if b in defaults[key]:
                 r[b] = bool(r.get(b, defaults[key][b]))
     g["rules"] = rules
+
+
+def _hhmm(v, label: str) -> str:
+    """'9:5' / '09:05' → '09:05'"""
+    try:
+        h, m = str(v).strip().replace("시", ":").replace("분", "").split(":")[:2]
+        h, m = int(h), int(m or 0)
+        if 0 <= h <= 23 and 0 <= m <= 59:
+            return f"{h:02d}:{m:02d}"
+    except (ValueError, TypeError):
+        pass
+    raise SettingsError(f"{label}은 00:00 ~ 23:59 형식이어야 합니다. (입력: {v})")
 
 
 def _int(v) -> bool:

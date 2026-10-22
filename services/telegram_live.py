@@ -868,6 +868,9 @@ class TelegramLive:
                 elif mine and text.startswith("/ktr"):
                     from services import telegram_grid
                     await telegram_grid.cmd_ktr(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                elif mine and (text.startswith("/근거") or text.startswith("/reasons")):
+                    from services import telegram_tags
+                    await telegram_tags.cmd_reasons(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                 elif mine and text.startswith("/pos"):
                     await self.show_positions(client, token, cid)
                 elif mine and text.startswith("/cancel"):
@@ -975,6 +978,7 @@ class TelegramLive:
                                 {"command": "grid", "description": "구간매매 - 버튼으로 하나씩 설정 (또는 한 줄로)"},
                                 {"command": "grids", "description": "진행 중인 구간매매·청산"},
                                 {"command": "ktr", "description": "KTR 표 (장 × 시간봉)"},
+                                {"command": "reasons", "description": "근거 없는 거래 모아 보기 (/근거 3일)"},
                                 {"command": "sim", "description": "청산 시뮬레이션 (알림 미리보기)"},
                                 {"command": "update", "description": "새 버전 확인·업데이트"},
                                 {"command": "cancel", "description": "잠금 풀기 그만두기"},

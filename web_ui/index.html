@@ -212,6 +212,10 @@
   .tgchips .chip { font-size: 12.5px; padding: 3px 4px 3px 10px; display: inline-flex; gap: 4px; align-items: center; }
   .tgchips .chip button { border: 0; background: none; color: inherit; cursor: pointer; font-size: 13px; padding: 0 4px; opacity: .7; }
   .tgadd { display: flex; gap: 6px; } .tgadd input { flex: 1; min-width: 0; }
+  .chip.miss { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
+  .tachips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
+  .tachips button { font: inherit; font-size: 12.5px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
+  .tachips button.on { background: var(--accent); border-color: var(--accent); color: #fff; }
   /* 지표 탭 */
   .evtop { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; font-size: 13px; margin: 2px 0 8px; }
   .evko { display: flex; gap: 6px; align-items: center; font-weight: 600; }
@@ -600,7 +604,7 @@
     <button class="btn small ghost" id="tCollect" title="MT5 체결 기록에서 거래내역을 다시 모읍니다">MT5에서 모으기</button>
   </div>
   <div class="seg" id="tSyms"></div>
-  <div class="seg mini2" id="tOrigin"><button data-o="all" class="on">전체</button><button data-o="manual">✋ 직접 거래</button><button data-o="grid">🧱 구간매매</button></div>
+  <div class="seg mini2" id="tOrigin"><button data-o="all" class="on">전체</button><button data-o="manual">✋ 직접 거래</button><button data-o="grid">🧱 구간매매</button><button id="tNoReason" title="진입 근거가 없거나, 청산했는데 청산·손실 근거가 없는 거래만">🏷 근거 없음</button></div>
   <section class="panel">
     <div class="tsum">
       <div><small>순손익</small><span class="num" id="tNet">-</span></div>
@@ -760,6 +764,7 @@
     <span class="sp"></span>
     <button class="btn small ghost" id="tSelAll">이 달 전체</button>
     <button class="btn small ghost" id="tSelNone">해제</button>
+    <button class="btn small" id="tTagGo" disabled title="고른 거래에 근거 태그를 한꺼번에 더함">🏷 근거 달기</button>
     <button class="btn small primary" id="tSimGo" disabled>시뮬레이션 돌리기</button>
   </div>
 </div>
@@ -810,6 +815,16 @@
       <button class="btn small danger" id="gdClose" hidden>전부 청산</button>
       <button class="btn" data-close>닫기</button>
     </div>
+  </div>
+</div>
+
+<!-- 고른 거래에 근거 달기 -->
+<div class="modal" id="tagApplyModal" hidden>
+  <div class="sheet" style="max-width:560px">
+    <h3>🏷 근거 달기</h3>
+    <p id="taWhat"></p>
+    <div id="taBody"></div>
+    <div class="acts"><button class="btn" data-close>취소</button><button class="btn primary" id="taGo">저장</button></div>
   </div>
 </div>
 
@@ -1475,8 +1490,14 @@ let tPick = lsGet('traderos:tpick', 'chain'), tGap = Number(lsGet('traderos:tgap
 let tYm = (() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 }; })();
 let tSym = 'all';
 let tOrigin = 'all';     // 거래내역 보기: all | manual(직접) | grid(구간매매)
+// 근거 태그가 빠진 거래: 진입 근거 없음 / 청산했는데 청산·손실 근거 없음
+const hasTagType = (t, ...types) => (t.tags || []).some((g) => types.includes(g.type));
+const missReason = (t) => ({ entry: !hasTagType(t, 'entry'), exit: !!t.close_time && !hasTagType(t, 'exit', 'loss') });
+const noReason = (t) => { const m = missReason(t); return m.entry || m.exit; };
+let tNoReasonOnly = false;
 const tShow = (t) => (tSym === 'all' || symKeyOf(t.symbol) === tSym)
-  && (tOrigin === 'all' || (tOrigin === 'grid') === !!kindOfMagic(t.magic));
+  && (tOrigin === 'all' || (tOrigin === 'grid') === !!kindOfMagic(t.magic))
+  && (!tNoReasonOnly || noReason(t));
 let allTags = null;
 
 const pad2 = (n) => String(n).padStart(2, '0');
@@ -1494,9 +1515,13 @@ function renderTSyms() {
     `<button data-sym="${s.key}" class="${s.key === tSym ? 'on' : ''}">${s.label}</button>`).join('');
 }
 $('tOrigin').onclick = (e) => {
+  if (e.target.closest('#tNoReason')) {
+    tNoReasonOnly = !tNoReasonOnly; $('tNoReason').classList.toggle('on', tNoReasonOnly);
+    return tSel ? tSelChanged() : renderTrades();
+  }
   const b = e.target.closest('button[data-o]'); if (!b) return;
   tOrigin = b.dataset.o;
-  document.querySelectorAll('#tOrigin button').forEach((x) => x.classList.toggle('on', x === b));
+  document.querySelectorAll('#tOrigin button[data-o]').forEach((x) => x.classList.toggle('on', x === b));
   renderTrades();
 };
 $('tSyms').onclick = (e) => { const b = e.target.closest('button[data-sym]'); if (!b) return; tSym = b.dataset.sym; renderTSyms(); renderTrades(); };
@@ -1544,7 +1569,9 @@ function renderTrades() {
     html += `<div class="day" data-day="${k}"><span><b>${k.slice(5)}</b> (${WEEK[d.getDay()]}) · ${items.length}건</span><span class="num ${cls(sum)}">${signed(sum)}</span></div>`;
     for (const t of items) {
       const o = dt(t.open_time), c = dt(t.close_time), n = t.note || {};
-      const tags = (t.tags || []).map((g) => `<span class="chip ${esc(g.type)}">${esc(g.name)}</span>`).join('');
+      const mr = tNoReasonOnly ? missReason(t) : null;
+      const tags = (t.tags || []).map((g) => `<span class="chip ${esc(g.type)}">${esc(g.name)}</span>`).join('')
+        + (mr ? [mr.entry && '진입', mr.exit && '청산'].filter(Boolean).map((x) => `<span class="chip miss">${x} 근거 없음</span>`).join('') : '');
       const snip = n.entry_reason || n.memo || '';
       const canSel = !!t.close_time, isSel = tSel && tSel.has(t.id), ch = tChainMap && tChainMap.get(t.id);
       html += `<div class="trade${tSel ? (canSel ? (isSel ? ' sel' : '') + (tAnchor === t.id ? ' anchor' : '') : ' nosel') : ''}" data-id="${t.id}">
@@ -1627,7 +1654,7 @@ function tSelChanged() {
   const net = list.reduce((a, t) => a + (t.profit || 0) + (t.commission || 0), 0);
   $('tSelInfo').innerHTML = tAnchor != null ? '이제 <b>끝 거래</b>를 누르세요'
     : list.length ? `<b>${list.length}건</b> · ${fmt(list.reduce((a, t) => a + t.volume, 0))}lot · <span class="num ${cls(net)}">${signed(net)}</span>` : PICK_HINT[tPick];
-  $('tSimGo').disabled = !list.length;
+  $('tSimGo').disabled = $('tTagGo').disabled = !list.length;
   renderTrades();
 }
 function tSelMode(on) {
@@ -1852,6 +1879,49 @@ $('tagMgr').addEventListener('click', async (e) => {
     catch (err) { toast(err.message, true); }
   }
 });
+// ── 고른 거래에 근거 달기 (거래내역 ☑ 선택 → [🏷 근거 달기]) - 이미 붙은 근거는 그대로 두고 더함 ──
+let taPick = new Set();
+function renderTagApply() {
+  const sel = [...tSel.values()];
+  const anyLoss = sel.some((t) => (t.profit || 0) + (t.commission || 0) < 0);
+  $('taBody').innerHTML = TAG_TYPES.filter(([type]) => type !== 'loss' || anyLoss).map(([type, label]) => {
+    const list = (allTags || []).filter((g) => g.type === type);
+    return `<div class="tgsec"><h4>${label} 근거</h4>
+      <div class="tachips">${list.map((g) => `<button data-ta="${g.id}" class="${taPick.has(g.id) ? 'on' : ''}">${esc(g.name)}</button>`).join('') || '<span class="muted" style="font-size:12.5px">없음</span>'}</div>
+      <div class="tgadd"><input data-tanew="${type}" placeholder="새 ${label} 근거" maxlength="40" autocomplete="off"><button class="btn small" data-tanewbtn="${type}">추가</button></div></div>`;
+  }).join('');
+  $('taGo').textContent = taPick.size ? `${sel.length}건에 ${taPick.size}개 저장` : '저장';
+  $('taGo').disabled = !taPick.size;
+}
+$('tTagGo').onclick = async () => {
+  const sel = [...tSel.values()]; if (!sel.length) return;
+  taPick = new Set();
+  $('taWhat').textContent = `고른 ${sel.length}건에 근거를 더합니다. 이미 붙은 근거는 그대로 둡니다. (손실 근거는 손실로 끝난 거래가 있을 때만)`;
+  $('tagApplyModal').hidden = false; $('taBody').innerHTML = '<div class="empty">불러오는 중…</div>';
+  try { await loadTags(); renderTagApply(); } catch (e) { $('taBody').innerHTML = `<div class="gerr">${esc(e.message)}</div>`; }
+};
+async function taNew(type) {
+  const inp = document.querySelector(`[data-tanew="${type}"]`), name = inp.value.trim(); if (!name) return inp.focus();
+  const same = (allTags || []).find((g) => g.name === name);
+  if (same) { if (same.type !== type) return toast('같은 이름이 다른 종류에 있습니다.', true); taPick.add(same.id); return renderTagApply(); }
+  try { const g = await api('/trade-tags', { method: 'POST', body: JSON.stringify({ name, type }) }); allTags.push(g); taPick.add(g.id); renderTagApply(); }
+  catch (e) { toast(e.message, true); }
+}
+$('taBody').addEventListener('click', (e) => {
+  const b = e.target.closest('[data-ta]'), n = e.target.closest('[data-tanewbtn]');
+  if (b) { const id = Number(b.dataset.ta); taPick.has(id) ? taPick.delete(id) : taPick.add(id); renderTagApply(); }
+  if (n) taNew(n.dataset.tanewbtn);
+});
+$('taBody').addEventListener('keydown', (e) => { const i = e.target.closest('[data-tanew]'); if (i && e.key === 'Enter' && !e.isComposing) { e.preventDefault(); taNew(i.dataset.tanew); } });
+$('taGo').onclick = async () => {
+  const ids = [...tSel.keys()];
+  $('taGo').disabled = true;
+  try {
+    const r = await api('/trade-tags/apply', { method: 'POST', body: JSON.stringify({ trade_ids: ids, tag_ids: [...taPick] }) });
+    $('tagApplyModal').hidden = true; toast(`${ids.length}건에 근거를 저장했습니다 (${r.added}개 추가).`);
+    await loadTrades(); if (tSel) { tSel.clear(); tSelChanged(); }
+  } catch (e) { toast(e.message, true); $('taGo').disabled = false; }
+};
 $('tagMgr').addEventListener('keydown', (e) => {
   const inp = e.target.closest('[data-addin]'); if (inp && e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addTag(inp.dataset.addin); }
 });
