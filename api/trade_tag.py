@@ -42,9 +42,13 @@ async def update_trade_tags(data: TradeTagUpdate, db: AsyncSession = Depends(get
 
 @router.post("/apply")
 async def apply_tags(data: dict, db: AsyncSession = Depends(get_db)):
-    """여러 거래에 근거 태그를 더함 (이미 붙은 다른 태그는 그대로) - 웹 거래내역 선택 → [🏷 근거 달기]"""
+    """여러 거래에 근거 태그를 더하고(tag_ids) 빼기(remove_ids). 말하지 않은 다른 태그는 그대로.
+    웹 거래내역 선택 → [🏷 근거 달기], 묶음 창"""
     trade_ids = [int(x) for x in data.get("trade_ids") or []]
     tag_ids = [int(x) for x in data.get("tag_ids") or []]
+    remove_ids = [int(x) for x in data.get("remove_ids") or []]
+    if remove_ids:
+        await db.execute(delete(TradeTagMap).where(TradeTagMap.trade_id.in_(trade_ids), TradeTagMap.tag_id.in_(remove_ids)))
     have = set((await db.execute(select(TradeTagMap.trade_id, TradeTagMap.tag_id).where(
         TradeTagMap.trade_id.in_(trade_ids), TradeTagMap.tag_id.in_(tag_ids)))).all())
     added = 0
@@ -54,7 +58,7 @@ async def apply_tags(data: dict, db: AsyncSession = Depends(get_db)):
                 db.add(TradeTagMap(trade_id=t, tag_id=g))
                 added += 1
     await db.commit()
-    return {"ok": True, "added": added}
+    return {"ok": True, "added": added, "removed": bool(remove_ids)}
 
 @router.put("/{tag_id}")
 async def update_tag(tag_id: int, data: TagCreate, db: AsyncSession = Depends(get_db)):

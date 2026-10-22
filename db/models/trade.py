@@ -18,6 +18,7 @@ class Trade(Base):
     close_time = Column(TZDateTime(timezone=True))
     commission = Column(Float)
     magic = Column(Integer, nullable=True)   # MT5 매직넘버 - 71700000~71799999 는 구간매매 (services/grid.py), 없으면 직접 거래
+    group_id = Column(Integer, nullable=True, index=True)   # 직접 지정한 묶음 (웹 거래내역 [📦 묶기]) - 같은 번호끼리 한 묶음, 근거를 같이 씀
     account_id = Column(Integer, ForeignKey("accounts.id"))
 
     account = relationship("Account", back_populates="trades")

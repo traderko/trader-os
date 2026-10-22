@@ -35,7 +35,7 @@ def _trade_json(t: Trade) -> dict:
     연결 정보(tag_id)만 나가서 직접 만든다. 앱(Trade.fromJson)이 읽는 필드 이름은 그대로 유지."""
     acc = t.account
     return {
-        "id": t.id, "ticket": t.ticket, "symbol": t.symbol, "position": t.position, "magic": t.magic,
+        "id": t.id, "ticket": t.ticket, "symbol": t.symbol, "position": t.position, "magic": t.magic, "group_id": t.group_id,
         "volume": t.volume, "price_open": t.price_open, "price_close": t.price_close,
         "profit": t.profit, "commission": t.commission,
         "open_time": _iso(t.open_time), "close_time": _iso(t.close_time),

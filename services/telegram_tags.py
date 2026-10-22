@@ -71,12 +71,24 @@ def _parse(data: str):
     return kind, _decode(tok), tok, act
 
 
+async def _members(db, kind: str, ids: list[int]) -> tuple[list[int], int]:
+    """웹에서 [📦 묶기] 한 묶음이면 묶음 안 거래 전부 (청산 근거는 청산된 것만) - (번호들, 늘어난 수)"""
+    from api.trade_group import group_members
+    from db.models.trade import Trade
+    extra = [i for i in await group_members(db, ids) if i not in ids]
+    if kind == "c" and extra:
+        closed = set((await db.execute(select(Trade.id).where(Trade.id.in_(extra), Trade.close_time.isnot(None)))).scalars().all())
+        extra = [i for i in extra if i in closed]
+    return sorted(set(ids) | set(extra)), len(extra)
+
+
 async def _screen(db, kind: str, ids: list[int], tok: str) -> tuple[str, dict]:
     from db.models.trade import Trade
     from db.models.trade_note import TradeNote
     from db.models.trade_tag import TradeTag
     from db.models.trade_tag_map import TradeTagMap
     label, types, field = KIND[kind]
+    ids, grouped = await _members(db, kind, ids)
     trades = [t for t in [await db.get(Trade, i) for i in ids] if t is not None]
     if not trades:
         return "거래 기록을 찾지 못했습니다.", {"inline_keyboard": []}
@@ -92,7 +104,7 @@ async def _screen(db, kind: str, ids: list[int], tok: str) -> tuple[str, dict]:
 
     vol = sum(t.volume or 0 for t in trades)
     head = (f"🏷 <b>{label} 근거</b> · {html.escape(t0.symbol or '')} {t0.position} {vol:g}lot"
-            + (f" ({len(trades)}건)" if len(trades) > 1 else "")
+            + (f" (📦 묶음 {len(trades)}건)" if grouped else f" ({len(trades)}건)" if len(trades) > 1 else "")
             + (f" · {net:+,.2f}" if kind == "c" else ""))
     picked = [g for g in tags if g.id in chosen]
     lines = [head, "선택: " + (", ".join(html.escape(g.name) for g in picked) if picked else "없음")]
@@ -195,6 +207,7 @@ async def button_pressed(live, client, token, chat_id: str, data: str, message_i
             tag = await db.get(TradeTag, tag_id)
             if tag is None:
                 return "지워진 근거입니다"
+            ids, _ = await _members(db, kind, ids)
             have = (await db.execute(select(TradeTagMap.trade_id).where(
                 TradeTagMap.tag_id == tag_id, TradeTagMap.trade_id.in_(ids)))).scalars().all()
             if ids[0] in have:                 # 켜져 있으면 끄기 (묶음 전체)
@@ -292,6 +305,7 @@ async def text_input(live, client, token, chat_id: str, text: str) -> None:
         await live._send(client, token, chat_id, f"✏️ '{html.escape(old_name)}' → '<b>{html.escape(name)}</b>'\n\n" + text_, reply_markup=markup)
         return
     async with AsyncSessionLocal() as db:
+        ids, _ = await _members(db, kind, ids)       # 묶음이면 묶음 전부에
         if p.get("act") == "new":
             name = text[:40]
             tag = (await db.execute(select(TradeTag).where(TradeTag.name == name))).scalar_one_or_none()
@@ -355,10 +369,11 @@ async def untagged_groups(hours: float, gap_min: int = 30) -> list[dict]:
         miss_c = bool(t.close_time) and not ({"exit", "loss"} & types)
         if not (miss_o or miss_c):
             continue
-        key = (t.account_id, t.symbol, t.position)
+        gid = getattr(t, "group_id", None)            # 웹에서 직접 묶은 거래는 시간 간격과 상관없이 한 묶음
+        key = ("g", gid) if gid else (t.account_id, t.symbol, t.position)
         g = last.get(key)
-        if g is None or (t.open_time - g["last"]).total_seconds() > gap_min * 60:
-            g = {"symbol": t.symbol, "side": t.position, "start": t.open_time, "last": t.open_time,
+        if g is None or (not gid and (t.open_time - g["last"]).total_seconds() > gap_min * 60):
+            g = {"grouped": bool(gid), "symbol": t.symbol, "side": t.position, "start": t.open_time, "last": t.open_time,
                  "ids": [], "open": [], "close": [], "vol": 0.0, "net": 0.0, "closed": 0}
             groups.append(g)
             last[key] = g
@@ -392,7 +407,7 @@ async def untagged_message(hours: float, limit: int = 10) -> tuple[str, dict] | 
         st = g["start"] if g["start"].tzinfo else g["start"].replace(tzinfo=ZoneInfo("Asia/Seoul"))
         st = st.astimezone(ZoneInfo("Asia/Seoul"))
         miss = " · ".join(x for x in (f"진입 {len(g['open'])}" if g["open"] else "", f"청산 {len(g['close'])}" if g["close"] else "") if x)
-        lines.append(f"{i}. {st:%m/%d %H:%M} {html.escape(g['symbol'] or '')} {g['side']} {g['vol']:g}lot"
+        lines.append(f"{i}. {'📦 ' if g.get('grouped') else ''}{st:%m/%d %H:%M} {html.escape(g['symbol'] or '')} {g['side']} {g['vol']:g}lot"
                      + (f" ({len(g['ids'])}건)" if len(g["ids"]) > 1 else "")
                      + (f" · {g['net']:+,.2f}" if g["closed"] else " · 보유 중")
                      + f"\n    빠진 근거: {miss}")
