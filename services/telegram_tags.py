@@ -4,6 +4,7 @@
 #   진입 알림  [🏷 진입 근거]  → 진입 태그 목록 (누를 때마다 켜기·끄기, 바로 저장)
 #   청산 알림  [🏷 청산 근거]  → 청산 태그 (손실이면 손실 태그도)
 #   [➕ 새 근거] 채팅으로 이름을 보내면 태그를 만들고 바로 선택 · [✏️ 메모] 근거 글(진입/청산 근거 칸) · [✅ 완료]
+#   [⚙️ 관리] 근거 이름 바꾸기 · 지우기 (붙은 거래 수를 보여 주고, 다른 근거로 옮기고 지울 수도 있음)
 # 여러 건이 한 알림으로 묶였으면 그 거래들에 같이 저장.
 #
 # 버튼 데이터 (서버를 재시작해도 그대로 쓰이게 거래 번호를 버튼에 넣음 - 64바이트 안):
@@ -50,7 +51,7 @@ def ids_token(ids: list[int]) -> str | None:
     ids = sorted(set(i for i in ids if i))
     out = []
     for i in ids:
-        if len(f"tg:c:{_encode(out + [i])}:t.99999") > MAX_DATA:
+        if len(f"tg:c:{_encode(out + [i])}:mv.99999.99999") > MAX_DATA:
             break
         out.append(i)
     return _encode(out) if out else None
@@ -114,10 +115,54 @@ async def _screen(db, kind: str, ids: list[int], tok: str) -> tuple[str, dict]:
         kb.append(row)
     kb.append([{"text": "➕ 새 근거", "callback_data": f"tg:{kind}:{tok}:new"},
                {"text": "✏️ 메모", "callback_data": f"tg:{kind}:{tok}:memo"},
+               {"text": "⚙️ 관리", "callback_data": f"tg:{kind}:{tok}:m"},
                {"text": "✅ 완료", "callback_data": f"tg:{kind}:{tok}:done"}])
     if loss:
         lines.append("🔻 = 손실 근거")
     return "\n".join(lines), {"inline_keyboard": kb}
+
+
+async def _manage_screen(db, kind: str, tok: str, act: str = "m") -> tuple[str, dict]:
+    """⚙️ 관리: 근거마다 [✏️ 이름 (붙은 수)] [🗑] / 지우기 확인 (옮길 근거 고르기)"""
+    from db.models.trade_tag import TradeTag, TagType
+    from api.trade_tag import usage_counts
+    label, types, _ = KIND[kind]
+    tags = (await db.execute(select(TradeTag).where(TradeTag.type.in_([TagType(x) for x in types]))
+                             .order_by(TradeTag.type, TradeTag.id))).scalars().all()
+    used = await usage_counts(db)
+    back = {"text": "◀ 돌아가기", "callback_data": f"tg:{kind}:{tok}:back"}
+    if act.startswith("md."):                  # 지우기 확인
+        tid = int(act[3:])
+        tag = next((g for g in tags if g.id == tid), None)
+        if tag is None:
+            return "이미 지워진 근거입니다.", {"inline_keyboard": [[back]]}
+        n = used.get(tid, 0)
+        others = [g for g in tags if g.type == tag.type and g.id != tid]
+        text = (f"🗑 <b>'{html.escape(tag.name)}'</b> 근거를 지울까요?\n"
+                + (f"이 근거가 <b>{n}건</b> 거래에 붙어 있습니다. 그냥 지우면 그 거래들에서 빠지고, 다른 근거로 옮기고 지울 수도 있습니다."
+                   if n else "아직 어느 거래에도 안 붙어 있습니다."))
+        kb = [[{"text": "🗑 지우기" + (" (근거에서 빼기)" if n else ""), "callback_data": f"tg:{kind}:{tok}:mx.{tid}"}]]
+        if n:
+            kb += [[{"text": f"→ '{g.name}' 쪽으로 옮기고 지우기"[:60], "callback_data": f"tg:{kind}:{tok}:mv.{tid}.{g.id}"}] for g in others[:6]]
+        kb.append([{"text": "취소", "callback_data": f"tg:{kind}:{tok}:m"}])
+        return text, {"inline_keyboard": kb}
+    text = (f"⚙️ <b>{label} 근거 관리</b>\n✏️ 이름 바꾸기 · 🗑 지우기 (괄호 = 붙은 거래 수)"
+            + ("\n🔻 = 손실 근거" if any(g.type.value == "loss" for g in tags) else "")
+            + ("" if tags else f"\n\n아직 {label} 근거가 없습니다."))
+    kb = [[{"text": f"✏️ {'🔻' if g.type.value == 'loss' else ''}{g.name} ({used.get(g.id, 0)})"[:50], "callback_data": f"tg:{kind}:{tok}:mr.{g.id}"},
+           {"text": "🗑", "callback_data": f"tg:{kind}:{tok}:md.{g.id}"}] for g in tags]
+    kb.append([back])
+    return text, {"inline_keyboard": kb}
+
+
+async def _edit_or_send(live, client, token, chat_id, message_id, text, markup):
+    if message_id:
+        r = await live._call(client, token, "editMessageText", chat_id=chat_id, message_id=message_id, text=text,
+                             parse_mode="HTML", reply_markup=markup)
+        if r.get("ok") or "not modified" in str(r.get("description", "")):
+            return message_id
+    r = await live._send(client, token, chat_id, text, reply_markup=markup)
+    return r.get("result", {}).get("message_id") if r.get("ok") else None
 
 
 async def _show(live, client, token, chat_id, kind, ids, tok, message_id=None, new=False):
@@ -163,6 +208,38 @@ async def button_pressed(live, client, token, chat_id: str, data: str, message_i
             await db.commit()
         await _show(live, client, token, chat_id, kind, ids, tok, message_id)
         return msg
+    if act == "back":                          # 관리 → 고르기 화면 (같은 메시지)
+        await _show(live, client, token, chat_id, kind, ids, tok, message_id)
+        return ""
+    if act == "m" or act.startswith("md."):
+        async with AsyncSessionLocal() as db:
+            text, markup = await _manage_screen(db, kind, tok, act)
+        await _edit_or_send(live, client, token, chat_id, message_id, text, markup)
+        return ""
+    if act.startswith("mx.") or act.startswith("mv."):
+        from api.trade_tag import remove_tag
+        nums = act[3:].split(".")
+        tid, to = int(nums[0]), (int(nums[1]) if len(nums) > 1 else None)
+        async with AsyncSessionLocal() as db:
+            tag, dest = await db.get(TradeTag, tid), (await db.get(TradeTag, to) if to else None)
+            if tag is None:
+                return "이미 지워진 근거입니다"
+            name = tag.name
+            n = await remove_tag(db, tid, to)
+            text, markup = await _manage_screen(db, kind, tok)
+        await _edit_or_send(live, client, token, chat_id, message_id, text, markup)
+        return (f"'{name}' 지움" + (f" · {n}건을 '{dest.name}' 쪽으로 옮김" if dest and n else f" · {n}건에서 빠짐" if n else ""))[:190]
+    if act.startswith("mr."):
+        import time
+        tid = int(act[3:])
+        async with AsyncSessionLocal() as db:
+            tag = await db.get(TradeTag, tid)
+        if tag is None:
+            return "이미 지워진 근거입니다"
+        live.pending[chat_id] = {"type": "tag", "act": "rename", "tag": tid, "kind": kind, "ids": ids, "tok": tok,
+                                 "mid": message_id, "at": time.time()}
+        await live._send(client, token, chat_id, f"'<b>{html.escape(tag.name)}</b>' 의 새 이름을 보내 주세요. 이미 붙은 거래에도 새 이름으로 보입니다. (그만두려면 /cancel)")
+        return "새 이름을 보내 주세요"
     if act in ("new", "memo"):
         import time
         live.pending[chat_id] = {"type": "tag", "act": act, "kind": kind, "ids": ids, "tok": tok,
@@ -193,6 +270,27 @@ async def text_input(live, client, token, chat_id: str, text: str) -> None:
         return
     label, types, field = KIND[kind]
     text = text.strip()
+    if p.get("act") == "rename":
+        name = text[:40]
+        async with AsyncSessionLocal() as db:
+            tag = await db.get(TradeTag, p.get("tag"))
+            if tag is None:
+                await live._send(client, token, chat_id, "이미 지워진 근거입니다.")
+                return
+            dup = (await db.execute(select(TradeTag.id).where(TradeTag.name == name, TradeTag.id != tag.id))).first()
+            if not name or dup:
+                live.pending[chat_id] = p
+                await live._send(client, token, chat_id, f"'{html.escape(name)}' 근거가 이미 있습니다. 다른 이름을 보내 주세요. (그만두려면 /cancel)"
+                                 if name else "이름을 보내 주세요.")
+                return
+            old_name, tag.name = tag.name, name
+            await db.commit()
+            text_, markup = await _manage_screen(db, kind, tok)
+        old = p.get("mid")
+        if old:
+            await live._call(client, token, "deleteMessage", chat_id=chat_id, message_id=old)
+        await live._send(client, token, chat_id, f"✏️ '{html.escape(old_name)}' → '<b>{html.escape(name)}</b>'\n\n" + text_, reply_markup=markup)
+        return
     async with AsyncSessionLocal() as db:
         if p.get("act") == "new":
             name = text[:40]

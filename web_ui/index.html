@@ -213,6 +213,9 @@
   .tgchips .chip button { border: 0; background: none; color: inherit; cursor: pointer; font-size: 13px; padding: 0 4px; opacity: .7; }
   .tgadd { display: flex; gap: 6px; } .tgadd input { flex: 1; min-width: 0; }
   .tgchips .chip .nm { cursor: pointer; }
+  .tgchips .chip .cnt { font-size: 10.5px; opacity: .75; margin-left: 2px; }
+  .tgdel { border: 1px solid var(--down); border-radius: 10px; padding: 10px 12px; margin: 4px 0 8px; font-size: 13px; display: grid; gap: 8px; }
+  .tgdel select { font: inherit; } .tgdel .r { display: flex; gap: 6px; justify-content: flex-end; }
   .tgchips .chip.editing { padding: 2px 4px; } .tgchips .chip.editing input { font: inherit; font-size: 12.5px; width: 150px; padding: 2px 6px; border: 1px solid var(--accent); border-radius: 6px; background: var(--panel); color: var(--text); }
   .chip.miss { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
   .tachips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
@@ -1852,6 +1855,7 @@ async function loadTags() { allTags = await api('/trade-tags'); }
 
 // ── 근거 태그 관리 (거래내역 탭 [🏷 근거]) - 텔레그램 체결 알림의 근거 버튼과 같은 목록 ──
 let tagEditId = null;          // 이름 바꾸는 중인 근거
+let tagDelId = null, tagUsage = {};   // 지우려는 근거 · 근거마다 붙은 거래 수
 async function renameTag(id) {
   const inp = document.querySelector(`[data-renin="${id}"]`), name = inp ? inp.value.trim() : '';
   const g = allTags.find((x) => x.id === id); if (!g) return;
@@ -1865,17 +1869,22 @@ async function renameTag(id) {
 function renderTagMgr() {
   $('tagMgr').innerHTML = TAG_TYPES.map(([type, label]) => {
     const list = (allTags || []).filter((g) => g.type === type);
+    const del = list.find((g) => g.id === tagDelId), used = del ? (tagUsage[del.id] || 0) : 0;
+    const others = del ? list.filter((g) => g.id !== del.id) : [];
+    const delBox = del ? `<div class="tgdel"><div><b>'${esc(del.name)}'</b> ${used ? `근거가 <b>${used}건</b> 거래에 붙어 있습니다. 지우면 그 거래들에서 빠지거나, 다른 근거로 옮길 수 있습니다.` : '근거는 아직 어느 거래에도 안 붙어 있습니다.'}</div>
+      ${used ? `<label>그 거래들은 <select id="tgMergeTo"><option value="">근거에서 빼기</option>${others.map((g) => `<option value="${g.id}">'${esc(g.name)}' 쪽으로 옮기기</option>`).join('')}</select></label>` : ''}
+      <div class="r"><button class="btn small" data-delcancel>취소</button><button class="btn small danger" data-delgo="${del.id}">지우기</button></div></div>` : '';
     return `<div class="tgsec"><h4>${label} 근거 <small class="muted">${list.length}개</small></h4>
       <div class="tgchips">${list.map((g) => tagEditId === g.id
         ? `<span class="chip ${type} editing"><input data-renin="${g.id}" value="${esc(g.name)}" maxlength="40" autocomplete="off"><button data-rensave="${g.id}" title="저장">✓</button><button data-rencancel title="취소">✕</button></span>`
-        : `<span class="chip ${type}"><span class="nm" data-ren="${g.id}" title="눌러서 이름 바꾸기">${esc(g.name)}</span><button data-ren="${g.id}" title="이름 바꾸기">✎</button><button data-deltag="${g.id}" title="지우기">✕</button></span>`).join('') || '<span class="muted" style="font-size:12.5px">없음</span>'}</div>
+        : `<span class="chip ${type}"><span class="nm" data-ren="${g.id}" title="눌러서 이름 바꾸기">${esc(g.name)}</span>${tagUsage[g.id] ? `<small class="cnt" title="이 근거가 붙은 거래 수">${tagUsage[g.id]}</small>` : ''}<button data-ren="${g.id}" title="이름 바꾸기">✎</button><button data-deltag="${g.id}" title="지우기">✕</button></span>`).join('') || '<span class="muted" style="font-size:12.5px">없음</span>'}</div>${delBox}
       <div class="tgadd"><input data-addin="${type}" placeholder="${label} 근거 이름 (예: ${type === 'entry' ? '시가박스 상단 돌파' : type === 'exit' ? '목표가 도달' : '손절 지연'})" maxlength="40" autocomplete="off">
         <button class="btn small" data-addtag="${type}">추가</button></div></div>`;
   }).join('');
 }
 $('tTags').onclick = async () => {
-  tagEditId = null; $('tagModal').hidden = false; $('tagMgr').innerHTML = '<div class="empty">불러오는 중…</div>';
-  try { await loadTags(); renderTagMgr(); } catch (e) { $('tagMgr').innerHTML = `<div class="gerr">${esc(e.message)}</div>`; }
+  tagEditId = null; tagDelId = null; $('tagModal').hidden = false; $('tagMgr').innerHTML = '<div class="empty">불러오는 중…</div>';
+  try { const [, u] = await Promise.all([loadTags(), api('/trade-tags/usage').catch(() => ({}))]); tagUsage = Object.fromEntries(Object.entries(u).map(([k, v]) => [Number(k), v])); renderTagMgr(); } catch (e) { $('tagMgr').innerHTML = `<div class="gerr">${esc(e.message)}</div>`; }
 };
 async function addTag(type) {
   const inp = document.querySelector(`[data-addin="${type}"]`), name = inp.value.trim();
@@ -1891,11 +1900,18 @@ $('tagMgr').addEventListener('click', async (e) => {
   if (save) return renameTag(Number(save.dataset.rensave));
   if (e.target.closest('[data-rencancel]')) { tagEditId = null; return renderTagMgr(); }
   if (add) return addTag(add.dataset.addtag);
-  if (del) {
-    const g = allTags.find((x) => String(x.id) === del.dataset.deltag);
-    if (!(await ask('근거 지우기', `'${g ? g.name : ''}' 을(를) 지웁니다. 이미 거래에 붙은 이 근거도 같이 빠집니다.`))) return;
-    try { await api('/trade-tags/' + del.dataset.deltag, { method: 'DELETE' }); allTags = allTags.filter((x) => x !== g); renderTagMgr(); }
-    catch (err) { toast(err.message, true); }
+  if (del) { tagDelId = Number(del.dataset.deltag); tagEditId = null; return renderTagMgr(); }
+  if (e.target.closest('[data-delcancel]')) { tagDelId = null; return renderTagMgr(); }
+  const go = e.target.closest('[data-delgo]');
+  if (go) {
+    const id = Number(go.dataset.delgo), to = $('tgMergeTo') ? $('tgMergeTo').value : '';
+    try {
+      const r = await api(`/trade-tags/${id}${to ? '?merge_into=' + to : ''}`, { method: 'DELETE' });
+      allTags = allTags.filter((x) => x.id !== id); tagDelId = null;
+      if (to) tagUsage[to] = (tagUsage[to] || 0) + r.trades;
+      toast(r.trades ? (to ? `지우고 ${r.trades}건을 옮겼습니다.` : `지웠습니다. ${r.trades}건에서 이 근거가 빠졌습니다.`) : '지웠습니다.');
+      renderTagMgr(); if (tab === 'trades') loadTrades();
+    } catch (err) { toast(err.message, true); }
   }
 });
 // ── 고른 거래에 근거 달기 (거래내역 ☑ 선택 → [🏷 근거 달기]) - 이미 붙은 근거는 그대로 두고 더함 ──

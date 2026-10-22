@@ -76,9 +76,37 @@ async def update_tag(tag_id: int, data: TagCreate, db: AsyncSession = Depends(ge
     await db.commit()
     return tag
 
-@router.delete("/{tag_id}")
-async def delete_tag(tag_id: int, db: AsyncSession = Depends(get_db)):
+async def remove_tag(db: AsyncSession, tag_id: int, merge_into: int | None = None) -> int:
+    """근거 지우기. merge_into 를 주면 이 근거가 붙은 거래들을 그 근거로 옮긴 뒤 지움 (이미 붙어 있으면 그대로).
+    돌려주는 값: 옮긴(또는 빠진) 거래 수. 텔레그램 근거 관리(services/telegram_tags.py)도 이걸 씀"""
+    trade_ids = list((await db.execute(select(TradeTagMap.trade_id).where(TradeTagMap.tag_id == tag_id))).scalars().all())
+    if merge_into and merge_into != tag_id:
+        if await db.get(TradeTag, merge_into) is None:
+            raise HTTPException(404, "옮길 근거를 찾지 못했습니다.")
+        have = set((await db.execute(select(TradeTagMap.trade_id).where(
+            TradeTagMap.tag_id == merge_into, TradeTagMap.trade_id.in_(trade_ids)))).scalars().all())
+        for t in set(trade_ids) - have:
+            db.add(TradeTagMap(trade_id=t, tag_id=merge_into))
     await db.execute(delete(TradeTagMap).where(TradeTagMap.tag_id == tag_id))   # 거래에 붙은 것도 같이 (남으면 빈 태그가 됨)
     await db.execute(delete(TradeTag).where(TradeTag.id == tag_id))
     await db.commit()
-    return {"ok": True}
+    return len(set(trade_ids))
+
+
+async def usage_counts(db: AsyncSession) -> dict[int, int]:
+    from sqlalchemy import func
+    rows = (await db.execute(select(TradeTagMap.tag_id, func.count(func.distinct(TradeTagMap.trade_id)))
+                             .group_by(TradeTagMap.tag_id))).all()
+    return {tid: n for tid, n in rows}
+
+
+@router.get("/usage")
+async def tag_usage(db: AsyncSession = Depends(get_db)):
+    """근거마다 붙은 거래 수 {근거id: 건수} - 지우기 전에 보여 줌"""
+    return {str(k): v for k, v in (await usage_counts(db)).items()}
+
+
+@router.delete("/{tag_id}")
+async def delete_tag(tag_id: int, merge_into: int | None = None, db: AsyncSession = Depends(get_db)):
+    n = await remove_tag(db, tag_id, merge_into)
+    return {"ok": True, "trades": n, "merged": bool(merge_into)}
