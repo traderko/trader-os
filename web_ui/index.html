@@ -461,6 +461,11 @@
   :root[data-theme="dark"] .gdst.open { background: #173d22; color: #8fe0a5; }
   @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .gdst.open { background: #173d22; color: #8fe0a5; } }
   #gdModal .sheet { max-height: 88vh; overflow: auto; }
+  /* 내용이 길면 가운데만 스크롤 - 제목·저장 버튼은 늘 보이게 */
+  .sheet.fit { display: flex; flex-direction: column; max-height: 90vh; max-height: 90dvh; }
+  .sheet.fit > .scroll { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; margin: 0 -16px; padding: 0 16px; }
+  .sheet.fit > .acts { flex: none; padding-top: 10px; margin-top: 2px; border-top: 1px solid var(--line); }
+  #tagApplyModal .tamem { max-height: 132px; }
   #gdModal .acts { flex-wrap: wrap; }
   .cmp { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
   .cmp small { display: block; font-size: 11.5px; color: var(--muted); }
@@ -489,6 +494,7 @@
   }
   #toast.show { opacity: 1; transform: translateX(-50%); }
   #toast.err { background: var(--bad); color: #fff; }
+  body:has(.modal:not([hidden])) #toast { bottom: auto; top: calc(14px + env(safe-area-inset-top)); }   /* 창이 열려 있으면 위에 - 저장 버튼 가리지 않게 */
 #tab-pos.viewonly > :not(#viewOnly) { display: none !important; }
 .viewonly-note h2 { margin: 0 0 6px; }
 .viewonly-note p { margin: 0; line-height: 1.6; }
@@ -837,20 +843,20 @@
 
 <!-- 고른 거래에 근거 달기 -->
 <div class="modal" id="tagApplyModal" hidden>
-  <div class="sheet" style="max-width:560px">
+  <div class="sheet fit" style="max-width:560px">
     <h3 id="taTitle">🏷 근거 달기</h3>
-    <p id="taWhat"></p>
-    <div id="taBody"></div>
+    <div class="scroll"><p id="taWhat"></p>
+    <div id="taBody"></div></div>
     <div class="acts"><button class="btn danger" id="taUngroup" hidden>묶음 풀기</button><span class="sp" style="flex:1"></span><button class="btn" data-close>닫기</button><button class="btn primary" id="taGo">저장</button></div>
   </div>
 </div>
 
 <!-- 근거 태그 관리 -->
 <div class="modal" id="tagModal" hidden>
-  <div class="sheet" style="max-width:560px">
+  <div class="sheet fit" style="max-width:560px">
     <h3>🏷 근거 태그</h3>
-    <p>미리 만들어 두면 텔레그램 체결 알림의 <b>[🏷 진입 근거]</b> <b>[🏷 청산 근거]</b> 버튼과 거래 상세에서 바로 고를 수 있습니다. 손실 근거는 청산 근거와 같이 나옵니다(🔻). 이름을 누르면(✎) 바꿀 수 있고, 이미 붙은 거래에도 새 이름으로 보입니다.</p>
-    <div id="tagMgr"></div>
+    <div class="scroll"><p>미리 만들어 두면 텔레그램 체결 알림의 <b>[🏷 진입 근거]</b> <b>[🏷 청산 근거]</b> 버튼과 거래 상세에서 바로 고를 수 있습니다. 손실 근거는 청산 근거와 같이 나옵니다(🔻). 이름을 누르면(✎) 바꿀 수 있고, 이미 붙은 거래에도 새 이름으로 보입니다.</p>
+    <div id="tagMgr"></div></div>
     <div class="acts"><button class="btn" data-close>닫기</button></div>
   </div>
 </div>
