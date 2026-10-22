@@ -1,5 +1,5 @@
 from sqlalchemy.ext.asyncio import AsyncSession
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import delete, select
 from db.models.trade_tag import TradeTag
 from db.models.trade_tag_map import TradeTagMap
@@ -16,7 +16,12 @@ async def get_tags(db: AsyncSession = Depends(get_db)):
 
 @router.post("")
 async def create_tag(data: TagCreate, db: AsyncSession = Depends(get_db)):
-    tag = TradeTag(**data.model_dump())
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(400, "근거 이름을 넣으세요.")
+    if (await db.execute(select(TradeTag.id).where(TradeTag.name == name))).first():
+        raise HTTPException(400, f"'{name}' 근거가 이미 있습니다.")
+    tag = TradeTag(name=name, type=data.type)
     db.add(tag)
     await db.commit()
     await db.refresh(tag)
@@ -56,9 +61,16 @@ async def update_tag(tag_id: int, data: TagCreate, db: AsyncSession = Depends(ge
     result = await db.execute(
         select(TradeTag).where(TradeTag.id == tag_id)
     )
-    tag = result.scalar_one()
-
-    tag.name = data.name
+    tag = result.scalar_one_or_none()
+    if tag is None:
+        raise HTTPException(404, "근거를 찾지 못했습니다.")
+    name = data.name.strip()
+    if not name:
+        raise HTTPException(400, "근거 이름을 넣으세요.")
+    if (await db.execute(select(TradeTag.id).where(TradeTag.name == name, TradeTag.id != tag_id))).first():
+        raise HTTPException(400, f"'{name}' 근거가 이미 있습니다.")
+    # 이름을 바꾸면 이미 이 근거가 붙은 거래들에도 새 이름으로 보임 (거래에는 근거 번호로 연결)
+    tag.name = name
     tag.type = data.type
 
     await db.commit()

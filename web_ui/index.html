@@ -212,6 +212,8 @@
   .tgchips .chip { font-size: 12.5px; padding: 3px 4px 3px 10px; display: inline-flex; gap: 4px; align-items: center; }
   .tgchips .chip button { border: 0; background: none; color: inherit; cursor: pointer; font-size: 13px; padding: 0 4px; opacity: .7; }
   .tgadd { display: flex; gap: 6px; } .tgadd input { flex: 1; min-width: 0; }
+  .tgchips .chip .nm { cursor: pointer; }
+  .tgchips .chip.editing { padding: 2px 4px; } .tgchips .chip.editing input { font: inherit; font-size: 12.5px; width: 150px; padding: 2px 6px; border: 1px solid var(--accent); border-radius: 6px; background: var(--panel); color: var(--text); }
   .chip.miss { background: transparent; border: 1px dashed var(--line); color: var(--muted); }
   .tachips { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 6px; }
   .tachips button { font: inherit; font-size: 12.5px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--line); background: var(--panel); color: var(--text); cursor: pointer; }
@@ -832,7 +834,7 @@
 <div class="modal" id="tagModal" hidden>
   <div class="sheet" style="max-width:560px">
     <h3>🏷 근거 태그</h3>
-    <p>미리 만들어 두면 텔레그램 체결 알림의 <b>[🏷 진입 근거]</b> <b>[🏷 청산 근거]</b> 버튼과 거래 상세에서 바로 고를 수 있습니다. 손실 근거는 손실로 끝난 청산에만 나옵니다.</p>
+    <p>미리 만들어 두면 텔레그램 체결 알림의 <b>[🏷 진입 근거]</b> <b>[🏷 청산 근거]</b> 버튼과 거래 상세에서 바로 고를 수 있습니다. 손실 근거는 손실로 끝난 청산에만 나옵니다. 이름을 누르면(✎) 바꿀 수 있고, 이미 붙은 거래에도 새 이름으로 보입니다.</p>
     <div id="tagMgr"></div>
     <div class="acts"><button class="btn" data-close>닫기</button></div>
   </div>
@@ -1849,17 +1851,30 @@ function chartUrl(t) {
 async function loadTags() { allTags = await api('/trade-tags'); }
 
 // ── 근거 태그 관리 (거래내역 탭 [🏷 근거]) - 텔레그램 체결 알림의 근거 버튼과 같은 목록 ──
+let tagEditId = null;          // 이름 바꾸는 중인 근거
+async function renameTag(id) {
+  const inp = document.querySelector(`[data-renin="${id}"]`), name = inp ? inp.value.trim() : '';
+  const g = allTags.find((x) => x.id === id); if (!g) return;
+  if (!name) return inp.focus();
+  if (name === g.name) { tagEditId = null; return renderTagMgr(); }
+  if (allTags.some((x) => x.name === name && x.id !== id)) return toast('같은 이름의 근거가 이미 있습니다.', true);
+  try { const r = await api('/trade-tags/' + id, { method: 'PUT', body: JSON.stringify({ name, type: g.type }) }); g.name = r.name; tagEditId = null; renderTagMgr();
+    toast('이름을 바꿨습니다. 이미 이 근거가 붙은 거래에도 새 이름으로 보입니다.'); if (tab === 'trades') loadTrades(); }
+  catch (e) { toast(e.message, true); }
+}
 function renderTagMgr() {
   $('tagMgr').innerHTML = TAG_TYPES.map(([type, label]) => {
     const list = (allTags || []).filter((g) => g.type === type);
     return `<div class="tgsec"><h4>${label} 근거 <small class="muted">${list.length}개</small></h4>
-      <div class="tgchips">${list.map((g) => `<span class="chip ${type}">${esc(g.name)}<button data-deltag="${g.id}" title="지우기">✕</button></span>`).join('') || '<span class="muted" style="font-size:12.5px">없음</span>'}</div>
+      <div class="tgchips">${list.map((g) => tagEditId === g.id
+        ? `<span class="chip ${type} editing"><input data-renin="${g.id}" value="${esc(g.name)}" maxlength="40" autocomplete="off"><button data-rensave="${g.id}" title="저장">✓</button><button data-rencancel title="취소">✕</button></span>`
+        : `<span class="chip ${type}"><span class="nm" data-ren="${g.id}" title="눌러서 이름 바꾸기">${esc(g.name)}</span><button data-ren="${g.id}" title="이름 바꾸기">✎</button><button data-deltag="${g.id}" title="지우기">✕</button></span>`).join('') || '<span class="muted" style="font-size:12.5px">없음</span>'}</div>
       <div class="tgadd"><input data-addin="${type}" placeholder="${label} 근거 이름 (예: ${type === 'entry' ? '시가박스 상단 돌파' : type === 'exit' ? '목표가 도달' : '손절 지연'})" maxlength="40" autocomplete="off">
         <button class="btn small" data-addtag="${type}">추가</button></div></div>`;
   }).join('');
 }
 $('tTags').onclick = async () => {
-  $('tagModal').hidden = false; $('tagMgr').innerHTML = '<div class="empty">불러오는 중…</div>';
+  tagEditId = null; $('tagModal').hidden = false; $('tagMgr').innerHTML = '<div class="empty">불러오는 중…</div>';
   try { await loadTags(); renderTagMgr(); } catch (e) { $('tagMgr').innerHTML = `<div class="gerr">${esc(e.message)}</div>`; }
 };
 async function addTag(type) {
@@ -1871,6 +1886,10 @@ async function addTag(type) {
 }
 $('tagMgr').addEventListener('click', async (e) => {
   const add = e.target.closest('[data-addtag]'), del = e.target.closest('[data-deltag]');
+  const ren = e.target.closest('[data-ren]'), save = e.target.closest('[data-rensave]');
+  if (ren) { tagEditId = Number(ren.dataset.ren); renderTagMgr(); const i = document.querySelector(`[data-renin="${tagEditId}"]`); if (i) { i.focus(); i.select(); } return; }
+  if (save) return renameTag(Number(save.dataset.rensave));
+  if (e.target.closest('[data-rencancel]')) { tagEditId = null; return renderTagMgr(); }
   if (add) return addTag(add.dataset.addtag);
   if (del) {
     const g = allTags.find((x) => String(x.id) === del.dataset.deltag);
@@ -1923,6 +1942,8 @@ $('taGo').onclick = async () => {
   } catch (e) { toast(e.message, true); $('taGo').disabled = false; }
 };
 $('tagMgr').addEventListener('keydown', (e) => {
+  const ri = e.target.closest('[data-renin]');
+  if (ri && !e.isComposing) { if (e.key === 'Enter') { e.preventDefault(); return renameTag(Number(ri.dataset.renin)); } if (e.key === 'Escape') { tagEditId = null; return renderTagMgr(); } }
   const inp = e.target.closest('[data-addin]'); if (inp && e.key === 'Enter' && !e.isComposing) { e.preventDefault(); addTag(inp.dataset.addin); }
 });
 const imgUrl = (p) => BASE + '/' + String(p).replace(/^\/+/, '').split('/').map(encodeURIComponent).join('/');
