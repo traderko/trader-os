@@ -260,6 +260,11 @@
   .month strong { font-size: 16px; min-width: 96px; text-align: center; }
   .month .btn { padding: 6px 11px; }
   .month .sp { flex: 1; }
+  /* 거래내역 도구 버튼: 폰에서 넘치면 옆으로 스크롤 (달 이동 ‹ › 은 그대로) */
+  .mtools { flex: 1; min-width: 0; display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; -webkit-overflow-scrolling: touch; overscroll-behavior-x: contain; }
+  .mtools::-webkit-scrollbar { display: none; }
+  .mtools > :first-child { margin-left: auto; }
+  .mtools.more, #tOrigin.more { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); }
   .tsum { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
   .tsum small { display: block; font-size: 11.5px; color: var(--muted); }
   .tsum span { font-weight: 600; }
@@ -623,11 +628,12 @@
     <button class="btn" id="mPrev" aria-label="이전 달">‹</button>
     <strong class="num" id="mLabel"></strong>
     <button class="btn" id="mNext" aria-label="다음 달">›</button>
-    <span class="sp"></span>
+    <div class="mtools" id="tTools">
     <button class="btn small ghost" id="tSelBtn" title="거래를 골라 2·5·10배 랏으로 했다면 시뮬레이션">☑ 선택</button>
     <button class="btn small ghost" id="tTags" title="진입·청산·손실 근거 태그 미리 만들기 (텔레그램 체결 알림·거래 상세에서 고름)">🏷 근거</button>
     <button class="btn small ghost" id="tPine" title="트레이딩뷰 파인스크립트 input.text_area() 에 붙여넣을 거래내역">📋 TV</button>
     <button class="btn small ghost" id="tCollect" title="MT5 체결 기록에서 거래내역을 다시 모읍니다">MT5에서 모으기</button>
+    </div>
   </div>
   <div class="seg" id="tSyms"></div>
   <div class="seg mini2" id="tOrigin"><button data-o="all" class="on">전체</button><button data-o="manual">✋ 직접 거래</button><button data-o="grid">🧱 구간매매</button><button id="tNoReason" title="진입 근거가 없거나, 청산했는데 청산·손실 근거가 없는 거래만">🏷 근거 없음</button></div>
@@ -1161,6 +1167,12 @@ $('unlockGo').onclick = async () => {
     $('unlockMsg').textContent = e.message; $('unlockGo').disabled = false; inp.select();
   }
 };
+// 옆으로 넘치는 버튼 줄: 더 있으면 오른쪽 끝을 흐리게 (끝까지 밀면 사라짐)
+for (const tt of [$('tTools'), $('tOrigin')]) {
+  const fade = () => tt.classList.toggle('more', tt.scrollWidth - tt.clientWidth - tt.scrollLeft > 2);
+  tt.addEventListener('scroll', fade, { passive: true }); addEventListener('resize', fade);
+  new ResizeObserver(fade).observe(tt); new MutationObserver(fade).observe(tt, { attributes: true, attributeFilter: ['hidden'], subtree: true, childList: true, characterData: true });
+}
 document.querySelectorAll('[data-close]').forEach((b) => b.onclick = () => b.closest('.modal').hidden = true);
 
 // ── 확인 대화상자 ──
