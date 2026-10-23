@@ -287,13 +287,21 @@
   #tSelBar[hidden] { display: none; }
   #tSelBar .sp { flex: 1; }
   #tSelBar .r1, #tSelBar .r2 { display: flex; align-items: center; gap: 6px; }
-  #tPick { margin: 0; flex: 1; } #tPick button { padding: 5px 10px; font-size: 12.5px; }
+  /* 폰에서 좁으면: 안내는 한 줄(넘치면 …), 버튼 줄은 옆으로 스크롤 - 글자가 세로로 쪼개지지 않게 */
+  #tSelInfo { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+  #tSelBar .r2 { overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+  #tSelBar .r2::-webkit-scrollbar { display: none; }
+  #tSelBar .r2 > .btn { flex: none; white-space: nowrap; }
+  #tSelBar .r2 > :first-child { margin-left: auto; }
+  #tSelBar .r2.more { -webkit-mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(90deg, #000 calc(100% - 28px), transparent); }
+  #tPick { margin: 0; flex: 1; min-width: 0; } #tPick button { padding: 5px 10px; font-size: 12.5px; flex: none; white-space: nowrap; }
+  #tGap { flex: none; }
   #tGap { font: inherit; font-size: 12.5px; padding: 5px 6px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--text, inherit); }
   #tGap[hidden] { display: none; }
   .trade .chain { font-size: 11px; color: var(--accent); font-weight: 600; }
   .trade.anchor { outline: 2px dashed var(--accent); outline-offset: -2px; }
   @media (min-width: 900px) { #tSelBar { bottom: 0; } }
-  body.tsel { padding-bottom: calc(160px + env(safe-area-inset-bottom)); }
+  body.tsel { padding-bottom: calc(190px + env(safe-area-inset-bottom)); }
   .simtbl { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
   .simtbl th { font-weight: 500; color: var(--muted); font-size: 11.5px; text-align: right; padding: 6px 4px; border-bottom: 1px solid var(--line); white-space: nowrap; }
   .simtbl th:first-child, .simtbl td:first-child { text-align: left; }
@@ -792,9 +800,8 @@
       <option value="0">겹칠 때만</option><option value="10">10분 안</option><option value="30">30분 안</option><option value="60">1시간 안</option><option value="240">4시간 안</option>
     </select>
   </div>
-  <div class="r2">
-    <span id="tSelInfo">0건 선택</span>
-    <span class="sp"></span>
+  <div id="tSelInfo">0건 선택</div>
+  <div class="r2" id="tSelBtns">
     <button class="btn small ghost" id="tSelAll">이 달 전체</button>
     <button class="btn small ghost" id="tSelNone">해제</button>
     <button class="btn small" id="tGroupGo" disabled title="고른 거래를 한 묶음으로 - 묶음에 근거를 달면 전부에 같이 붙음">📦 묶기</button>
@@ -1168,7 +1175,7 @@ $('unlockGo').onclick = async () => {
   }
 };
 // 옆으로 넘치는 버튼 줄: 더 있으면 오른쪽 끝을 흐리게 (끝까지 밀면 사라짐)
-for (const tt of [$('tTools'), $('tOrigin')]) {
+for (const tt of [$('tTools'), $('tOrigin'), $('tSelBtns')]) {
   const fade = () => tt.classList.toggle('more', tt.scrollWidth - tt.clientWidth - tt.scrollLeft > 2);
   tt.addEventListener('scroll', fade, { passive: true }); addEventListener('resize', fade);
   new ResizeObserver(fade).observe(tt); new MutationObserver(fade).observe(tt, { attributes: true, attributeFilter: ['hidden'], subtree: true, childList: true, characterData: true });
