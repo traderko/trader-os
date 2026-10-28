@@ -141,37 +141,8 @@ async def create_trade(
         elif data.magic and not trade.magic:
             trade.magic = data.magic
 
-        recent_trade_result = await db.execute(
-            select(Trade)
-            .where(
-                Trade.account_id == account.id,
-                Trade.symbol == data.symbol,
-                Trade.open_time >= kst_time - timedelta(minutes = 5)
-            )
-            .order_by(Trade.open_time.desc())
-        )
-
-        recent_trades = recent_trade_result.scalars().all()
-
-        same_price_count = 0
-
-        for t in recent_trades:
-            price_diff = abs(t.price_open - data.price) / data.price
-
-            if (
-                t.position == data.position and
-                price_diff <= 0.002
-            ):
-                same_price_count += 1
-
-        if same_price_count >= 2:
-            fcm.send(
-                "뇌동매매 경고",
-                f"{data.symbol} 비슷한 가격에서 반복 진입 중",
-                json.dumps({
-                    "type": "revenge_trade"
-                })
-            )
+        # 비슷한 가격 반복 진입(뇌동매매 경고)은 지침 'same_price' 로 옮김 (services/guidelines.py)
+        #   - 예전: 체결마다 바로 보내서 0.5랏씩 나눠 들어가면 체결마다 옴 → 나눠 진입은 한 번으로 묶고, 반복 방지 시간 적용
 
         last_closed_result = await db.execute(
             select(Trade)

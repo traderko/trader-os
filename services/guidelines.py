@@ -8,6 +8,7 @@
 #        (0.5랏씩 다다다 들어가도 하나로 - 이어지는 동안은 시간이 길어져도 계속 묶임)
 #     revenge      손실로 청산한 뒤 N분 안에 다시 진입
 #     overtrade    최근 M분 동안 진입(위 기준으로 묶은 것)이 N번 이상
+#     same_price   최근 M분 동안 같은 종목·방향으로 비슷한 가격(±P%)에 따로 진입한 게 N번째 (뇌동매매 경고)
 #     size_jump    이번 진입(묶은 것 합산)이 평소 진입 크기(최근 N번의 중앙값)의 K배 이상
 #     margin_use   진입하자마자 증거금 사용률이 단계를 넘었으면 '비중 경고'로 바로 (주기 확인보다 먼저, 이번 진입 크기와 같이)
 #     asia_counter 아시아장 시간에 진입 - 정한 요일(기본 목·금) 또는 고영향 지표가 있는 날
@@ -43,23 +44,29 @@ def entry_gap() -> int:
 
 
 def entry_groups(rows, gap: int | None = None) -> list[list]:
-    """(시각, 종목, 방향, 랏) 들 → [처음 시각, 마지막 시각, 종목, 방향, 합계 랏, 체결 수] (시각 순)
+    """(시각, 종목, 방향, 랏[, 가격]) 들 → [처음 시각, 마지막 시각, 종목, 방향, 합계 랏, 체결 수, 평균 가격] (시각 순)
     같은 종목·방향의 직전 체결과 gap 초 안이면 이어 붙임 - 다른 종목이 사이에 끼어도 됨"""
     gap = entry_gap() if gap is None else gap
     open_g: dict[tuple, list] = {}
     out: list[list] = []
-    for t, sym, pos, v in sorted(rows, key=lambda x: x[0]):
+    for row in sorted(rows, key=lambda x: x[0]):
+        t, sym, pos, v = row[:4]
+        v = v or 0
+        px = row[4] if len(row) > 4 else None
         k = (sym, pos)
         g = open_g.get(k)
         if g is not None and (t - g[1]).total_seconds() <= gap:
             g[1] = t
-            g[4] += v or 0
+            if px and g[6] is not None and g[4] + v > 0:
+                g[6] = (g[6] * g[4] + px * v) / (g[4] + v)
+            g[4] += v
             g[5] += 1
         else:
-            g = [t, t, sym, pos, v or 0, 1]
+            g = [t, t, sym, pos, v, 1, px]
             open_g[k] = g
             out.append(g)
     return out
+
 LOOP_SEC = 20
 
 # 관리 화면이 그리는 규칙 설명 (params: 숫자·요일 등 고칠 수 있는 값)
@@ -68,6 +75,10 @@ RULES = [
      "params": [{"k": "minutes", "label": "분 안에", "type": "int"}]},
     {"key": "overtrade", "label": "과매매", "desc": "정한 시간 동안 진입이 정한 횟수 이상이면 · 나눠 들어간 건 위 '나눠 진입 묶기' 기준으로 한 번",
      "params": [{"k": "minutes", "label": "분 동안", "type": "int"}, {"k": "count", "label": "번 이상", "type": "int"}]},
+    {"key": "same_price", "label": "뇌동매매 (비슷한 가격 반복 진입)",
+     "desc": "같은 종목·방향으로 비슷한 가격에 따로따로 반복 진입하면 · 나눠 들어간 건 '나눠 진입 묶기' 기준으로 한 번",
+     "params": [{"k": "minutes", "label": "분 동안", "type": "int"}, {"k": "count", "label": "번째 진입부터", "type": "int"},
+                {"k": "pct", "label": "% 안 (가격 차이)", "type": "float"}]},
     {"key": "size_jump", "label": "비중 급증", "desc": "이번 진입이 평소 진입 크기(최근 진입들의 중앙값)보다 크게 들어가면 · 나눠 들어간 건 위 '나눠 진입 묶기' 기준으로 합산",
      "params": [{"k": "ratio", "label": "배 이상", "type": "float"}, {"k": "lookback", "label": "최근 진입 수로 평소 크기 계산", "type": "int"}]},
     {"key": "asia_counter", "label": "아시아장 역매매", "desc": "아시아장 집중 구간 시간에 진입하면 - 정한 요일 또는 고영향 지표가 있는 날",
@@ -234,7 +245,7 @@ async def _on_open(account_id, account_number, symbol, side, volume, now):
 
         # 최근 체결들을 '한 번의 진입' 단위로 묶음 (overtrade · size_jump · 비중 경고가 같이 씀)
         rows = (await db.execute(
-            select(Trade.open_time, Trade.symbol, Trade.position, Trade.volume).where(
+            select(Trade.open_time, Trade.symbol, Trade.position, Trade.volume, Trade.price_open).where(
                 Trade.account_id == account_id, Trade.open_time != None,
                 Trade.open_time <= now, Trade.open_time > now - timedelta(days=90))
             .order_by(Trade.open_time))).all()
@@ -250,6 +261,18 @@ async def _on_open(account_id, account_number, symbol, side, volume, now):
             if n >= r["count"]:
                 fire("overtrade", account_id, "", f"{acc} · 최근 {r['minutes']}분 동안 진입 {n}번"
                      + (f" (체결 {sum(g[5] for g in groups if g[1] > since)}건)" if any(g[5] > 1 for g in groups if g[1] > since) else ""))
+
+        # same_price: 최근 M분 동안 같은 종목·방향, 비슷한 가격(±P%)에 따로 들어간 진입 수 (이번 것 포함)
+        r = rule("same_price")
+        if r and this and this[6]:
+            since = now - timedelta(minutes=r["minutes"])
+            near = [g for g in mine[:-1] if g[3] == this[3] and g[1] > since and g[6]
+                    and abs(g[6] - this[6]) / this[6] * 100 <= r["pct"]]
+            if len(near) + 1 >= r["count"]:
+                fire("same_price", account_id, f"{symbol}|{this[3]}",
+                     f"{acc} · {symbol} {side} 최근 {r['minutes']}분 동안 비슷한 가격(±{r['pct']:g}%)에서 {len(near) + 1}번째 진입"
+                     f"\n가격: " + " → ".join(f"{g[6]:,.2f}" for g in near[-4:] + [this]),
+                     title="⚠️ 뇌동매매 경고")
 
         # size_jump: 이번 진입(나눠 들어간 것 합산) → 평소(이 종목 최근 진입들의 중앙값)와 비교
         r = rule("size_jump")

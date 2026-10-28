@@ -127,6 +127,7 @@ DEFAULTS: dict = {
             "margin_use":   {"enabled": True, "text": "되돌리지 않고, 바로 가지 않는 곳에서 비중을 키웠는가?\n너무 많은 손실을 감내하고 있는가?",
                              "levels": [10, 20, 30], "repeat": 0},
             "loss_warn":    {"enabled": True, "text": "나의 최대손실 비율을 허용하였는가?\n너무 많은 손실을 감내하고 있는가?"},
+            "same_price":   {"enabled": True, "text": "차트에서 보여준 근거보다 나의 희망회로가 더 우선시되는가?", "minutes": 30, "count": 3, "pct": 0.2},
             "size_jump":    {"enabled": True, "text": "되돌리지 않고, 바로 가지 않는 곳에서 비중을 키웠는가?", "ratio": 2.0, "lookback": 20},
             "asia_counter": {"enabled": True, "text": "목요일·금요일·지표발표일 아시아장에서 역매매하고 있는가?", "weekdays": [3, 4], "event_days": True},
             "first_entry":  {"enabled": True, "text": "", "count": 2},
@@ -399,7 +400,7 @@ def _validate(settings: dict) -> None:
 
 # 지침 규칙별 숫자 범위 (key → (최소, 최대))
 _GUIDE_RANGES = {
-    "minutes": (1, 240), "repeat": (0, 240), "gap_min": (5, 1440), "gap_max": (5, 1440), "count": (1, 100), "seconds": (10, 3600), "lookback": (5, 200), "ratio": (1.2, 20),
+    "minutes": (1, 240), "repeat": (0, 240), "gap_min": (5, 1440), "gap_max": (5, 1440), "count": (1, 100), "seconds": (10, 3600), "lookback": (5, 200), "ratio": (1.2, 20), "pct": (0.01, 5),
 }
 
 
@@ -428,7 +429,7 @@ def _validate_guidelines(g: dict) -> None:
                 v = r.get(k, defaults[key][k])
                 if isinstance(v, bool) or not isinstance(v, (int, float)) or not (lo <= v <= hi):
                     raise SettingsError(f"지침 '{key}' 의 {k} 값은 {lo}~{hi} 사이여야 합니다. (입력: {v})")
-                r[k] = float(v) if k == "ratio" else int(v)
+                r[k] = float(v) if k in ("ratio", "pct") else int(v)
         if "weekdays" in defaults[key]:
             wd = r.get("weekdays") or []
             if not isinstance(wd, list) or any(not _int(x) or not (0 <= x <= 6) for x in wd):
