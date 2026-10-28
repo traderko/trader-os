@@ -129,6 +129,9 @@ DEFAULTS: dict = {
             "size_jump":    {"enabled": True, "text": "되돌리지 않고, 바로 가지 않는 곳에서 비중을 키웠는가?", "ratio": 2.0, "lookback": 20},
             "asia_counter": {"enabled": True, "text": "목요일·금요일·지표발표일 아시아장에서 역매매하고 있는가?", "weekdays": [3, 4], "event_days": True},
             "first_entry":  {"enabled": True, "text": "", "count": 2},
+            # 지침 목록에서 무작위 시각마다 count 개 (gap_min~gap_max 분 사이 무작위 간격, start~end 시간대, 정한 요일만)
+            "random_items": {"enabled": False, "text": "", "count": 1, "gap_min": 60, "gap_max": 180,
+                             "start": "08:00", "end": "23:00", "weekdays": [0, 1, 2, 3, 4]},
         },
     },
     # OANDA 시세 (구간매매 KTR 계산용, services/grid.py) - API 토큰은 OANDA 계정 → Manage API Access 에서 발급
@@ -395,7 +398,7 @@ def _validate(settings: dict) -> None:
 
 # 지침 규칙별 숫자 범위 (key → (최소, 최대))
 _GUIDE_RANGES = {
-    "minutes": (1, 240), "repeat": (0, 240), "count": (1, 100), "seconds": (10, 3600), "lookback": (5, 200), "ratio": (1.2, 20),
+    "minutes": (1, 240), "repeat": (0, 240), "gap_min": (5, 1440), "gap_max": (5, 1440), "count": (1, 100), "seconds": (10, 3600), "lookback": (5, 200), "ratio": (1.2, 20),
 }
 
 
@@ -427,6 +430,11 @@ def _validate_guidelines(g: dict) -> None:
             if not isinstance(wd, list) or any(not _int(x) or not (0 <= x <= 6) for x in wd):
                 raise SettingsError("요일은 0(월)~6(일) 숫자 목록이어야 합니다.")
             r["weekdays"] = sorted(set(wd))
+        for k, label in (("start", "시작 시각"), ("end", "끝 시각")):
+            if k in defaults[key]:
+                r[k] = _hhmm(r.get(k, defaults[key][k]), label)
+        if "gap_min" in defaults[key] and r["gap_min"] > r["gap_max"]:
+            raise SettingsError("무작위 지침의 간격은 '최소 ≤ 최대' 여야 합니다.")
         if "levels" in defaults[key]:       # 증거금 경고 단계 (%) - "10, 20, 30" 글자로 와도 됨
             lv = r.get("levels", defaults[key]["levels"])
             if isinstance(lv, str):

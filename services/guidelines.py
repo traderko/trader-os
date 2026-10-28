@@ -15,6 +15,7 @@
 #     event_hold   고영향 지표 발표·장 시작(아시아·유로·미국) N분 전인데 포지션을 들고 있음
 #     margin_use   증거금 사용률(사용 증거금 ÷ 평가금)이 정한 단계(예: 10·20·30%)를 넘음 - 단계마다 한 번,
 #                  그 단계 아래로 내려갔다가 다시 넘으면 또 (repeat 분마다 다시, 0 = 한 번만)
+#     random_items 지침 목록에서 무작위 시각(gap_min~gap_max 분 간격)마다 N개 - 정한 시간대·요일만
 #   워커 (trade_lock_worker.py)
 #     loss_warn    일일 손실 한도 '경고' 단계 알림에 지침을 덧붙임
 #
@@ -60,6 +61,12 @@ RULES = [
                 {"k": "repeat", "label": "분마다 다시 (그 단계 위에 있는 동안 · 0 = 한 번만)", "type": "int"}]},
     {"key": "loss_warn", "label": "일일 손실 경고", "desc": "일일 손실 한도 '경고' 단계 알림에 덧붙임 (잠금 규칙 탭의 일일 손실 한도가 켜져 있어야 함)",
      "params": []},
+    {"key": "random_items", "label": "무작위 지침", "notext": True,
+     "desc": "지침 목록에서 무작위 시각마다 몇 개씩 · 정한 시간대·요일에만 · 목록을 한 바퀴 다 돌 때까지 같은 지침은 다시 안 나옴",
+     "params": [{"k": "count", "label": "개씩", "type": "int"},
+                {"k": "gap_min", "label": "분 ~", "type": "int"}, {"k": "gap_max", "label": "분 사이 무작위 간격", "type": "int"},
+                {"k": "start", "label": "부터", "type": "hhmm"}, {"k": "end", "label": "까지", "type": "hhmm"},
+                {"k": "weekdays", "label": "요일", "type": "weekdays"}]},
     {"key": "first_entry", "label": "그날 첫 진입", "desc": "거래일(06:00 기준) 첫 진입 때 지침 목록에서 무작위로 · 문구를 비워 두면 목록에서 고름",
      "params": [{"k": "count", "label": "개", "type": "int"}]},
 ]
@@ -68,6 +75,8 @@ _sent: dict[tuple, float] = {}        # (규칙, 계좌, 세부) → 마지막�
 _first_seen: dict[tuple, float] = {}  # (계좌, 티켓) → 처음 본 시각 (no_sl)
 _sl_sent: dict[tuple, float] = {}     # (계좌, 티켓) → SL 없음 알림을 마지막으로 보낸 시각 (no_sl)
 _hold_count: dict[tuple, int] = {}    # (계좌, 지표·장|시각) → 보낸 횟수 (event_hold 반복)
+_rand_next: dict = {"at": None, "sig": None}   # 무작위 지침: 다음에 보낼 시각 (설정이 바뀌면 다시 잡음)
+_rand_bag: list[str] = []                       # 아직 안 보낸 지침 (다 쓰면 섞어서 다시)
 _margin_lvl: dict[int, tuple] = {}    # 계좌 → (알린 단계 %, 마지막으로 보낸 시각) (margin_use)
 MARGIN_HYST = 1.0                     # 단계 아래로 이만큼(%p) 더 내려가야 '내려갔다'로 봄 (경계에서 왔다갔다 할 때 알림 폭주 방지)
 
@@ -228,6 +237,10 @@ async def loop() -> None:
                 await _check_positions()
         except Exception as e:
             print(f"[guideline] 주기 확인 실패: {e}")
+        try:
+            _tick_random()
+        except Exception as e:
+            print(f"[guideline] 무작위 지침 실패: {e}")
         await asyncio.sleep(LOOP_SEC)
 
 
@@ -345,6 +358,73 @@ async def _check_positions() -> None:
         for d in (_first_seen, _sl_sent):
             for k in [k for k in d if k[0] in checked and k not in alive]:
                 d.pop(k, None)
+
+
+# ── 무작위 지침 ──────────────────────────────────────────────────────
+def _hm(v: str) -> int:
+    h, m = str(v).split(":")[:2]
+    return int(h) * 60 + int(m)
+
+
+def _in_window(t: datetime, r: dict) -> bool:
+    """시간대(자정을 넘겨도 됨, 예 22:00~02:00)·요일 안인지. 자정을 넘긴 시간대의 새벽은 전날 요일로 봄"""
+    s, e, m = _hm(r.get("start", "08:00")), _hm(r.get("end", "23:00")), t.hour * 60 + t.minute
+    if s == e:
+        inside, day = True, t
+    elif s < e:
+        inside, day = s <= m < e, t
+    else:
+        inside, day = (m >= s or m < e), (t - timedelta(days=1) if m < e else t)
+    wd = r.get("weekdays")
+    return inside and (not wd or day.weekday() in wd)
+
+
+def _next_slot(after: datetime, r: dict) -> datetime:
+    """after 에서 무작위 간격 뒤 - 시간대 밖이면 다음 시간대 시작 + 조금 (바로 시작 시각에 딱 맞춰 오지 않게)"""
+    lo, hi = int(r.get("gap_min", 60)), int(r.get("gap_max", 180))
+    t = after + timedelta(minutes=random.uniform(lo, max(lo, hi)))
+    if _in_window(t, r):
+        return t
+    for i in range(1, 8 * 24 * 4):          # 15분씩 앞으로 가며 다음 시간대 찾기 (최대 8일)
+        c = t + timedelta(minutes=15 * i)
+        if _in_window(c, r):
+            return c + timedelta(minutes=random.uniform(0, min(lo, 30)))
+    return t
+
+
+def _pick_items(n: int) -> list[str]:
+    items = [x for x in (cfg().get("items") or []) if x.strip()]
+    global _rand_bag
+    _rand_bag = [x for x in _rand_bag if x in items]        # 목록에서 지운 지침은 빼기
+    out = []
+    while len(out) < min(n, len(items)):
+        if not _rand_bag:
+            _rand_bag = random.sample(items, len(items))
+        x = _rand_bag.pop()
+        if x not in out:
+            out.append(x)
+    return out
+
+
+def _tick_random() -> None:
+    r = rule("random_items")
+    if not r:
+        _rand_next.update(at=None, sig=None)
+        return
+    now = datetime.now(KST)
+    sig = tuple(str(r.get(k)) for k in ("gap_min", "gap_max", "start", "end", "weekdays"))
+    if _rand_next["at"] is None or _rand_next["sig"] != sig:     # 처음이거나 설정을 바꿨으면 다시 잡음
+        _rand_next.update(at=_next_slot(now, r), sig=sig)
+        print(f"[guideline] 무작위 지침 다음: {_rand_next['at']:%m-%d %H:%M}")
+        return
+    if now < _rand_next["at"]:
+        return
+    if _in_window(now, r):
+        pick = _pick_items(int(r.get("count", 1)))
+        if pick:
+            send("\n".join(f"□ {x}" for x in pick))
+            print(f"[guideline] random_items {len(pick)}개")
+    _rand_next["at"] = _next_slot(now, r)
 
 
 async def _check_margin(a, acc: str, r: dict) -> None:

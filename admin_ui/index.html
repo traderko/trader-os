@@ -1347,6 +1347,7 @@ function renderGuides() {
     const r = g.rules[m.key] || {};
     const params = m.params.map((p) => {
       if (p.type === 'bool') return `<label class="switch"><input type="checkbox" data-p="${p.k}" ${r[p.k] ? 'checked' : ''}> ${esc(p.label)}</label>`;
+      if (p.type === 'hhmm') return `<span><input type="time" data-p="${p.k}" value="${esc(r[p.k] || '')}"> ${esc(p.label)}</span>`;
       if (p.type === 'levels') return `<span><input type="text" data-p="${p.k}" value="${esc((r[p.k] || []).join(', '))}" placeholder="10, 20, 30" inputmode="decimal" style="width:120px"> ${esc(p.label)}</span>`;
       if (p.type === 'weekdays') return `<span class="wd">${WD.map((w, i) => `<label><input type="checkbox" data-wd="${i}" ${(r.weekdays || []).includes(i) ? 'checked' : ''}>${w}</label>`).join('')}</span>`;
       return `<span><input type="number" data-p="${p.k}" value="${r[p.k] ?? ''}" step="${p.type === 'float' ? '0.1' : '1'}"> ${esc(p.label)}</span>`;
@@ -1354,7 +1355,7 @@ function renderGuides() {
     return `<div class="gdrule${r.enabled ? '' : ' off'}" data-key="${m.key}">
       <div class="hd"><label class="switch"><input type="checkbox" data-p="enabled" ${r.enabled ? 'checked' : ''}> <b>${esc(m.label)}</b></label>
         <small>${esc(m.desc)}</small><button class="btn" data-def="${m.key}" style="padding:3px 10px;font-size:12px" title="이 규칙의 문구·수치를 기본값으로 (저장해야 적용)">기본값</button><button class="btn" data-test="${m.key}" style="padding:3px 10px;font-size:12px">미리 보내기</button></div>
-      <div class="bd"><textarea data-p="text" rows="${(r.text || '').includes('\n') ? 2 : 1}" placeholder="${m.key === 'first_entry' ? '비워 두면 지침 목록에서 무작위로' : '보낼 지침 문구'}">${esc(r.text || '')}</textarea>${params}</div>
+      <div class="bd">${m.notext ? '' : `<textarea data-p="text" rows="${(r.text || '').includes('\n') ? 2 : 1}" placeholder="${m.key === 'first_entry' ? '비워 두면 지침 목록에서 무작위로' : '보낼 지침 문구'}">${esc(r.text || '')}</textarea>`}${params}</div>
     </div>`;
   }).join('');
 }
