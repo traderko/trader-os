@@ -123,6 +123,8 @@ DEFAULTS: dict = {
             "no_sl":        {"enabled": True, "text": "자기확신과 욕심으로 손절 세팅을 하지 않았는가?", "seconds": 60, "repeat": 0},
             "event_hold":   {"enabled": True, "text": "장 시작(아시아·유로·미장) 직전, 지표발표를 앞두고 포지션 정리를 하였는가?", "minutes": 30, "repeat": 10,
                              "asia_open": True, "euro_open": True, "us_open": True},
+            "margin_use":   {"enabled": True, "text": "되돌리지 않고, 바로 가지 않는 곳에서 비중을 키웠는가?\n너무 많은 손실을 감내하고 있는가?",
+                             "levels": [10, 20, 30], "repeat": 0},
             "loss_warn":    {"enabled": True, "text": "나의 최대손실 비율을 허용하였는가?\n너무 많은 손실을 감내하고 있는가?"},
             "size_jump":    {"enabled": True, "text": "되돌리지 않고, 바로 가지 않는 곳에서 비중을 키웠는가?", "ratio": 2.0, "lookback": 20},
             "asia_counter": {"enabled": True, "text": "목요일·금요일·지표발표일 아시아장에서 역매매하고 있는가?", "weekdays": [3, 4], "event_days": True},
@@ -425,6 +427,17 @@ def _validate_guidelines(g: dict) -> None:
             if not isinstance(wd, list) or any(not _int(x) or not (0 <= x <= 6) for x in wd):
                 raise SettingsError("요일은 0(월)~6(일) 숫자 목록이어야 합니다.")
             r["weekdays"] = sorted(set(wd))
+        if "levels" in defaults[key]:       # 증거금 경고 단계 (%) - "10, 20, 30" 글자로 와도 됨
+            lv = r.get("levels", defaults[key]["levels"])
+            if isinstance(lv, str):
+                lv = [x for x in lv.replace("%", "").replace("，", ",").replace(" ", ",").split(",") if x.strip()]
+            try:
+                lv = sorted({round(float(x), 1) for x in (lv or [])})
+            except (TypeError, ValueError):
+                raise SettingsError("증거금 경고 단계는 숫자(%)를 쉼표로 나눠 적어 주세요. 예: 10, 20, 30")
+            if not lv or len(lv) > 10 or any(not (1 <= x <= 1000) for x in lv):
+                raise SettingsError("증거금 경고 단계는 1~1000% 사이로 1~10개까지 넣을 수 있습니다.")
+            r["levels"] = [int(x) if x == int(x) else x for x in lv]
         for b in ("event_days", "us_open", "asia_open", "euro_open"):
             if b in defaults[key]:
                 r[b] = bool(r.get(b, defaults[key][b]))

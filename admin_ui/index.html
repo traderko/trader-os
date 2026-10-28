@@ -1347,6 +1347,7 @@ function renderGuides() {
     const r = g.rules[m.key] || {};
     const params = m.params.map((p) => {
       if (p.type === 'bool') return `<label class="switch"><input type="checkbox" data-p="${p.k}" ${r[p.k] ? 'checked' : ''}> ${esc(p.label)}</label>`;
+      if (p.type === 'levels') return `<span><input type="text" data-p="${p.k}" value="${esc((r[p.k] || []).join(', '))}" placeholder="10, 20, 30" inputmode="decimal" style="width:120px"> ${esc(p.label)}</span>`;
       if (p.type === 'weekdays') return `<span class="wd">${WD.map((w, i) => `<label><input type="checkbox" data-wd="${i}" ${(r.weekdays || []).includes(i) ? 'checked' : ''}>${w}</label>`).join('')}</span>`;
       return `<span><input type="number" data-p="${p.k}" value="${r[p.k] ?? ''}" step="${p.type === 'float' ? '0.1' : '1'}"> ${esc(p.label)}</span>`;
     }).join('');

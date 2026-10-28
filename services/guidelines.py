@@ -13,6 +13,8 @@
 #     no_sl        진입하고 N초가 지나도 손절(SL)이 없는 포지션 - 포지션마다 한 번 (repeat 분마다 다시, 0 = 한 번만)
 #                  같은 계좌에서 한꺼번에 걸린 포지션들은 메시지 하나로 모아서
 #     event_hold   고영향 지표 발표·장 시작(아시아·유로·미국) N분 전인데 포지션을 들고 있음
+#     margin_use   증거금 사용률(사용 증거금 ÷ 평가금)이 정한 단계(예: 10·20·30%)를 넘음 - 단계마다 한 번,
+#                  그 단계 아래로 내려갔다가 다시 넘으면 또 (repeat 분마다 다시, 0 = 한 번만)
 #   워커 (trade_lock_worker.py)
 #     loss_warn    일일 손실 한도 '경고' 단계 알림에 지침을 덧붙임
 #
@@ -52,6 +54,10 @@ RULES = [
                 {"k": "repeat", "label": "분마다 다시 (정리할 때까지 · 0 = 한 번만)", "type": "int"},
                 {"k": "asia_open", "label": "아시아장 시작", "type": "bool"},
                 {"k": "euro_open", "label": "유로장 시작", "type": "bool"}, {"k": "us_open", "label": "미국장 개장", "type": "bool"}]},
+    {"key": "margin_use", "label": "증거금 경고",
+     "desc": "증거금 사용률(사용 증거금 ÷ 평가금, 실시간 현황의 '증거금 %')이 정한 단계를 넘으면 · 단계마다 한 번, 내려갔다 다시 넘으면 또",
+     "params": [{"k": "levels", "label": "% 단계 (쉼표로)", "type": "levels"},
+                {"k": "repeat", "label": "분마다 다시 (그 단계 위에 있는 동안 · 0 = 한 번만)", "type": "int"}]},
     {"key": "loss_warn", "label": "일일 손실 경고", "desc": "일일 손실 한도 '경고' 단계 알림에 덧붙임 (잠금 규칙 탭의 일일 손실 한도가 켜져 있어야 함)",
      "params": []},
     {"key": "first_entry", "label": "그날 첫 진입", "desc": "거래일(06:00 기준) 첫 진입 때 지침 목록에서 무작위로 · 문구를 비워 두면 목록에서 고름",
@@ -62,6 +68,8 @@ _sent: dict[tuple, float] = {}        # (규칙, 계좌, 세부) → 마지막�
 _first_seen: dict[tuple, float] = {}  # (계좌, 티켓) → 처음 본 시각 (no_sl)
 _sl_sent: dict[tuple, float] = {}     # (계좌, 티켓) → SL 없음 알림을 마지막으로 보낸 시각 (no_sl)
 _hold_count: dict[tuple, int] = {}    # (계좌, 지표·장|시각) → 보낸 횟수 (event_hold 반복)
+_margin_lvl: dict[int, tuple] = {}    # 계좌 → (알린 단계 %, 마지막으로 보낸 시각) (margin_use)
+MARGIN_HYST = 1.0                     # 단계 아래로 이만큼(%p) 더 내려가야 '내려갔다'로 봄 (경계에서 왔다갔다 할 때 알림 폭주 방지)
 
 
 def cfg() -> dict:
@@ -102,13 +110,13 @@ def send(text: str, context: str = "", title: str = "📌 트레이딩 지침") 
 
 
 def fire(key: str, account_id: int, detail: str, context: str, text: str | None = None,
-         cooldown_sec: float | None = None) -> bool:
+         cooldown_sec: float | None = None, title: str | None = None) -> bool:
     r = rule(key)
     if not r:
         return False
     if not _cooldown_ok((key, account_id, detail), cooldown_sec):
         return False
-    send(text if text is not None else r.get("text") or "", context)
+    send(text if text is not None else r.get("text") or "", context, **({"title": title} if title else {}))
     print(f"[guideline] {key} 계좌{account_id} {detail}")
     return True
 
@@ -216,7 +224,7 @@ async def loop() -> None:
     await asyncio.sleep(30)
     while True:
         try:
-            if cfg().get("enabled", True) and (rule("no_sl") or rule("event_hold")):
+            if cfg().get("enabled", True) and (rule("no_sl") or rule("event_hold") or rule("margin_use")):
                 await _check_positions()
         except Exception as e:
             print(f"[guideline] 주기 확인 실패: {e}")
@@ -272,7 +280,7 @@ async def _check_positions() -> None:
                     if at <= horizon:
                         upcoming.append((at, name))
 
-    r_sl = rule("no_sl")
+    r_sl, r_mg = rule("no_sl"), rule("margin_use")
     alive, checked = set(), set()
     for a in accounts:
         try:
@@ -281,6 +289,8 @@ async def _check_positions() -> None:
             continue
         checked.add(a.id)
         acc = f"계좌 {a.account_number}"
+        if r_mg:
+            await _check_margin(a, acc, r_mg)
         if r_sl:
             # 포지션마다 한 번만 (repeat 분이 있으면 SL 걸 때까지 그 간격으로 다시). 걸린 포지션들은 한 메시지로
             rep_sec = int(r_sl.get("repeat", 0) or 0) * 60
@@ -335,6 +345,37 @@ async def _check_positions() -> None:
         for d in (_first_seen, _sl_sent):
             for k in [k for k in d if k[0] in checked and k not in alive]:
                 d.pop(k, None)
+
+
+async def _check_margin(a, acc: str, r: dict) -> None:
+    """증거금 사용률이 단계를 넘으면 경고 (계좌마다 알린 단계를 기억 - 같은 단계는 한 번)"""
+    from services.worker_client import worker_get
+    try:
+        info = await asyncio.wait_for(worker_get(a.id, "/account-info"), timeout=5)
+    except Exception:
+        return
+    eq, used = float(info.get("equity") or 0), float(info.get("margin") or 0)
+    if eq <= 0:
+        return
+    util = used / eq * 100
+    levels = sorted(float(x) for x in (r.get("levels") or []))
+    cur = max((x for x in levels if util >= x), default=0.0)
+    told, last = _margin_lvl.get(a.id, (0.0, 0.0))
+    if cur < told and util < told - MARGIN_HYST:          # 내려감 → 다시 넘으면 또 알림
+        told = cur
+        _margin_lvl[a.id] = (told, last)
+    if not cur:
+        return
+    rep_sec = int(r.get("repeat", 0) or 0) * 60
+    if cur > told or (cur == told and rep_sec and time.time() - last >= rep_sec - 5):
+        top = cur == levels[-1]
+        nxt = next((x for x in levels if x > cur), None)
+        ctx = (f"{acc} · 증거금 {util:.1f}% ({cur:g}% 넘음{' · 마지막 단계' if top else f' · 다음 경고 {nxt:g}%'})\n"
+               f"평가금 {eq:,.2f} · 사용 증거금 {used:,.2f} · 여유 {float(info.get('margin_free') or 0):,.2f}"
+               + (f" · 마진 레벨 {float(info.get('margin_level') or 0):,.0f}%" if info.get("margin_level") else ""))
+        if fire("margin_use", a.id, f"{cur:g}", ctx, cooldown_sec=0,
+                title="🚨 증거금 경고" if top else "⚠️ 증거금 경고"):
+            _margin_lvl[a.id] = (cur, time.time())
 
 
 # ── 지침 → 확인 문구 ────────────────────────────────────────────────
