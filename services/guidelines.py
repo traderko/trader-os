@@ -10,7 +10,8 @@
 #     asia_counter 아시아장 시간에 진입 - 정한 요일(기본 목·금) 또는 고영향 지표가 있는 날
 #     first_entry  그날(06:00 기준) 첫 진입 - 지침 목록에서 무작위 몇 개
 #   주기 확인 (loop, 20초마다)
-#     no_sl        진입하고 N초가 지나도 손절(SL)이 없는 포지션
+#     no_sl        진입하고 N초가 지나도 손절(SL)이 없는 포지션 - 포지션마다 한 번 (repeat 분마다 다시, 0 = 한 번만)
+#                  같은 계좌에서 한꺼번에 걸린 포지션들은 메시지 하나로 모아서
 #     event_hold   고영향 지표 발표·장 시작(아시아·유로·미국) N분 전인데 포지션을 들고 있음
 #   워커 (trade_lock_worker.py)
 #     loss_warn    일일 손실 한도 '경고' 단계 알림에 지침을 덧붙임
@@ -41,8 +42,9 @@ RULES = [
      "params": [{"k": "ratio", "label": "배 이상", "type": "float"}, {"k": "lookback", "label": "최근 진입 수로 평소 크기 계산", "type": "int"}]},
     {"key": "asia_counter", "label": "아시아장 역매매", "desc": "아시아장 집중 구간 시간에 진입하면 - 정한 요일 또는 고영향 지표가 있는 날",
      "params": [{"k": "weekdays", "label": "요일", "type": "weekdays"}, {"k": "event_days", "label": "지표 발표일 포함", "type": "bool"}]},
-    {"key": "no_sl", "label": "손절 미설정", "desc": "진입하고 정한 시간이 지나도 손절(SL)이 없으면",
-     "params": [{"k": "seconds", "label": "초 뒤", "type": "int"}]},
+    {"key": "no_sl", "label": "손절 미설정", "desc": "진입하고 정한 시간이 지나도 손절(SL)이 없으면 · 포지션마다 한 번, 여러 개면 한 메시지로 모아서",
+     "params": [{"k": "seconds", "label": "초 뒤", "type": "int"},
+                {"k": "repeat", "label": "분마다 다시 (SL 걸 때까지 · 0 = 한 번만)", "type": "int"}]},
     {"key": "event_hold", "label": "지표·장 시작 전 포지션 보유",
      "desc": "고영향 지표 발표(또는 체크한 장 시작) 정한 시간 전인데 포지션을 들고 있으면 · 장 시작은 서머타임 자동 "
              "(아시아 07:00/08:00 · 유로 16:00/17:00 · 미국 22:30/23:30, 서머타임/아닐 때)",
@@ -58,6 +60,7 @@ RULES = [
 
 _sent: dict[tuple, float] = {}        # (규칙, 계좌, 세부) → 마지막으로 보낸 시각
 _first_seen: dict[tuple, float] = {}  # (계좌, 티켓) → 처음 본 시각 (no_sl)
+_sl_sent: dict[tuple, float] = {}     # (계좌, 티켓) → SL 없음 알림을 마지막으로 보낸 시각 (no_sl)
 _hold_count: dict[tuple, int] = {}    # (계좌, 지표·장|시각) → 보낸 횟수 (event_hold 반복)
 
 
@@ -270,22 +273,47 @@ async def _check_positions() -> None:
                         upcoming.append((at, name))
 
     r_sl = rule("no_sl")
-    alive = set()
+    alive, checked = set(), set()
     for a in accounts:
         try:
             positions = await asyncio.wait_for(worker_get(a.id, "/positions-all"), timeout=5)
         except Exception:
             continue
+        checked.add(a.id)
         acc = f"계좌 {a.account_number}"
         if r_sl:
+            # 포지션마다 한 번만 (repeat 분이 있으면 SL 걸 때까지 그 간격으로 다시). 걸린 포지션들은 한 메시지로
+            rep_sec = int(r_sl.get("repeat", 0) or 0) * 60
+            now_ts, due, soon = time.time(), [], []
             for p in positions:
                 k = (a.id, p["ticket"])
                 alive.add(k)
-                first = _first_seen.setdefault(k, time.time())
-                if not p.get("sl") and time.time() - first >= r_sl["seconds"]:
+                first = _first_seen.setdefault(k, now_ts)
+                if p.get("sl"):
+                    _sl_sent.pop(k, None)          # SL 걸었다가 다시 빼면 다시 알림
+                    continue
+                if now_ts - first < r_sl["seconds"]:
+                    continue
+                last = _sl_sent.get(k)
+                if last is None or (rep_sec and now_ts - last >= rep_sec - 5):
+                    due.append((p, first))
+                elif rep_sec and now_ts - last >= rep_sec / 2:
+                    soon.append((p, first))
+            if due and soon:                       # 다시 알릴 때 곧 차례가 올 포지션도 같이 - 메시지가 따로따로 오지 않게
+                due = sorted(due + soon, key=lambda x: x[1])
+            if due:
+                def line(p, first):
                     side = "BUY" if p.get("type") == 0 else "SELL"
-                    fire("no_sl", a.id, str(p["ticket"]),
-                         f"{acc} · {p['symbol']} {side} {p['volume']:g}lot 진입 {int((time.time() - first) // 60) or 1}분째 손절(SL) 없음")
+                    return f"{p['symbol']} {side} {p['volume']:g}lot 진입 {int((now_ts - first) // 60) or 1}분째"
+                if len(due) == 1:
+                    ctx = f"{acc} · {line(*due[0])} 손절(SL) 없음"
+                else:
+                    ctx = (f"{acc} · 손절(SL) 없는 포지션 {len(due)}개\n" + "\n".join(f"· {line(p, f)}" for p, f in due[:10])
+                           + (f"\n· 외 {len(due) - 10}개" if len(due) > 10 else ""))
+                ctx += "\n(" + (f"SL을 걸 때까지 {rep_sec // 60}분마다 다시 알림" if rep_sec else "같은 포지션은 다시 알리지 않음") + ")"
+                if fire("no_sl", a.id, "batch", ctx, cooldown_sec=0):
+                    for p, _ in due:
+                        _sl_sent[(a.id, p["ticket"])] = now_ts
         if upcoming and positions:
             for at, name in upcoming:
                 mins = max(1, round((at - now).total_seconds() / 60))
@@ -302,10 +330,11 @@ async def _check_positions() -> None:
     # 지난 지표·장 시작 반복 횟수는 잊음
     for k in [k for k in _hold_count if k[1].split("|", 1)[1] < (now - timedelta(hours=1)).isoformat()]:
         _hold_count.pop(k, None)
-    # 없어진 포지션은 잊음
-    for k in list(_first_seen):
-        if k not in alive and r_sl:
-            _first_seen.pop(k, None)
+    # 없어진 포지션은 잊음 (이번에 포지션을 받아 온 계좌만 - 잠깐 못 받아 온 계좌의 기록은 그대로)
+    if r_sl:
+        for d in (_first_seen, _sl_sent):
+            for k in [k for k in d if k[0] in checked and k not in alive]:
+                d.pop(k, None)
 
 
 # ── 지침 → 확인 문구 ────────────────────────────────────────────────
