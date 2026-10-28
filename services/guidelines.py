@@ -25,6 +25,8 @@
 # 같은 규칙·계좌(·종목) 알림은 cooldown_min 동안 다시 보내지 않는다.
 
 import asyncio
+import json
+import os
 import random
 import statistics
 import time
@@ -98,7 +100,52 @@ RULES = [
 
 _sent: dict[tuple, float] = {}        # (규칙, 계좌, 세부) → 마지막으로 보낸 시각
 _first_seen: dict[tuple, float] = {}  # (계좌, 티켓) → 처음 본 시각 (no_sl)
-_sl_sent: dict[tuple, float] = {}     # (계좌, 티켓) → SL 없음 알림을 마지막으로 보낸 시각 (no_sl)
+_sl_sent: dict[tuple, float] = {}     # (계좌, 티켓) → SL 없음 알림을 마지막으로 보낸 시각 (no_sl) - 파일에도 남김 (재시작해도 다시 안 오게)
+_STATE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "guidelines_state.json")
+_state_loaded = False
+
+
+def _load_state() -> None:
+    global _state_loaded
+    if _state_loaded:
+        return
+    _state_loaded = True
+    try:
+        with open(_STATE_PATH, encoding="utf-8") as f:
+            d = json.load(f)
+        for k, v in (d.get("no_sl") or {}).items():
+            aid, ticket = k.split(":")
+            _sl_sent[(int(aid), int(ticket))] = float(v)
+    except FileNotFoundError:
+        pass
+    except Exception as e:
+        print(f"[guideline] 상태 파일 읽기 실패 (무시): {e}")
+
+
+def _save_state() -> None:
+    try:
+        os.makedirs(os.path.dirname(_STATE_PATH), exist_ok=True)
+        tmp = _STATE_PATH + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as f:
+            json.dump({"no_sl": {f"{a}:{t}": v for (a, t), v in _sl_sent.items()}}, f)
+        os.replace(tmp, _STATE_PATH)
+    except Exception as e:
+        print(f"[guideline] 상태 파일 저장 실패 (무시): {e}")
+
+
+def _broker_offset_sec(now: datetime | None = None) -> float:
+    """MT5 포지션 시각(브로커 서버 시간 = 뉴욕 + 7시간, 서머타임 자동)과 UTC 의 차이"""
+    return (datetime.now(NY) if now is None else now.astimezone(NY)).utcoffset().total_seconds() + 7 * 3600
+
+
+def _opened_at(p: dict, fallback: float) -> float:
+    """포지션 진입 시각 (UTC epoch) - MT5 의 time 으로. 이상하면 처음 본 시각"""
+    t = p.get("time")
+    if t:
+        ts = float(t) - _broker_offset_sec()
+        if 0 <= time.time() - ts <= 90 * 86400:
+            return min(ts, fallback)
+    return fallback
 _hold_count: dict[tuple, int] = {}    # (계좌, 지표·장|시각) → 보낸 횟수 (event_hold 반복)
 _rand_next: dict = {"at": None, "sig": None}   # 무작위 지침: 다음에 보낼 시각 (설정이 바뀌면 다시 잡음)
 _rand_bag: list[str] = []                       # 아직 안 보낸 지침 (다 쓰면 섞어서 다시)
@@ -337,15 +384,17 @@ async def _check_positions() -> None:
         if r_mg:
             await _check_margin(a, acc, r_mg)
         if r_sl:
+            _load_state()
             # 포지션마다 한 번만 (repeat 분이 있으면 SL 걸 때까지 그 간격으로 다시). 걸린 포지션들은 한 메시지로
             rep_sec = int(r_sl.get("repeat", 0) or 0) * 60
-            now_ts, due, soon = time.time(), [], []
+            now_ts, due, soon, dirty = time.time(), [], [], False
             for p in positions:
                 k = (a.id, p["ticket"])
                 alive.add(k)
-                first = _first_seen.setdefault(k, now_ts)
+                first = _opened_at(p, _first_seen.setdefault(k, now_ts))   # 재시작해도 실제 진입 시각으로
                 if p.get("sl"):
-                    _sl_sent.pop(k, None)          # SL 걸었다가 다시 빼면 다시 알림
+                    if _sl_sent.pop(k, None) is not None:   # SL 걸었다가 다시 빼면 다시 알림
+                        dirty = True
                     continue
                 if now_ts - first < r_sl["seconds"]:
                     continue
@@ -357,18 +406,32 @@ async def _check_positions() -> None:
             if due and soon:                       # 다시 알릴 때 곧 차례가 올 포지션도 같이 - 메시지가 따로따로 오지 않게
                 due = sorted(due + soon, key=lambda x: x[1])
             if due:
-                def line(p, first):
-                    side = "BUY" if p.get("type") == 0 else "SELL"
-                    return f"{p['symbol']} {side} {p['volume']:g}lot 진입 {int((now_ts - first) // 60) or 1}분째"
+                mins = lambda first: _ago(now_ts - first)
+                side_of = lambda p: "BUY" if p.get("type") == 0 else "SELL"
                 if len(due) == 1:
-                    ctx = f"{acc} · {line(*due[0])} 손절(SL) 없음"
+                    p, f = due[0]
+                    ctx = f"{acc} · {p['symbol']} {side_of(p)} {p['volume']:g}lot 진입 {mins(f)}째 손절(SL) 없음"
                 else:
-                    ctx = (f"{acc} · 손절(SL) 없는 포지션 {len(due)}개\n" + "\n".join(f"· {line(p, f)}" for p, f in due[:10])
-                           + (f"\n· 외 {len(due) - 10}개" if len(due) > 10 else ""))
+                    # 종목·방향별로 모아서 한 줄씩 (0.1랏 85개가 85줄로 나오지 않게)
+                    by: dict[tuple, list] = {}
+                    for p, f in due:
+                        by.setdefault((p["symbol"], side_of(p)), []).append((p, f))
+                    rows = []
+                    for (sym, side), ps in sorted(by.items(), key=lambda kv: -len(kv[1])):
+                        fs = [f for _, f in ps]
+                        new, old = mins(max(fs)), mins(min(fs))
+                        when = old if new == old else f"{new} ~ {old}"
+                        rows.append(f"· {sym} {side} {sum(p['volume'] for p, _ in ps):g}lot"
+                                    + (f" ({len(ps)}개)" if len(ps) > 1 else "") + f" · 진입 {when}째")
+                    ctx = (f"{acc} · 손절(SL) 없는 포지션 {len(due)}개\n" + "\n".join(rows[:10])
+                           + (f"\n· 외 {len(rows) - 10}종목" if len(rows) > 10 else ""))
                 ctx += "\n(" + (f"SL을 걸 때까지 {rep_sec // 60}분마다 다시 알림" if rep_sec else "같은 포지션은 다시 알리지 않음") + ")"
                 if fire("no_sl", a.id, "batch", ctx, cooldown_sec=0):
                     for p, _ in due:
                         _sl_sent[(a.id, p["ticket"])] = now_ts
+                    dirty = True
+            if dirty:
+                _save_state()
         if upcoming and positions:
             for at, name in upcoming:
                 mins = max(1, round((at - now).total_seconds() / 60))
@@ -387,9 +450,18 @@ async def _check_positions() -> None:
         _hold_count.pop(k, None)
     # 없어진 포지션은 잊음 (이번에 포지션을 받아 온 계좌만 - 잠깐 못 받아 온 계좌의 기록은 그대로)
     if r_sl:
-        for d in (_first_seen, _sl_sent):
-            for k in [k for k in d if k[0] in checked and k not in alive]:
-                d.pop(k, None)
+        gone = [k for k in _sl_sent if k[0] in checked and k not in alive]
+        for k in [k for k in _first_seen if k[0] in checked and k not in alive]:
+            _first_seen.pop(k, None)
+        for k in gone:
+            _sl_sent.pop(k, None)
+        if gone:
+            _save_state()
+
+
+def _ago(sec: float) -> str:
+    m = int(sec // 60) or 1
+    return f"{m}분" if m < 60 else f"{m // 60}시간 {m % 60}분" if m < 1440 else f"{m // 1440}일 {m % 1440 // 60}시간"
 
 
 # ── 무작위 지침 ──────────────────────────────────────────────────────
