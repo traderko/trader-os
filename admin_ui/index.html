@@ -366,6 +366,8 @@
       <div class="row"><label class="name">지침 알림</label><label class="switch"><input type="checkbox" id="gdOn"> 켜기</label></div>
       <div class="row"><label class="name">같은 알림 반복 방지<small>같은 규칙·계좌(·종목) 알림은 이 시간 안에 다시 보내지 않음</small></label>
         <input type="number" id="gdCooldown" min="1" max="1440" style="width:80px"><span class="unit">분</span></div>
+      <div class="row"><label class="name">나눠 진입 묶기<small>같은 종목·방향 체결이 직전 체결에서 이 시간 안이면 한 번의 진입으로 봄 (0.5랏씩 여러 번 → 합쳐서 하나) · 비중 급증·과매매·증거금 경고가 이 기준</small></label>
+        <input type="number" id="gdGap" min="5" max="900" style="width:80px"><span class="unit">초</span></div>
       <div id="gdRules"></div>
       <div class="actions"><button class="btn" id="gdDefAll" title="모든 규칙의 문구·수치와 반복 방지 시간을 기본값으로 (저장해야 적용)">전체 기본값</button><button class="btn" id="gdTestAny">무작위 지침 미리 보내기</button><button class="btn primary" id="gdSave">저장</button></div>
     </div>
@@ -996,7 +998,7 @@ const DEF_FIELDS = [   // [칸, 기본값 가져오기]
   ['#rrStart', (d) => d.telegram.reason_remind.start], ['#rrEnd', (d) => d.telegram.reason_remind.end],
   ['#rrLook', (d) => String(d.telegram.reason_remind.lookback_hours)],
   ['#acDays', (d) => d.access.session_days], ['#arDays', (d) => d.admin_remote.session_days],
-  ['#gdCooldown', (d) => d.guidelines.cooldown_min],
+  ['#gdCooldown', (d) => d.guidelines.cooldown_min], ['#gdGap', (d) => d.guidelines.entry_gap_sec],
   ['#evKw', (d) => d.events.highlight.join(', ')],
   ['#grGap', (d) => d.grid.min_gap_ktr], ['#grStop', (d) => d.grid.ktr_stop_gap],
 ];
@@ -1341,7 +1343,7 @@ let guides = null;
 const WD = ['월', '화', '수', '목', '금', '토', '일'];
 function renderGuides() {
   const { settings: g, rules } = guides;
-  $('gdOn').checked = g.enabled; $('gdCooldown').value = g.cooldown_min; refreshDefChips();
+  $('gdOn').checked = g.enabled; $('gdCooldown').value = g.cooldown_min; $('gdGap').value = g.entry_gap_sec ?? 60; refreshDefChips();
   $('gdItems').value = (g.items || []).join('\n');
   $('gdRules').innerHTML = rules.map((m) => {
     const r = g.rules[m.key] || {};
@@ -1371,7 +1373,7 @@ function collectGuides() {
     if (wd.length) r.weekdays = [...wd].filter((i) => i.checked).map((i) => Number(i.dataset.wd));
     rules[el.dataset.key] = r;
   });
-  return { enabled: $('gdOn').checked, cooldown_min: Number($('gdCooldown').value) || 30,
+  return { enabled: $('gdOn').checked, cooldown_min: Number($('gdCooldown').value) || 30, entry_gap_sec: Number($('gdGap').value) || 60,
            items: $('gdItems').value.split('\n').map((x) => x.trim()).filter(Boolean), rules };
 }
 async function loadGuides() {
@@ -1397,7 +1399,7 @@ $('gdDefAll').onclick = () => {
   if (!confirm('모든 규칙의 문구·수치와 반복 방지 시간을 기본값으로 바꿀까요? (켜기·끄기는 그대로)')) return;
   guideDefaults((cur, d) => {
     for (const k of Object.keys(d.rules)) cur.rules[k] = { ...d.rules[k], enabled: cur.rules[k] ? cur.rules[k].enabled : d.rules[k].enabled };
-    cur.cooldown_min = d.cooldown_min;
+    cur.cooldown_min = d.cooldown_min; cur.entry_gap_sec = d.entry_gap_sec;
   }, '모든 규칙을 기본값으로 채웠습니다.');
 };
 $('gdDefItems').onclick = () => {

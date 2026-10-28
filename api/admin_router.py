@@ -570,7 +570,7 @@ async def read_guidelines():
 @router.put("/api/guidelines")
 async def write_guidelines(body: dict):
     from services import guidelines
-    patch = {k: body[k] for k in ("enabled", "cooldown_min", "items", "rules") if k in body}
+    patch = {k: body[k] for k in ("enabled", "cooldown_min", "entry_gap_sec", "items", "rules") if k in body}
     try:
         update_settings({"guidelines": patch})
     except SettingsError as e:

@@ -4,9 +4,12 @@
 # 설정: 관리 화면 '지침' 탭 → data/settings.json 의 "guidelines" (규칙마다 켜기·끄기, 문구, 기준값)
 #
 #   진입 체결 때 (api/trade.py → on_open)
+#     ※ '한 번의 진입' = 같은 종목·방향 체결이 직전 체결에서 entry_gap_sec(기본 60초) 안에 이어진 것 전부
+#        (0.5랏씩 다다다 들어가도 하나로 - 이어지는 동안은 시간이 길어져도 계속 묶임)
 #     revenge      손실로 청산한 뒤 N분 안에 다시 진입
-#     overtrade    최근 M분 동안 진입이 N번 이상
-#     size_jump    이번 진입(2분 안에 나눠 들어간 것 합산)이 평소 진입 크기(최근 N번의 중앙값)의 K배 이상
+#     overtrade    최근 M분 동안 진입(위 기준으로 묶은 것)이 N번 이상
+#     size_jump    이번 진입(묶은 것 합산)이 평소 진입 크기(최근 N번의 중앙값)의 K배 이상
+#     margin_use   진입하자마자 증거금 사용률이 단계를 넘었으면 '비중 경고'로 바로 (주기 확인보다 먼저, 이번 진입 크기와 같이)
 #     asia_counter 아시아장 시간에 진입 - 정한 요일(기본 목·금) 또는 고영향 지표가 있는 날
 #     first_entry  그날(06:00 기준) 첫 진입 - 지침 목록에서 무작위 몇 개
 #   주기 확인 (loop, 20초마다)
@@ -32,16 +35,38 @@ from services.settings_service import get_settings
 
 KST = ZoneInfo("Asia/Seoul")
 NY = ZoneInfo("America/New_York")
-ENTRY_GROUP_SEC = 120          # 이 안에 같은 방향으로 나눠 들어간 건 한 번의 진입으로 봄 (통계 탭과 같은 기준)
+def entry_gap() -> int:
+    """직전 체결에서 이 시간(초) 안에 같은 종목·방향으로 이어진 체결은 한 번의 진입"""
+    return int(cfg().get("entry_gap_sec", 60) or 60)
+
+
+def entry_groups(rows, gap: int | None = None) -> list[list]:
+    """(시각, 종목, 방향, 랏) 들 → [처음 시각, 마지막 시각, 종목, 방향, 합계 랏, 체결 수] (시각 순)
+    같은 종목·방향의 직전 체결과 gap 초 안이면 이어 붙임 - 다른 종목이 사이에 끼어도 됨"""
+    gap = entry_gap() if gap is None else gap
+    open_g: dict[tuple, list] = {}
+    out: list[list] = []
+    for t, sym, pos, v in sorted(rows, key=lambda x: x[0]):
+        k = (sym, pos)
+        g = open_g.get(k)
+        if g is not None and (t - g[1]).total_seconds() <= gap:
+            g[1] = t
+            g[4] += v or 0
+            g[5] += 1
+        else:
+            g = [t, t, sym, pos, v or 0, 1]
+            open_g[k] = g
+            out.append(g)
+    return out
 LOOP_SEC = 20
 
 # 관리 화면이 그리는 규칙 설명 (params: 숫자·요일 등 고칠 수 있는 값)
 RULES = [
     {"key": "revenge", "label": "손절 직후 재진입", "desc": "손실로 청산한 뒤 정한 시간 안에 다시 진입하면",
      "params": [{"k": "minutes", "label": "분 안에", "type": "int"}]},
-    {"key": "overtrade", "label": "과매매", "desc": "정한 시간 동안 진입이 정한 횟수 이상이면",
+    {"key": "overtrade", "label": "과매매", "desc": "정한 시간 동안 진입이 정한 횟수 이상이면 · 나눠 들어간 건 위 '나눠 진입 묶기' 기준으로 한 번",
      "params": [{"k": "minutes", "label": "분 동안", "type": "int"}, {"k": "count", "label": "번 이상", "type": "int"}]},
-    {"key": "size_jump", "label": "비중 급증", "desc": "이번 진입이 평소 진입 크기(최근 진입들의 중앙값)보다 크게 들어가면 · 2분 안에 나눠 들어간 건 합산",
+    {"key": "size_jump", "label": "비중 급증", "desc": "이번 진입이 평소 진입 크기(최근 진입들의 중앙값)보다 크게 들어가면 · 나눠 들어간 건 위 '나눠 진입 묶기' 기준으로 합산",
      "params": [{"k": "ratio", "label": "배 이상", "type": "float"}, {"k": "lookback", "label": "최근 진입 수로 평소 크기 계산", "type": "int"}]},
     {"key": "asia_counter", "label": "아시아장 역매매", "desc": "아시아장 집중 구간 시간에 진입하면 - 정한 요일 또는 고영향 지표가 있는 날",
      "params": [{"k": "weekdays", "label": "요일", "type": "weekdays"}, {"k": "event_days", "label": "지표 발표일 포함", "type": "bool"}]},
@@ -56,7 +81,7 @@ RULES = [
                 {"k": "asia_open", "label": "아시아장 시작", "type": "bool"},
                 {"k": "euro_open", "label": "유로장 시작", "type": "bool"}, {"k": "us_open", "label": "미국장 개장", "type": "bool"}]},
     {"key": "margin_use", "label": "증거금 경고",
-     "desc": "증거금 사용률(사용 증거금 ÷ 평가금, 실시간 현황의 '증거금 %')이 정한 단계를 넘으면 · 단계마다 한 번, 내려갔다 다시 넘으면 또",
+     "desc": "증거금 사용률(사용 증거금 ÷ 평가금, 실시간 현황의 '증거금 %')이 정한 단계를 넘으면 · 진입으로 넘었으면 체결 즉시 '비중 경고'로 (이번 진입 크기와 같이) · 단계마다 한 번, 내려갔다 다시 넘으면 또",
      "params": [{"k": "levels", "label": "% 단계 (쉼표로)", "type": "levels"},
                 {"k": "repeat", "label": "분마다 다시 (그 단계 위에 있는 동안 · 0 = 한 번만)", "type": "int"}]},
     {"key": "loss_warn", "label": "일일 손실 경고", "desc": "일일 손실 한도 '경고' 단계 알림에 덧붙임 (잠금 규칙 탭의 일일 손실 한도가 켜져 있어야 함)",
@@ -160,37 +185,44 @@ async def _on_open(account_id, account_number, symbol, side, volume, now):
                 if net < 0 and mins <= r["minutes"]:
                     fire("revenge", account_id, "", f"{acc} · {last.symbol} {net:+,.2f} 손실 청산 {max(1, round(mins))}분 만에 {symbol} {side} 진입")
 
-        # overtrade: 최근 M분 진입 수
+        # 최근 체결들을 '한 번의 진입' 단위로 묶음 (overtrade · size_jump · 비중 경고가 같이 씀)
+        rows = (await db.execute(
+            select(Trade.open_time, Trade.symbol, Trade.position, Trade.volume).where(
+                Trade.account_id == account_id, Trade.open_time != None,
+                Trade.open_time <= now, Trade.open_time > now - timedelta(days=90))
+            .order_by(Trade.open_time))).all()
+        groups = entry_groups(rows)
+        mine = [g for g in groups if g[2] == symbol]                 # 이 종목 진입들
+        this = mine[-1] if mine else None                            # 이번 진입 (방금 체결이 붙은 묶음)
+
+        # overtrade: 최근 M분 동안 진입 수 (묶은 단위)
         r = rule("overtrade")
         if r:
-            n = (await db.execute(select(func.count()).select_from(Trade).where(
-                Trade.account_id == account_id, Trade.open_time != None,
-                Trade.open_time > now - timedelta(minutes=r["minutes"]), Trade.open_time <= now))).scalar() or 0
+            since = now - timedelta(minutes=r["minutes"])
+            n = sum(1 for g in groups if g[1] > since)
             if n >= r["count"]:
-                fire("overtrade", account_id, "", f"{acc} · 최근 {r['minutes']}분 동안 진입 {n}번")
+                fire("overtrade", account_id, "", f"{acc} · 최근 {r['minutes']}분 동안 진입 {n}번"
+                     + (f" (체결 {sum(g[5] for g in groups if g[1] > since)}건)" if any(g[5] > 1 for g in groups if g[1] > since) else ""))
 
-        # size_jump: 2분 안에 나눠 들어간 것 합산 → 평소(최근 진입들의 중앙값)와 비교
+        # size_jump: 이번 진입(나눠 들어간 것 합산) → 평소(이 종목 최근 진입들의 중앙값)와 비교
         r = rule("size_jump")
-        if r:
-            rows = (await db.execute(
-                select(Trade.open_time, Trade.volume, Trade.position).where(
-                    Trade.account_id == account_id, Trade.symbol == symbol, Trade.open_time != None,
-                    Trade.open_time <= now, Trade.open_time > now - timedelta(days=90))
-                .order_by(Trade.open_time))).all()
-            groups: list[list] = []      # [시작시각, 방향, 합계]
-            for t, v, pos in rows:
-                if groups and groups[-1][1] == pos and (t - groups[-1][0]).total_seconds() <= ENTRY_GROUP_SEC:
-                    groups[-1][2] += v or 0
-                else:
-                    groups.append([t, pos, v or 0])
-            if len(groups) >= 6:
-                cur = groups[-1][2]
-                past = [g[2] for g in groups[:-1]][-r["lookback"]:]
-                usual = statistics.median(past)
-                if usual > 0 and cur >= usual * r["ratio"]:
-                    fire("size_jump", account_id, symbol,
-                         f"{acc} · {symbol} 평소 {usual:g}lot → 이번 {cur:g}lot ({cur / usual:.1f}배)")
+        if r and this and len(mine) >= 6:
+            cur = this[4]
+            past = [g[4] for g in mine[:-1]][-r["lookback"]:]
+            usual = statistics.median(past)
+            if usual > 0 and cur >= usual * r["ratio"]:
+                fire("size_jump", account_id, symbol,
+                     f"{acc} · {symbol} 평소 {usual:g}lot → 이번 {cur:g}lot ({cur / usual:.1f}배"
+                     + (f" · {this[5]}번 나눠 진입)" if this[5] > 1 else ")"))
 
+    # 비중 경고: 이번 진입으로 증거금 사용률이 단계를 넘었으면 바로 (주기 확인과 같은 기록이라 두 번 오지 않음)
+    r = rule("margin_use")
+    if r:
+        from types import SimpleNamespace
+        what = f"{symbol} {side} {this[4]:g}lot" + (f" ({this[5]}번 나눠)" if this[5] > 1 else "") if this else f"{symbol} {side} {volume:g}lot"
+        await _check_margin(SimpleNamespace(id=account_id), acc, r, entry=what)
+
+    async with AsyncSessionLocal() as db:
         # asia_counter: 아시아장 구간 시간 + (정한 요일 또는 지표일)
         r = rule("asia_counter")
         if r:
@@ -427,7 +459,7 @@ def _tick_random() -> None:
     _rand_next["at"] = _next_slot(now, r)
 
 
-async def _check_margin(a, acc: str, r: dict) -> None:
+async def _check_margin(a, acc: str, r: dict, entry: str | None = None) -> None:
     """증거금 사용률이 단계를 넘으면 경고 (계좌마다 알린 단계를 기억 - 같은 단계는 한 번)"""
     from services.worker_client import worker_get
     try:
@@ -450,11 +482,13 @@ async def _check_margin(a, acc: str, r: dict) -> None:
     if cur > told or (cur == told and rep_sec and time.time() - last >= rep_sec - 5):
         top = cur == levels[-1]
         nxt = next((x for x in levels if x > cur), None)
-        ctx = (f"{acc} · 증거금 {util:.1f}% ({cur:g}% 넘음{' · 마지막 단계' if top else f' · 다음 경고 {nxt:g}%'})\n"
-               f"평가금 {eq:,.2f} · 사용 증거금 {used:,.2f} · 여유 {float(info.get('margin_free') or 0):,.2f}"
+        level = f"증거금 {util:.1f}% ({cur:g}% 넘음{' · 마지막 단계' if top else f' · 다음 경고 {nxt:g}%'})"
+        ctx = ((f"{acc} · 이번 진입 {entry} 으로\n{level}\n" if entry else f"{acc} · {level}\n")
+               + f"평가금 {eq:,.2f} · 사용 증거금 {used:,.2f} · 여유 {float(info.get('margin_free') or 0):,.2f}"
                + (f" · 마진 레벨 {float(info.get('margin_level') or 0):,.0f}%" if info.get("margin_level") else ""))
+        kind = "비중 경고" if entry else "증거금 경고"
         if fire("margin_use", a.id, f"{cur:g}", ctx, cooldown_sec=0,
-                title="🚨 증거금 경고" if top else "⚠️ 증거금 경고"):
+                title=f"🚨 {kind}" if top else f"⚠️ {kind}"):
             _margin_lvl[a.id] = (cur, time.time())
 
 
