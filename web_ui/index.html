@@ -272,6 +272,25 @@
   .tsum span { font-weight: 600; }
   .day { display: flex; justify-content: space-between; padding: 10px 14px 6px; font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--line); }
   .day b { color: var(--text); font-weight: 600; }
+  .day.flash { animation: dayflash 1.6s ease-out; }
+  @keyframes dayflash { 0%, 30% { background: var(--accent-weak); } 100% { background: transparent; } }
+  #mLabel { cursor: pointer; border-radius: 8px; padding: 2px 4px; }
+  #mLabel::after { content: " ▾"; font-size: 11px; color: var(--muted); }
+  #mLabel:hover { background: var(--accent-weak); }
+  .jhead { display: flex; align-items: center; gap: 6px; margin-bottom: 10px; }
+  .jhead strong { min-width: 80px; text-align: center; font-size: 16px; }
+  .jhead input[type=date] { width: auto; max-width: 150px; }
+  .jcal { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+  .jcal .wd { text-align: center; font-size: 11.5px; color: var(--muted); padding: 2px 0; }
+  .jcal .wd.sun, .jcal button .dn.sun { color: var(--down); } .jcal .wd.sat, .jcal button .dn.sat { color: var(--up); }
+  .jcal button { display: flex; flex-direction: column; align-items: center; gap: 1px; min-height: 48px; padding: 4px 0; border: 1px solid var(--line);
+                 border-radius: 8px; background: var(--panel); color: var(--text); font: inherit; cursor: pointer; }
+  .jcal button:disabled { cursor: default; opacity: .35; border-color: transparent; }
+  .jcal button.today { box-shadow: inset 0 0 0 2px var(--accent); }
+  .jcal button:not(:disabled):hover { background: var(--accent-weak); }
+  .jcal .dn { font-size: 13.5px; font-weight: 600; }
+  .jcal .dc { font-size: 10.5px; color: var(--muted); }
+  .jcal .dp { font-size: 10.5px; font-weight: 600; }
   .trade { display: grid; grid-template-columns: 1fr auto; gap: 3px 10px; padding: 10px 14px; border-bottom: 1px solid var(--line); cursor: pointer; }
   .trade:hover { background: var(--code); }
   .trade .t1 { font-weight: 600; display: flex; align-items: center; gap: 6px; min-width: 0; }
@@ -636,7 +655,7 @@
   <div class="tbar" id="tBar">
   <div class="month">
     <button class="btn" id="mPrev" aria-label="이전 달">‹</button>
-    <strong class="num" id="mLabel"></strong>
+    <strong class="num" id="mLabel" role="button" tabindex="0" title="날짜로 이동 (달력)"></strong>
     <button class="btn" id="mNext" aria-label="다음 달">›</button>
     <div class="mtools" id="tTools">
     <button class="btn small ghost" id="tSelBtn" title="거래를 골라 2·5·10배 랏으로 했다면 시뮬레이션">☑ 선택</button>
@@ -867,6 +886,23 @@
       <button class="btn small danger" id="gdClose" hidden>전부 청산</button>
       <button class="btn" data-close>닫기</button>
     </div>
+  </div>
+</div>
+
+<!-- 날짜로 이동 (거래내역 달 이름을 누르면) -->
+<div class="modal" id="jumpModal" hidden>
+  <div class="sheet" style="max-width:420px">
+    <h3>📅 날짜로 이동</h3>
+    <div class="jhead">
+      <button class="btn" id="jPrev" aria-label="이전 달">‹</button>
+      <strong class="num" id="jLabel"></strong>
+      <button class="btn" id="jNext" aria-label="다음 달">›</button>
+      <span class="sp" style="flex:1"></span>
+      <input type="date" id="jDate" aria-label="날짜 직접 입력">
+    </div>
+    <div class="jcal" id="jCal"></div>
+    <p class="hint2" style="margin:8px 0 0">거래가 있는 날만 누를 수 있습니다 · 하루 = 06:00 ~ 다음날 06:00 · 지금 고른 종목·필터 기준</p>
+    <div class="acts"><button class="btn" id="jToday">오늘</button><span class="sp" style="flex:1"></span><button class="btn" data-close>닫기</button></div>
   </div>
 </div>
 
@@ -1601,6 +1637,57 @@ async function loadTrades() {
     $('tList').innerHTML = `<div class="empty">거래내역 조회 실패: ${esc(e.message)}</div>`;
   }
 }
+
+// ── 날짜로 이동: 달 이름(📅)을 누르면 달력 - 거래가 있는 날을 누르면 그날로 스크롤 ──
+function jumpRender() {
+  $('jLabel').textContent = `${tYm.y}. ${pad2(tYm.m)}`;
+  const by = new Map();
+  for (const t of trades.filter(tShow)) {
+    const k = dayKey(tdDate(dt(t.open_time))), v = by.get(k) || { n: 0, sum: 0 };
+    v.n++; if (t.close_time) v.sum += net(t); by.set(k, v);
+  }
+  const first = new Date(tYm.y, tYm.m - 1, 1), days = new Date(tYm.y, tYm.m, 0).getDate();
+  const today = dayKey(tdDate(new Date()));
+  let h = ['월', '화', '수', '목', '금', '토', '일'].map((w, i) => `<div class="wd${i === 5 ? ' sat' : i === 6 ? ' sun' : ''}">${w}</div>`).join('');
+  h += '<div></div>'.repeat((first.getDay() + 6) % 7);
+  for (let d = 1; d <= days; d++) {
+    const k = `${tYm.y}.${pad2(tYm.m)}.${pad2(d)}`, v = by.get(k), wd = new Date(tYm.y, tYm.m - 1, d).getDay();
+    h += `<button data-jd="${k}" ${v ? '' : 'disabled'} class="${k === today ? 'today' : ''}">
+      <span class="dn${wd === 0 ? ' sun' : wd === 6 ? ' sat' : ''}">${d}</span>
+      ${v ? `<span class="dc">${v.n}건</span><span class="dp num ${cls(v.sum)}">${Math.abs(v.sum) >= 1000 ? (v.sum / 1000).toFixed(1) + 'k' : Math.round(v.sum)}</span>` : ''}</button>`;
+  }
+  $('jCal').innerHTML = h;
+  $('jDate').value = `${tYm.y}-${pad2(tYm.m)}-01`;
+}
+function jumpScroll(k) {
+  const el = document.querySelector(`#tList .day[data-day="${k}"]`);
+  if (!el) return false;
+  const bar = $('tBar'), top = parseFloat(getComputedStyle(bar).top) || 0;
+  window.scrollTo({ top: el.getBoundingClientRect().top + window.scrollY - top - bar.offsetHeight - 4, behavior: 'smooth' });
+  el.classList.remove('flash'); void el.offsetWidth; el.classList.add('flash');
+  return true;
+}
+async function jumpTo(iso) {      // 'YYYY-MM-DD' - 다른 달이면 그 달을 불러온 뒤
+  const [y, m, d] = iso.split('-').map(Number);
+  if (!y || !m || !d) return;
+  if (y !== tYm.y || m !== tYm.m) { tYm = { y, m }; await loadTrades(); }
+  const k = `${y}.${pad2(m)}.${pad2(d)}`;
+  if (jumpScroll(k)) { $('jumpModal').hidden = true; return; }
+  // 그날 거래가 없으면 가장 가까운 날로
+  const ks = [...document.querySelectorAll('#tList .day')].map((e) => e.dataset.day);
+  if (!ks.length) { jumpRender(); return toast('이 달에는 (지금 필터로) 거래가 없습니다', true); }
+  const near = ks.reduce((a, b) => Math.abs(Date.parse(b.replace(/\./g, '-')) - Date.parse(iso)) < Math.abs(Date.parse(a.replace(/\./g, '-')) - Date.parse(iso)) ? b : a);
+  $('jumpModal').hidden = true; jumpScroll(near);
+  toast(`${m}/${d} 거래가 없어 가장 가까운 ${Number(near.slice(5, 7))}/${Number(near.slice(8))} 로 갔습니다`);
+}
+function openJump() { jumpRender(); $('jumpModal').hidden = false; }
+$('mLabel').onclick = openJump;
+$('mLabel').onkeydown = (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openJump(); } };
+$('jPrev').onclick = async () => { tYm = tYm.m === 1 ? { y: tYm.y - 1, m: 12 } : { y: tYm.y, m: tYm.m - 1 }; await loadTrades(); jumpRender(); };
+$('jNext').onclick = async () => { tYm = tYm.m === 12 ? { y: tYm.y + 1, m: 1 } : { y: tYm.y, m: tYm.m + 1 }; await loadTrades(); jumpRender(); };
+$('jCal').onclick = (e) => { const b = e.target.closest('button[data-jd]'); if (b && !b.disabled) jumpTo(b.dataset.jd.replace(/\./g, '-')); };
+$('jDate').onchange = () => { if ($('jDate').value) jumpTo($('jDate').value); };
+$('jToday').onclick = () => { const t = tdDate(new Date()); jumpTo(`${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`); };
 
 let grpCount = new Map();   // 묶음 번호 → 이 달 거래 중 건수 (📦 표시)
 function renderTrades() {
