@@ -113,6 +113,16 @@ async def _after_quiet(aid: int, accnum: str, symbol: str, side: str) -> None:
         print(f"[addon] 첫 진입 확인 실패: {e}")
 
 
+def _fill_size(ps: list[dict]) -> float:
+    """체결 한 번의 크기 - 크기가 섞여 있으면 가장 많이 나온 것 (같으면 마지막 체결 쪽)"""
+    cnt: dict[float, int] = {}
+    for p in sorted(ps, key=lambda p: p.get("time") or 0):
+        cnt[p["volume"]] = cnt.get(p["volume"], 0) + 1
+    top = max(cnt.values())
+    last = [v for v in cnt if cnt[v] == top]
+    return next(p["volume"] for p in sorted(ps, key=lambda p: p.get("time") or 0, reverse=True) if p["volume"] in last)
+
+
 def _common_sl(ps: list[dict]) -> float:
     """포지션들의 SL - 다르면 랏이 가장 많이 걸린 값, 없으면 0"""
     w: dict[float, float] = {}
@@ -153,6 +163,9 @@ async def _evaluate(aid: int, accnum: str, symbol: str, side: str) -> None:
     if any(o["symbol"] == symbol and o["side"] == side for o in addons):
         return                                    # 이미 걸어 둠
     lots = round(sum(p["volume"] for p in base), 8)
+    # 리밋 하나의 랏: fill = 체결 한 번 크기 (0.01 × 3번 → 0.01) / total = 첫 진입 합계 (→ 0.03)
+    lot_mode = c.get("addon_lot", "fill")
+    each = _fill_size(base) if lot_mode == "fill" else lots
     avg = sum(p["price_open"] * p["volume"] for p in base) / lots
     digits = base[0].get("digits")
     sl = _common_sl(base) if c.get("addon_sl_follow", True) else 0.0
@@ -160,7 +173,8 @@ async def _evaluate(aid: int, accnum: str, symbol: str, side: str) -> None:
     mult = float(c.get("addon_mult") or 1.0)
     src = c.get("addon_src") or "mt5"
     ktrs = await _ktrs(aid, symbol, src)
-    prop = {"aid": aid, "accnum": accnum, "symbol": symbol, "side": side, "lots": lots, "avg": avg, "sl": sl,
+    prop = {"aid": aid, "accnum": accnum, "symbol": symbol, "side": side, "lots": lots, "each": each, "lot_mode": lot_mode,
+            "avg": avg, "sl": sl,
             "digits": digits, "mult": mult, "ktrs": ktrs, "src": src, "n": len(base), "at": time.time(), "now": now,
             "count": max(1, min(10, int(c.get("addon_n") or 1)))}
     head = (f"계좌 {accnum} · {symbol} {side.upper()} {lots:g}lot" + (f" ({len(base)}번 나눠)" if len(base) > 1 else "")
@@ -218,8 +232,9 @@ def _table(prop: dict) -> str:
     lines = [f"계좌 {prop['accnum']} · {prop['symbol']} {prop['side'].upper()} {prop['lots']:g}lot"
              + (f" ({prop['n']}번 나눠)" if prop["n"] > 1 else ""),
              f"평균 {_fmt(prop['avg'], d)}" + (f" · SL {_fmt(prop['sl'], d)}" if prop["sl"] else " · SL 없음"),
-             f"\n{'위' if prop['side'] == 'sell' else '아래'}로 {prop['mult']:g}KTR 마다 {prop['lots']:g}lot 리밋 {n}개"
-             f" · KTR ({sess} · {'OANDA' if prop['src'] == 'oanda' else 'MT5'})"]
+             f"\n{'위' if prop['side'] == 'sell' else '아래'}로 {prop['mult']:g}KTR 마다 {prop.get('each', prop['lots']):g}lot 리밋 {n}개"
+             + (" (체결 한 번 크기)" if prop.get("lot_mode") == "fill" and prop["n"] > 1 else "")
+             + f" · KTR ({sess} · {'OANDA' if prop['src'] == 'oanda' else 'MT5'})"]
     for tf in TFS:
         k = prop["ktrs"].get(tf) or {}
         if "ktr" not in k:
@@ -275,7 +290,7 @@ async def _place(prop: dict, tf: str) -> dict:
             continue
         try:
             r = await worker_post(prop["aid"], "/grid/addon", {
-                "symbol": prop["symbol"], "side": prop["side"], "price": price, "lot": prop["lots"], "sl": prop["sl"],
+                "symbol": prop["symbol"], "side": prop["side"], "price": price, "lot": prop.get("each", prop["lots"]), "sl": prop["sl"],
                 "magic": magic, "comment": f"TOS addon {TF_KR[tf]} {i}"})
             placed.append(r)
         except Exception as e:

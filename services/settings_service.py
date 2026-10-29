@@ -144,8 +144,8 @@ DEFAULTS: dict = {
     "grid": {"ktr_stop_gap": 1.0, "min_gap_ktr": 1.0,
              # 첫 진입 추가 리밋 (services/addon.py): 첫 진입 평균가에서 addon_mult KTR 불리한 곳에 같은 랏 리밋 1개
              #   addon_auto: 자동으로 걸기 / addon_ask: 텔레그램에 KTR 표 + 시간봉 버튼 (누르면 걸림)
-             #   addon_n: 몇 개 (평균가에서 거리 KTR 마다 하나씩) / addon_tf: 자동일 때 쓰는 시간봉 (2m 5m 10m 1h) / addon_sl_follow: 첫 진입의 SL 따라가기 / addon_src: 시세 mt5|oanda
-             "addon_auto": False, "addon_ask": True, "addon_tf": "10m", "addon_mult": 1.0, "addon_n": 1, "addon_sl_follow": True,
+             #   addon_lot: 리밋 하나의 랏 - fill(체결 한 번 크기) | total(첫 진입 합계) / addon_n: 몇 개 (평균가에서 거리 KTR 마다 하나씩) / addon_tf: 자동일 때 쓰는 시간봉 (2m 5m 10m 1h) / addon_sl_follow: 첫 진입의 SL 따라가기 / addon_src: 시세 mt5|oanda
+             "addon_auto": False, "addon_ask": True, "addon_tf": "10m", "addon_mult": 1.0, "addon_n": 1, "addon_lot": "fill", "addon_sl_follow": True,
              "addon_src": "mt5"},
     # 경제지표 - 이름에 이 단어가 들어가면 '주요 지표'로 강조 (services/key_events.py). 대소문자 구분 없음
     "events": {
@@ -408,6 +408,8 @@ def _validate(settings: dict) -> None:
         raise SettingsError("추가 리밋 개수(N)는 숫자여야 합니다.")
     if not (1 <= gr["addon_n"] <= 10):
         raise SettingsError("추가 리밋 개수(N)는 1~10 이어야 합니다.")
+    if gr.get("addon_lot") not in ("fill", "total"):
+        raise SettingsError("추가 리밋 랏은 fill(체결 한 번 크기) 또는 total(첫 진입 합계) 이어야 합니다.")
 
     ev = settings["events"]
     hl = ev.get("highlight") or []

@@ -479,7 +479,7 @@
         <input type="number" id="grGap" min="0.1" max="10" step="0.1" inputmode="decimal" style="width:90px"></div>
       <h3 style="margin:16px 0 4px;font-size:14px">첫 진입 추가 리밋</h3>
       <p class="hint">같은 종목·방향 포지션이 없던 상태에서 들어간 <b>첫 진입</b>(0.5랏씩 나눠 들어가도 지침 탭 '나눠 진입 묶기' 간격 안이면 하나)이 끝나면,
-        평균가에서 아래 KTR만큼씩 불리한 곳(매도는 위, 매수는 아래)에 <b>같은 랏 리밋 N개</b>를 겁니다. 구간매매 주문은 빼고 봅니다.
+        평균가에서 아래 KTR만큼씩 불리한 곳(매도는 위, 매수는 아래)에 <b>같은 랏 리밋 N개</b>를 겁니다 (랏 = 체결 한 번 크기 또는 첫 진입 합계). 구간매매 주문은 빼고 봅니다.
         첫 진입을 다 청산하면 걸어 둔 리밋은 저절로 취소됩니다.</p>
       <div class="row"><label class="name">자동으로 걸기<small>켜면 확인 없이 바로 걸고 [취소] 버튼이 달린 알림</small></label>
         <label class="switch"><input type="checkbox" id="adAuto"> 켜기</label></div>
@@ -489,6 +489,8 @@
         <select id="adTf"><option value="2m">2분</option><option value="5m">5분</option><option value="10m">10분</option><option value="1h">1시간</option></select></div>
       <div class="row"><label class="name">거리 (KTR 배수)<small>평균가에서 이만큼씩 - N=3, 1KTR 이면 1·2·3 KTR 자리에 하나씩</small></label>
         <input type="number" id="adMult" min="0.1" max="10" step="0.1" inputmode="decimal" style="width:90px"></div>
+      <div class="row"><label class="name">리밋 하나의 랏<small>0.01랏을 3번 나눠 들어갔으면 '체결 한 번' = 0.01, '합계' = 0.03</small></label>
+        <select id="adLot"><option value="fill">체결 한 번 크기</option><option value="total">첫 진입 합계</option></select></div>
       <div class="row"><label class="name">몇 개 (N)<small>같은 랏 리밋을 몇 개 걸지 · 텔레그램 물어보기에서는 N1~N5 버튼으로 바꿀 수 있음</small></label>
         <input type="number" id="adN" min="1" max="10" step="1" inputmode="numeric" style="width:90px"></div>
       <div class="row"><label class="name">SL 따라가기<small>첫 진입의 SL을 리밋에도 걸고, 바꾸면 같이 바꿈 · SL이 리밋 가격 안쪽으로 오면 리밋 취소</small></label>
@@ -1020,7 +1022,7 @@ const DEF_FIELDS = [   // [칸, 기본값 가져오기]
   ['#evKw', (d) => d.events.highlight.join(', ')],
   ['#grGap', (d) => d.grid.min_gap_ktr], ['#grStop', (d) => d.grid.ktr_stop_gap],
   ['#adAuto', (d) => d.grid.addon_auto], ['#adAsk', (d) => d.grid.addon_ask], ['#adTf', (d) => d.grid.addon_tf],
-  ['#adMult', (d) => d.grid.addon_mult], ['#adN', (d) => d.grid.addon_n], ['#adSl', (d) => d.grid.addon_sl_follow], ['#adSrc', (d) => d.grid.addon_src],
+  ['#adMult', (d) => d.grid.addon_mult], ['#adN', (d) => d.grid.addon_n], ['#adLot', (d) => d.grid.addon_lot], ['#adSl', (d) => d.grid.addon_sl_follow], ['#adSrc', (d) => d.grid.addon_src],
 ];
 const defText = (el, v) => el.type === 'checkbox' ? (v ? '켜기' : '끄기')
   : el.tagName === 'SELECT' ? ([...el.options].find((o) => o.value === String(v)) || {}).text || v : String(v);
@@ -1252,12 +1254,12 @@ $('tgTest').onclick = async (e) => {
 function fillGrid() {
   const g = settings.grid || {}; $('grGap').value = g.min_gap_ktr ?? 1; $('grStop').value = g.ktr_stop_gap ?? 0.5;
   $('adAuto').checked = !!g.addon_auto; $('adAsk').checked = g.addon_ask ?? true; $('adTf').value = g.addon_tf || '10m';
-  $('adMult').value = g.addon_mult ?? 1; $('adN').value = g.addon_n ?? 1; $('adSl').checked = g.addon_sl_follow ?? true; $('adSrc').value = g.addon_src || 'mt5';
+  $('adMult').value = g.addon_mult ?? 1; $('adN').value = g.addon_n ?? 1; $('adLot').value = g.addon_lot || 'fill'; $('adSl').checked = g.addon_sl_follow ?? true; $('adSrc').value = g.addon_src || 'mt5';
 }
 $('grSave').onclick = async () => {
   try {
     settings = await api('settings', { method: 'PUT', body: JSON.stringify({ grid: { min_gap_ktr: parseFloat($('grGap').value), ktr_stop_gap: parseFloat($('grStop').value),
-      addon_auto: $('adAuto').checked, addon_ask: $('adAsk').checked, addon_tf: $('adTf').value, addon_mult: parseFloat($('adMult').value), addon_n: parseInt($('adN').value, 10),
+      addon_auto: $('adAuto').checked, addon_ask: $('adAsk').checked, addon_tf: $('adTf').value, addon_mult: parseFloat($('adMult').value), addon_n: parseInt($('adN').value, 10), addon_lot: $('adLot').value,
       addon_sl_follow: $('adSl').checked, addon_src: $('adSrc').value } }) });
     fillGrid(); refreshDefChips(); toast('저장했습니다.');
   } catch (e) { toast(e.message, true); }
