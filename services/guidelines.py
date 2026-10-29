@@ -575,16 +575,23 @@ async def _check_margin(a, acc: str, r: dict, entry: str | None = None) -> None:
         return
     rep_sec = int(r.get("repeat", 0) or 0) * 60
     if cur > told or (cur == told and rep_sec and time.time() - last >= rep_sec - 5):
+        _margin_lvl[a.id] = (cur, time.time())   # 먼저 기록 (아래 포지션 조회를 기다리는 사이 주기 확인이 또 보내지 않게)
         top = cur == levels[-1]
         nxt = next((x for x in levels if x > cur), None)
         level = f"증거금 {util:.1f}% ({cur:g}% 넘음{' · 마지막 단계' if top else f' · 다음 경고 {nxt:g}%'})"
+        try:                                   # 강제청산까지 몇 포인트 (차트에서 바로 판단)
+            from services.risk import liquidation, liq_line
+            pos = await asyncio.wait_for(worker_get(a.id, "/positions-all"), timeout=5)
+            liq = [f"🧯 {liq_line(x)}" for x in liquidation(info, pos)[:3]]
+            if liq:
+                level += "\n" + "\n".join(liq)
+        except Exception:
+            pass
         ctx = ((f"{acc} · 이번 진입 {entry} 으로\n{level}\n" if entry else f"{acc} · {level}\n")
                + f"평가금 {eq:,.2f} · 사용 증거금 {used:,.2f} · 여유 {float(info.get('margin_free') or 0):,.2f}"
                + (f" · 마진 레벨 {float(info.get('margin_level') or 0):,.0f}%" if info.get("margin_level") else ""))
         kind = "비중 경고" if entry else "증거금 경고"
-        if fire("margin_use", a.id, f"{cur:g}", ctx, cooldown_sec=0,
-                title=f"🚨 {kind}" if top else f"⚠️ {kind}"):
-            _margin_lvl[a.id] = (cur, time.time())
+        fire("margin_use", a.id, f"{cur:g}", ctx, cooldown_sec=0, title=f"🚨 {kind}" if top else f"⚠️ {kind}")
 
 
 # ── 지침 → 확인 문구 ────────────────────────────────────────────────

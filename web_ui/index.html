@@ -188,6 +188,9 @@
   .sheet input { width: 100%; }
   .sheet .msg { min-height: 18px; font-size: 12.5px; margin-top: 6px; color: var(--bad); }
   .sheet .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
+  .liq { margin-top: 10px; padding-top: 8px; border-top: 1px solid var(--line); font-size: 13px; display: grid; gap: 4px; }
+  .liq .lrow { display: flex; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .liq .lrow.warn b { color: #d97706; } .liq .lrow.bad b { color: var(--bad); }
   .pinebar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
   .pinebar input { width: 72px; }
   .pinebar input[type=date] { width: auto; min-width: 0; flex: 1 1 120px; max-width: 160px; }
@@ -577,6 +580,7 @@
       <div class="stat"><small>여유 증거금</small><span class="num" id="rFree">-</span></div>
       <div class="stat"><small>실질 레버리지</small><span class="num" id="rLev">-</span></div>
     </div>
+    <div class="liq" id="rLiq" hidden></div>
   </section>
 
   <!-- 종목 -->
@@ -1242,6 +1246,21 @@ function ask(title, text) {
   });
 }
 
+// 강제청산(스탑아웃)까지 - 종목별로 몇 포인트 반대로 가면 (services/risk.py)
+async function loadLiq() {
+  try {
+    const r = await api(`/accounts/${encodeURIComponent(acc.account_number)}/liquidation`);
+    const items = r.items || [];
+    $('rLiq').hidden = !items.length;
+    $('rLiq').innerHTML = items.slice(0, 4).map((x) => {
+      const d = Number.isInteger(x.digits) ? x.digits : 2, up = x.side === 'SELL';
+      const lvl = x.pct < 1 ? 'bad' : x.pct < 3 ? 'warn' : '';
+      return `<div class="lrow ${lvl}"><span>🧯 <b>${esc(x.symbol)}</b> ${x.side} ${fmt(x.lots)}lot</span>
+        <span class="num"><b>${up ? '▲' : '▼'}${fmt(x.points, x.points >= 10 ? 1 : d)}pt</b> (${fmt(x.pct, 2)}%) → ${fmt(x.price, d)}</span></div>`;
+    }).join('') + (items.length ? `<p class="hint2" style="margin:4px 0 0">이만큼 반대로 가면 강제청산 (스탑아웃 ${fmt(r.stop_out_pct, 0)}%) · 그 종목만 움직인다고 볼 때 대략값</p>` : '');
+  } catch { $('rLiq').hidden = true; }
+}
+
 // ── 계좌 요약 ──
 async function loadRisk() {
   if (!acc || viewOnly()) return;
@@ -1257,6 +1276,7 @@ async function loadRisk() {
     const b = $('riskBadge');
     b.textContent = `증거금 사용 ${fmt(r.margin_utilization_pct, 1)}%`;
     b.className = 'badge ' + (r.risk_level || '');
+    loadLiq();
   } catch (e) {
     $('riskBadge').textContent = '조회 실패'; $('riskBadge').className = 'badge';
   }

@@ -347,6 +347,19 @@ async def get_risk_summary(account_number: int, db: AsyncSession = Depends(get_d
         risk_level=_classify_risk(margin_utilization_pct), profit=profit,
     )
 
+@router.get("/{account_number}/liquidation")
+async def get_liquidation(account_number: int, db: AsyncSession = Depends(get_db)):
+    """종목별 강제청산(스탑아웃)까지 포인트·가격 (services/risk.py)"""
+    account = await get_account_or_default(db, account_number)
+    if account is None:
+        raise HTTPException(404, f"account not found: {account_number}")
+    from services.risk import liquidation, stop_out_room
+    info = await worker_get(account.id, "/account-info")
+    positions = await worker_get(account.id, "/positions-all")
+    r = stop_out_room(info)
+    return {"stop_out_pct": r[1] if r else None, "room": r[0] if r else None, "items": liquidation(info, positions)}
+
+
 @router.get("/default", response_model=AccountOut)
 async def get_default_account(db: AsyncSession = Depends(get_db)):
     return await get_account_or_default(db, account_number=None)

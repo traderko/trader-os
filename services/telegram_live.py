@@ -234,6 +234,12 @@ class TelegramLive:
             eq, margin = info.get("equity") or 0, info.get("margin") or 0
             util = (margin / eq * 100) if eq > 0 else 0
             lines.append(f"평가금 {_f(eq)} · 손익 <b>{_s(info.get('profit') or 0)}</b> · 증거금 {util:.1f}%")
+            try:                               # 강제청산까지 몇 포인트 (차트에서 바로 보게)
+                from services.risk import liquidation, liq_line
+                for x in liquidation(info, positions)[:3]:
+                    lines.append(f"🧯 {html.escape(liq_line(x))}")
+            except Exception:
+                pass
             lines += _positions_block(positions)
             return lines
 
