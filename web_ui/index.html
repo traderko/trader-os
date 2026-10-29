@@ -190,6 +190,8 @@
   .sheet .acts { display: flex; gap: 8px; justify-content: flex-end; margin-top: 12px; }
   .pinebar { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
   .pinebar input { width: 72px; }
+  .pinebar input[type=date] { width: auto; min-width: 0; flex: 1 1 120px; max-width: 160px; }
+  .pinequick { margin-top: -2px; } .pinequick .btn { padding: 3px 9px; font-size: 12px; }
   .pinebar .muted { font-size: 12px; }
   #pineText { width: 100%; height: 240px; resize: vertical; font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     background: var(--code, var(--bg)); color: inherit; border: 1px solid var(--line); border-radius: 8px; padding: 8px; white-space: pre; }
@@ -834,6 +836,15 @@
       <button class="btn small" id="pineRecent">최근 N일만</button>
       <button class="btn small" id="pineAll">전체보기</button>
       <span class="muted" id="pineRange"></span>
+    </div>
+    <div class="pinebar">
+      <input type="date" id="pineFrom" aria-label="시작일"><span class="muted">~</span><input type="date" id="pineTo" aria-label="끝일">
+      <button class="btn small" id="pineRangeGo">이 기간</button>
+    </div>
+    <div class="pinebar pinequick">
+      <button class="btn small ghost" data-pq="today">오늘</button><button class="btn small ghost" data-pq="yday">어제</button>
+      <button class="btn small ghost" data-pq="week">이번 주</button><button class="btn small ghost" data-pq="lweek">지난 주</button>
+      <button class="btn small ghost" data-pq="month">이번 달</button><button class="btn small ghost" data-pq="lmonth">지난 달</button>
     </div>
     <textarea id="pineText" readonly spellcheck="false"></textarea>
     <div class="pinemeta muted" id="pineMeta"></div>
@@ -1758,7 +1769,11 @@ async function runTradeSim() {
 //   첫 줄:   H,<기준시각 ms>[,<심볼>]          기준시각 = 가장 이른 거래의 진입 시각
 //   이후 줄: 진입오프셋초,진입가,청산오프셋초,청산가,b|s,랏,손익[,심볼]
 //   심볼이 하나뿐이면 첫 줄에만 쓰고 각 줄에서는 뺌 (글자 수 절약)
-const pine = { sym: null, days: 7, trades: [], key: null };
+// 기간: days(최근 N일) / all(전체) / from·to(날짜 지정, 'YYYY-MM-DD' · 거래일 06:00 기준 · 진입 시각으로)
+const pine = { sym: null, days: 7, from: null, to: null, trades: [], key: null };
+const isoDay = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+const pineDayOf = (t) => isoDay(tdDate(dt(t.open_time)));
+const pineShort = (iso) => iso.slice(2).replace(/-/g, '.');
 const pineFmt = (v) => Number(v).toFixed(2);
 
 function pineText(list, symbol) {
@@ -1780,10 +1795,13 @@ function pineText(list, symbol) {
 // 기간에 맞는 해의 거래를 받아 둠 (월 단위 화면과 달리 달·해를 넘을 수 있어서 연간 API를 씀)
 async function pineLoad() {
   const an = encodeURIComponent(acc.account_number), now = new Date();
-  const key = `${acc.account_number}|${pine.days ?? 'all'}`;
+  const key = `${acc.account_number}|${pine.from ? pine.from + '~' + pine.to : pine.days ?? 'all'}`;
   if (pine.key === key) return;
   let years;
-  if (pine.days != null) {
+  if (pine.from) {                                   // 날짜 지정: 걸친 해만 (06:00 기준이라 1월 1일 새벽은 전해 → 앞뒤 해 하나씩 여유)
+    const y0 = Number(pine.from.slice(0, 4)), y1 = Math.min(now.getFullYear(), Number(pine.to.slice(0, 4)) + 1);
+    years = []; for (let y = y1; y >= y0; y--) years.push(y);
+  } else if (pine.days != null) {
     const from = new Date(now.getTime() - pine.days * 86400000).getFullYear();
     years = []; for (let y = now.getFullYear(); y >= from; y--) years.push(y);
   } else years = null;
@@ -1814,6 +1832,7 @@ function pineSymbolOptions() {
   return opts;
 }
 function pineInRange() {
+  if (pine.from) return pine.trades.filter((t) => { const k = pineDayOf(t); return k >= pine.from && k <= pine.to; });
   if (pine.days == null) return pine.trades;
   const cutoff = Date.now() - pine.days * 86400000;
   return pine.trades.filter((t) => dt(t.open_time).getTime() > cutoff);
@@ -1831,7 +1850,10 @@ function pineRender() {
   const text = pineText(list, one);
   $('pineText').value = text || '(내보낼 청산 거래가 없습니다)';
   $('pineCopy').disabled = !text;
-  $('pineRange').textContent = pine.days == null ? '(전체)' : `(최근 ${pine.days}일)`;
+  $('pineRange').textContent = pine.from ? `(${pine.from === pine.to ? pineShort(pine.from) : pineShort(pine.from) + ' ~ ' + pineShort(pine.to)})`
+    : pine.days == null ? '(전체)' : `(최근 ${pine.days}일)`;
+  document.querySelectorAll('#pineRecent, #pineAll, #pineRangeGo').forEach((b) => b.classList.remove('primary'));
+  $(pine.from ? 'pineRangeGo' : pine.days == null ? 'pineAll' : 'pineRecent').classList.add('primary');
   const n = text ? text.split('\n').length - 1 : 0;
   $('pineMeta').textContent = text ? `${n}건 · ${text.length.toLocaleString()}자${one ? ` · 심볼 ${one}` : (opt.symbols.length > 1 ? ' · 심볼이 여러 개라 줄마다 표시' : '')}` : '';
 }
@@ -1840,6 +1862,11 @@ async function openPine() {
   if (!acc) return;
   pine.sym = tSym === 'all' ? (SYMBOLS[0]?.key || 'all') : tSym;     // 앱처럼 기본은 골드
   $('pineDays').value = pine.days ?? 7;
+  if (!$('pineFrom').value) {                         // 날짜 칸 기본: 지난번 고른 기간, 없으면 최근 7일
+    const today = isoDay(tdDate(new Date()));
+    $('pineFrom').value = pine.from || lsGet('traderos:pinefrom', isoDay(new Date(tdDate(new Date()).getTime() - 6 * 86400000)));
+    $('pineTo').value = pine.to || lsGet('traderos:pineto', today);
+  }
   $('pineText').value = '불러오는 중…'; $('pineMeta').textContent = ''; $('pineCopy').disabled = true;
   $('pineModal').hidden = false;
   pine.key = null;                       // 열 때마다 새로 받음 (방금 청산한 거래까지)
@@ -1847,7 +1874,7 @@ async function openPine() {
   catch (e) { $('pineText').value = '거래내역을 불러오지 못했습니다: ' + e.message; }
 }
 async function pineSetDays(days) {
-  pine.days = days;
+  pine.days = days; pine.from = pine.to = null;
   $('pineText').value = '불러오는 중…';
   try { await pineLoad(); pineRender(); } catch (e) { $('pineText').value = '거래내역을 불러오지 못했습니다: ' + e.message; }
 }
@@ -1855,6 +1882,30 @@ $('tPine').onclick = openPine;
 $('pineSyms').onclick = (e) => { const b = e.target.closest('button[data-sym]'); if (!b) return; pine.sym = b.dataset.sym; pineRender(); };
 $('pineRecent').onclick = () => { const d = parseInt($('pineDays').value, 10); pineSetDays(d > 0 ? d : (pine.days ?? 7)); };
 $('pineAll').onclick = () => pineSetDays(null);
+async function pineSetRange(from, to) {
+  if (!from || !to) return toast('시작일과 끝일을 모두 고르세요', true);
+  if (from > to) [from, to] = [to, from];
+  $('pineFrom').value = from; $('pineTo').value = to;
+  pine.from = from; pine.to = to;
+  lsSet('traderos:pinefrom', from); lsSet('traderos:pineto', to);
+  $('pineText').value = '불러오는 중…';
+  try { await pineLoad(); pineRender(); } catch (e) { $('pineText').value = '거래내역을 불러오지 못했습니다: ' + e.message; }
+}
+$('pineRangeGo').onclick = () => pineSetRange($('pineFrom').value, $('pineTo').value);
+['pineFrom', 'pineTo'].forEach((id) => $(id).addEventListener('keydown', (e) => { if (e.key === 'Enter') $('pineRangeGo').click(); }));
+// 빠른 기간 (거래일 06:00 기준, 주는 월요일부터)
+document.querySelector('.pinequick').onclick = (e) => {
+  const b = e.target.closest('[data-pq]'); if (!b) return;
+  const t = tdDate(new Date()), day = (n) => new Date(t.getFullYear(), t.getMonth(), t.getDate() + n);
+  const mon = day(-((t.getDay() + 6) % 7));
+  const r = {
+    today: [t, t], yday: [day(-1), day(-1)],
+    week: [mon, t], lweek: [new Date(mon.getTime() - 7 * 86400000), new Date(mon.getTime() - 86400000)],
+    month: [new Date(t.getFullYear(), t.getMonth(), 1), t],
+    lmonth: [new Date(t.getFullYear(), t.getMonth() - 1, 1), new Date(t.getFullYear(), t.getMonth(), 0)],
+  }[b.dataset.pq];
+  pineSetRange(isoDay(r[0]), isoDay(r[1]));
+};
 $('pineModal').addEventListener('click', (e) => { if (e.target === $('pineModal') || e.target.closest('[data-close]')) $('pineModal').hidden = true; });
 $('pineCopy').onclick = async () => {
   const text = $('pineText').value;
