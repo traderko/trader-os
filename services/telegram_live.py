@@ -443,8 +443,8 @@ class TelegramLive:
             price = sum(p["price_open"] * p["volume"] for p in targets) / vol
             if isinstance(me.get("digits"), int):
                 price = round(price, me["digits"])
-            await self._apply_level(client, token, chat_id, aid, "sl", price, targets, me)
-            return "본전 SL 설정"
+            self._bg(self._apply_level(client, token, chat_id, aid, "sl", price, targets, me))
+            return "본전 SL 설정 중"
         cur = targets[0].get(field) if len(targets) == 1 else None
         label = "SL(손절)" if field == "sl" else "TP(익절)"
         r = await self._send(
@@ -479,7 +479,14 @@ class TelegramLive:
         if me is None:
             await self._send(client, token, chat_id, "이 포지션은 이미 청산됐거나 MT5에 연결되지 않았습니다.")
             return
-        await self._apply_level(client, token, chat_id, p["aid"], p["field"], price, targets, me)
+        self._bg(self._apply_level(client, token, chat_id, p["aid"], p["field"], price, targets, me))
+
+    def _bg(self, coro) -> None:
+        """오래 걸리는 일(포지션 수십 개 SL/TP)은 뒤에서 - 그동안 다른 버튼·명령도 바로 받게"""
+        tasks = self.__dict__.setdefault("_bg_tasks", set())
+        t = asyncio.create_task(coro)
+        tasks.add(t)
+        t.add_done_callback(tasks.discard)
 
     async def _apply_level(self, client, token, chat_id, aid, field, price, targets, me) -> None:
         cur = me.get("price_current") or 0
@@ -494,14 +501,25 @@ class TelegramLive:
                 await self._send(client, token, chat_id,
                                  f"❌ {'BUY' if buy else 'SELL'} 포지션의 {label}은(는) 현재가({self._fmt_price(cur, me.get('digits'))})보다 {where}여야 합니다.")
                 return
-        path = "/positions/set-sl" if field == "sl" else "/positions/set-tp"
-        body = {"tickets": [p["ticket"] for p in targets], ("sl_price" if field == "sl" else "tp_price"): price}
+        from services.sltp import apply_sltp, CHUNK
+        tickets = [p["ticket"] for p in targets]
+        prog = {"mid": None}
+        if len(tickets) > CHUNK:           # 많으면 나눠 보내면서 진행 상황을 한 메시지에 고쳐 씀
+            r = await self._send(client, token, chat_id, f"⏳ {label} 적용 중… 0/{len(tickets)}")
+            prog["mid"] = ((r or {}).get("result") or {}).get("message_id")
+
+        async def progress(done, total):
+            if prog["mid"] and done < total:
+                await self._call(client, token, "editMessageText", chat_id=chat_id, message_id=prog["mid"],
+                                 text=f"⏳ {label} 적용 중… {done}/{total}")
         try:
-            from services.worker_client import worker_post
-            res = await asyncio.wait_for(worker_post(aid, path, body), 15)
+            res = await apply_sltp(aid, field, tickets, price, progress)
         except Exception as e:
-            await self._send(client, token, chat_id, f"⚠️ {label} 설정 실패: {html.escape(str(e))[:200]}")
+            await self._send(client, token, chat_id, f"⚠️ {label} 설정 실패: {html.escape(str(e) or type(e).__name__)[:200]}")
             return
+        finally:
+            if prog["mid"]:
+                await self._call(client, token, "deleteMessage", chat_id=chat_id, message_id=prog["mid"])
         okn, failed = len(res.get("success") or []), res.get("failed") or []
         what = "해제" if not price else self._fmt_price(price, me.get("digits"))
         msg = f"{'✅' if not failed else '⚠️'} {self._describe(me, targets)}\n{label} {what} · {okn}/{len(targets)}개 적용"

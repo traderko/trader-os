@@ -225,7 +225,8 @@ async def set_stop_loss(account_number: int, body: SetStopLossRequest, db: Async
         raise HTTPException(404, f"account not found: {account_number}")
     if not body.tickets:
         raise HTTPException(400, "대상 티켓이 없습니다.")
-    return await worker_post(account.id, "/positions/set-sl", {"tickets": body.tickets, "sl_price": body.sl_price})
+    from services.sltp import apply_sltp       # 많으면 나눠 보내고, 시간 초과 난 건 다시 읽어 확인
+    return await apply_sltp(account.id, "sl", body.tickets, body.sl_price)
  
  
 @router.post("/{account_number}/positions/set-tp")
@@ -235,7 +236,8 @@ async def set_take_profit(account_number: int, body: SetTakeProfitRequest, db: A
         raise HTTPException(404, f"account not found: {account_number}")
     if not body.tickets:
         raise HTTPException(400, "대상 티켓이 없습니다.")
-    return await worker_post(account.id, "/positions/set-tp", {"tickets": body.tickets, "tp_price": body.tp_price})
+    from services.sltp import apply_sltp
+    return await apply_sltp(account.id, "tp", body.tickets, body.tp_price)
  
  
 @router.get("/{account_number}/positions", response_model=list[PositionOut])

@@ -29,8 +29,8 @@ async def worker_get(account_id: int, path: str, params: dict | None = None):
     return res.json()
 
 
-async def worker_post(account_id: int, path: str, json: dict):
-    async with httpx.AsyncClient(timeout=10.0) as client:
+async def worker_post(account_id: int, path: str, json: dict, timeout: float = 10.0):
+    async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             res = await client.post(f"{worker_base_url(account_id)}{path}", json=json)
         except httpx.ConnectError:
