@@ -104,8 +104,8 @@ def _s(v: float) -> str:
 
 
 def _money(v: float) -> str:
-    """손익 앞에 💰(이익) / 💸(손실)"""
-    return ("💸" if v < 0 else "💰") + _s(v)
+    """손익 앞에 💲"""
+    return "💲" + _s(v)
 
 
 def _hm(sec: int) -> str:

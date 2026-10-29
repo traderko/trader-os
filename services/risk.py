@@ -49,8 +49,8 @@ def liquidation(info: dict, positions: list[dict]) -> list[dict]:
 
 
 def liq_line(x: dict) -> str:
-    """'NAS100+ SELL 30lot · ▲232pt(0.8%) 가면 강제청산 (29,382)'"""
+    """'NAS100+ SELL 30lot · ⬆️232pt(0.8%) 가면 강제청산 (29,382)'"""
     d = x["digits"] if isinstance(x.get("digits"), int) else 2
-    arrow = "▼" if x["side"] == "BUY" else "▲"
+    arrow = "⬇️" if x["side"] == "BUY" else "⬆️"
     return (f"{x['symbol']} {x['side']} {x['lots']:g}lot · {arrow}{x['points']:,.{min(d, 1) if x['points'] >= 10 else d}f}pt"
             f"({x['pct']:.1f}%) 가면 강제청산 ({x['price']:,.{d}f})")
