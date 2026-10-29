@@ -104,8 +104,8 @@ def _s(v: float) -> str:
 
 
 def _money(v: float) -> str:
-    """손익 앞에 💲"""
-    return "💲" + _s(v)
+    """손익 앞에 💵 (💲는 안드로이드에서 검은 글자로 나와서)"""
+    return "💵" + _s(v)
 
 
 def _hm(sec: int) -> str:

@@ -1256,7 +1256,7 @@ async function loadLiq() {
       const d = Number.isInteger(x.digits) ? x.digits : 2, up = x.side === 'SELL';
       const lvl = x.pct < 1 ? 'bad' : x.pct < 3 ? 'warn' : '';
       return `<div class="lrow ${lvl}"><span>🧯 <b>${esc(x.symbol)}</b> ${x.side} ${fmt(x.lots)}lot</span>
-        <span class="num"><b>${up ? '⬆️' : '⬇️'}${fmt(x.points, x.points >= 10 ? 1 : d)}pt</b> (${fmt(x.pct, 2)}%) → ${fmt(x.price, d)}</span></div>`;
+        <span class="num"><b>${up ? '📈' : '📉'}${fmt(x.points, x.points >= 10 ? 1 : d)}pt</b> (${fmt(x.pct, 2)}%) → ${fmt(x.price, d)}</span></div>`;
     }).join('') + (items.length ? `<p class="hint2" style="margin:4px 0 0">이만큼 반대로 가면 강제청산 (스탑아웃 ${fmt(r.stop_out_pct, 0)}%) · 그 종목만 움직인다고 볼 때 대략값</p>` : '');
   } catch { $('rLiq').hidden = true; }
 }
