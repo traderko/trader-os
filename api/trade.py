@@ -219,6 +219,18 @@ async def create_trade(
                                                     data.volume, kst_time))
         _bg.add(gt)
         gt.add_done_callback(_bg.discard)
+        if not forced:                        # 첫 진입 추가 리밋 (services/addon.py) - 나눠 들어가는 게 끝나길 기다렸다가 확인
+            try:
+                from services import addon
+                addon.on_open(account.id, account.account_number, data.symbol, data.position, getattr(data, "magic", 0))
+            except Exception as e:
+                print(f"[addon] {e}")
+    elif data.entry_type == "CLOSE":
+        try:
+            from services import addon
+            addon.on_close(account.id)            # 첫 진입을 다 청산했으면 걸어 둔 리밋 정리
+        except Exception as e:
+            print(f"[addon] {e}")
 
     payload = {
         'trade_id': trade.id

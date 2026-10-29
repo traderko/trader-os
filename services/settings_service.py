@@ -141,7 +141,12 @@ DEFAULTS: dict = {
     # 구간매매 (KTR 배수)
     #   ktr_stop_gap: KTR 거래 손절 = 마지막 구간에서 이만큼 더 간 곳 (주문할 때 바꿀 수 있음)
     #   min_gap_ktr : 고정 랏 분할에서 구간 수 자동일 때 마지막 구간과 손절선 사이 최소 여유
-    "grid": {"ktr_stop_gap": 1.0, "min_gap_ktr": 1.0},
+    "grid": {"ktr_stop_gap": 1.0, "min_gap_ktr": 1.0,
+             # 첫 진입 추가 리밋 (services/addon.py): 첫 진입 평균가에서 addon_mult KTR 불리한 곳에 같은 랏 리밋 1개
+             #   addon_auto: 자동으로 걸기 / addon_ask: 텔레그램에 KTR 표 + 시간봉 버튼 (누르면 걸림)
+             #   addon_tf: 자동일 때 쓰는 시간봉 (2m 5m 10m 1h) / addon_sl_follow: 첫 진입의 SL 따라가기 / addon_src: 시세 mt5|oanda
+             "addon_auto": False, "addon_ask": True, "addon_tf": "10m", "addon_mult": 1.0, "addon_sl_follow": True,
+             "addon_src": "mt5"},
     # 경제지표 - 이름에 이 단어가 들어가면 '주요 지표'로 강조 (services/key_events.py). 대소문자 구분 없음
     "events": {
         "highlight": [
@@ -385,6 +390,18 @@ def _validate(settings: dict) -> None:
         raise SettingsError("KTR 거래 손절 여유는 숫자여야 합니다.")
     if not (0.1 <= gr["ktr_stop_gap"] <= 10):
         raise SettingsError("KTR 거래 손절 여유는 0.1~10 이어야 합니다.")
+    gr["addon_auto"], gr["addon_ask"] = bool(gr.get("addon_auto")), bool(gr.get("addon_ask", True))
+    gr["addon_sl_follow"] = bool(gr.get("addon_sl_follow", True))
+    if gr.get("addon_tf") not in ("2m", "5m", "10m", "1h"):
+        raise SettingsError("추가 리밋 시간봉은 2분·5분·10분·1시간 중 하나여야 합니다.")
+    if gr.get("addon_src") not in ("mt5", "oanda"):
+        raise SettingsError("추가 리밋 시세는 mt5 또는 oanda 여야 합니다.")
+    try:
+        gr["addon_mult"] = round(float(gr.get("addon_mult")), 3)
+    except (TypeError, ValueError):
+        raise SettingsError("추가 리밋 거리(KTR)는 숫자여야 합니다.")
+    if not (0.1 <= gr["addon_mult"] <= 10):
+        raise SettingsError("추가 리밋 거리(KTR)는 0.1~10 이어야 합니다.")
 
     ev = settings["events"]
     hl = ev.get("highlight") or []

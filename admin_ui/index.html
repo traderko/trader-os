@@ -477,6 +477,22 @@
         <input type="number" id="grStop" min="0.1" max="10" step="0.1" inputmode="decimal" style="width:90px"></div>
       <div class="row"><label class="name">고정 랏 분할 자동 구간 수 여유 (KTR)</label>
         <input type="number" id="grGap" min="0.1" max="10" step="0.1" inputmode="decimal" style="width:90px"></div>
+      <h3 style="margin:16px 0 4px;font-size:14px">첫 진입 추가 리밋</h3>
+      <p class="hint">같은 종목·방향 포지션이 없던 상태에서 들어간 <b>첫 진입</b>(0.5랏씩 나눠 들어가도 지침 탭 '나눠 진입 묶기' 간격 안이면 하나)이 끝나면,
+        평균가에서 아래 KTR만큼 불리한 곳(매도는 위, 매수는 아래)에 <b>같은 랏 리밋 1개</b>를 겁니다. 구간매매 주문은 빼고 봅니다.
+        첫 진입을 다 청산하면 걸어 둔 리밋은 저절로 취소됩니다.</p>
+      <div class="row"><label class="name">자동으로 걸기<small>켜면 확인 없이 바로 걸고 [취소] 버튼이 달린 알림</small></label>
+        <label class="switch"><input type="checkbox" id="adAuto"> 켜기</label></div>
+      <div class="row"><label class="name">텔레그램으로 물어보기<small>자동이 꺼져 있을 때 KTR 표 + 시간봉 버튼 (누르면 걸림)</small></label>
+        <label class="switch"><input type="checkbox" id="adAsk"> 켜기</label></div>
+      <div class="row"><label class="name">시간봉 (자동일 때)</label>
+        <select id="adTf"><option value="2m">2분</option><option value="5m">5분</option><option value="10m">10분</option><option value="1h">1시간</option></select></div>
+      <div class="row"><label class="name">거리 (KTR 배수)</label>
+        <input type="number" id="adMult" min="0.1" max="10" step="0.1" inputmode="decimal" style="width:90px"></div>
+      <div class="row"><label class="name">SL 따라가기<small>첫 진입의 SL을 리밋에도 걸고, 바꾸면 같이 바꿈 · SL이 리밋 가격 안쪽으로 오면 리밋 취소</small></label>
+        <label class="switch"><input type="checkbox" id="adSl"> 켜기</label></div>
+      <div class="row"><label class="name">KTR 시세</label>
+        <select id="adSrc"><option value="mt5">MT5</option><option value="oanda">OANDA</option></select></div>
       <div class="actions"><button class="btn primary" id="grSave">저장</button></div>
     </div>
     <div class="panel">
@@ -1001,6 +1017,8 @@ const DEF_FIELDS = [   // [칸, 기본값 가져오기]
   ['#gdCooldown', (d) => d.guidelines.cooldown_min], ['#gdGap', (d) => d.guidelines.entry_gap_sec],
   ['#evKw', (d) => d.events.highlight.join(', ')],
   ['#grGap', (d) => d.grid.min_gap_ktr], ['#grStop', (d) => d.grid.ktr_stop_gap],
+  ['#adAuto', (d) => d.grid.addon_auto], ['#adAsk', (d) => d.grid.addon_ask], ['#adTf', (d) => d.grid.addon_tf],
+  ['#adMult', (d) => d.grid.addon_mult], ['#adSl', (d) => d.grid.addon_sl_follow], ['#adSrc', (d) => d.grid.addon_src],
 ];
 const defText = (el, v) => el.type === 'checkbox' ? (v ? '켜기' : '끄기')
   : el.tagName === 'SELECT' ? ([...el.options].find((o) => o.value === String(v)) || {}).text || v : String(v);
@@ -1229,10 +1247,16 @@ $('tgTest').onclick = async (e) => {
 };
 
 // ── 구간매매 ──
-function fillGrid() { const g = settings.grid || {}; $('grGap').value = g.min_gap_ktr ?? 1; $('grStop').value = g.ktr_stop_gap ?? 0.5; }
+function fillGrid() {
+  const g = settings.grid || {}; $('grGap').value = g.min_gap_ktr ?? 1; $('grStop').value = g.ktr_stop_gap ?? 0.5;
+  $('adAuto').checked = !!g.addon_auto; $('adAsk').checked = g.addon_ask ?? true; $('adTf').value = g.addon_tf || '10m';
+  $('adMult').value = g.addon_mult ?? 1; $('adSl').checked = g.addon_sl_follow ?? true; $('adSrc').value = g.addon_src || 'mt5';
+}
 $('grSave').onclick = async () => {
   try {
-    settings = await api('settings', { method: 'PUT', body: JSON.stringify({ grid: { min_gap_ktr: parseFloat($('grGap').value), ktr_stop_gap: parseFloat($('grStop').value) } }) });
+    settings = await api('settings', { method: 'PUT', body: JSON.stringify({ grid: { min_gap_ktr: parseFloat($('grGap').value), ktr_stop_gap: parseFloat($('grStop').value),
+      addon_auto: $('adAuto').checked, addon_ask: $('adAsk').checked, addon_tf: $('adTf').value, addon_mult: parseFloat($('adMult').value),
+      addon_sl_follow: $('adSl').checked, addon_src: $('adSrc').value } }) });
     fillGrid(); refreshDefChips(); toast('저장했습니다.');
   } catch (e) { toast(e.message, true); }
 };

@@ -432,6 +432,9 @@ async def lifespan(app: FastAPI):
     # 7) 트레이딩 지침 - SL 없는 포지션, 지표·장 시작 전 보유 (services/guidelines.py)
     from services import guidelines
     guideline_task = asyncio.create_task(guidelines.loop())
+    # 첫 진입 추가 리밋 - 첫 진입이 없어지면 취소, SL 따라가기 (services/addon.py)
+    from services import addon
+    addon_task = asyncio.create_task(addon.loop())
     # 8) 근거 알림 - 근거 태그 안 단 거래를 정해진 시각·주기로 텔레그램에 (services/telegram_tags.py, 기본 꺼짐)
     from services import telegram_tags
     reason_task = asyncio.create_task(telegram_tags.remind_loop())
@@ -442,6 +445,7 @@ async def lifespan(app: FastAPI):
     telegram_live_task.cancel()
     update_task.cancel()
     guideline_task.cancel()
+    addon_task.cancel()
     reason_task.cancel()
     await admin_app.stop_admin_server(admin_server, admin_task)
     watchdog_task.cancel()

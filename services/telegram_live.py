@@ -966,6 +966,16 @@ class TelegramLive:
                                                                         (cb.get("message") or {}).get("message_id"))
                         except Exception as e:
                             answer = f"실패: {e}"[:190]
+                elif data.startswith("ad:"):          # 첫 진입 추가 리밋 (services/addon.py)
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        from services import addon
+                        try:
+                            answer = await addon.button(self, client, token, cid, data,
+                                                        (cb.get("message") or {}).get("message_id"))
+                        except Exception as e:
+                            answer = f"실패: {e}"[:190]
                 elif data.startswith("upd:"):
                     if cid != str(telegram_cfg()["chat_id"] or ""):
                         answer = "등록된 대화에서만 쓸 수 있습니다"

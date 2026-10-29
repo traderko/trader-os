@@ -198,3 +198,108 @@ async def grid_detail(request: Request, magic: int):
         }
 
     return await asyncio.to_thread(run)
+
+
+# ── 첫 진입 추가 리밋 (services/addon.py) ─────────────────────────────
+#   첫 진입(같은 종목·방향 포지션이 없던 상태에서 들어간 것) 뒤 평균가에서 N KTR 불리한 곳에 같은 랏 리밋 1개.
+#   magic 71800000 ~ 71899999 (구간매매 71700000~ 와 따로 - 구간 목록에 안 섞이게)
+#   POST /grid/addon         {symbol, side, price, lot, sl, magic, comment}  리밋 주문
+#   GET  /grid/addons        걸려 있는 추가 리밋들
+#   POST /grid/addon-cancel  {ticket}
+#   POST /grid/addon-sl      {ticket, sl}   SL 따라가기
+ADDON_LO, ADDON_HI = 71_800_000, 71_899_999
+
+
+@router.post("/addon")
+async def addon_place(request: Request, body: dict):
+    state = _state(request)
+    mt5 = state.mt5
+
+    def run():
+        name = _resolve_symbol(mt5, body.get("symbol") or "")
+        if not name:
+            raise HTTPException(404, f"종목을 찾지 못했습니다: {body.get('symbol')}")
+        mt5.symbol_select(name, True)
+        info, tick = mt5.symbol_info(name), mt5.symbol_info_tick(name)
+        if info is None or tick is None:
+            raise HTTPException(502, f"{name} 시세를 받지 못했습니다.")
+        buy = str(body.get("side", "")).lower().startswith("b")
+        magic = int(body.get("magic") or 0)
+        if not (ADDON_LO <= magic <= ADDON_HI):
+            raise HTTPException(400, "추가 리밋 주문 번호가 아닙니다.")
+        d = info.digits
+        price = round(float(body["price"]), d)
+        sl = round(float(body.get("sl") or 0), d)
+        lot = _norm_lot(float(body["lot"]), info)
+        now = tick.ask if buy else tick.bid
+        if (price >= now) if buy else (price <= now):
+            raise HTTPException(400, f"리밋 가격 {price:.{d}f} 이 지금 가격 {now:.{d}f} 의 {'아래' if buy else '위'}가 아닙니다 (이미 지나감).")
+        if sl and ((sl >= price) if buy else (sl <= price)):
+            raise HTTPException(400, f"손절 {sl:.{d}f} 이 리밋 가격 {price:.{d}f} 보다 {'아래' if buy else '위'}여야 합니다.")
+        r = mt5.order_send({
+            "action": mt5.TRADE_ACTION_PENDING, "symbol": name, "volume": lot,
+            "type": mt5.ORDER_TYPE_BUY_LIMIT if buy else mt5.ORDER_TYPE_SELL_LIMIT, "price": price,
+            "sl": sl, "tp": 0.0, "magic": magic, "comment": str(body.get("comment") or "TOS addon")[:20],
+            "type_time": mt5.ORDER_TIME_GTC, "type_filling": mt5.ORDER_FILLING_RETURN})
+        if r is None or r.retcode != mt5.TRADE_RETCODE_DONE:
+            raise HTTPException(400, f"리밋 주문 실패: {getattr(r, 'retcode', '?')} {getattr(r, 'comment', mt5.last_error())}")
+        return {"ticket": r.order, "symbol": name, "price": price, "lot": lot, "sl": sl, "digits": d, "magic": magic}
+
+    return await asyncio.to_thread(run)
+
+
+@router.get("/addons")
+async def addon_list(request: Request):
+    state = _state(request)
+    mt5 = state.mt5
+
+    def run():
+        out = []
+        for o in mt5.orders_get() or []:
+            if ADDON_LO <= o.magic <= ADDON_HI:
+                info = mt5.symbol_info(o.symbol)
+                out.append({"ticket": o.ticket, "symbol": o.symbol, "type": o.type, "side": "buy" if o.type in (2, 4) else "sell",
+                            "volume": o.volume_current, "price": o.price_open, "sl": o.sl, "tp": o.tp, "magic": o.magic,
+                            "time": o.time_setup, "digits": getattr(info, "digits", None)})
+        return out
+
+    return await asyncio.to_thread(run)
+
+
+@router.post("/addon-cancel")
+async def addon_cancel(request: Request, body: dict):
+    state = _state(request)
+    mt5 = state.mt5
+    ticket = int(body.get("ticket") or 0)
+
+    def run():
+        o = next((o for o in (mt5.orders_get(ticket=ticket) or []) if ADDON_LO <= o.magic <= ADDON_HI), None)
+        if o is None:
+            return {"ok": True, "gone": True}           # 이미 체결됐거나 취소됨
+        r = mt5.order_send({"action": mt5.TRADE_ACTION_REMOVE, "order": ticket})
+        if r is None or r.retcode != mt5.TRADE_RETCODE_DONE:
+            raise HTTPException(400, f"취소 실패: {getattr(r, 'retcode', '?')} {getattr(r, 'comment', '')}")
+        return {"ok": True}
+
+    return await asyncio.to_thread(run)
+
+
+@router.post("/addon-sl")
+async def addon_sl(request: Request, body: dict):
+    state = _state(request)
+    mt5 = state.mt5
+    ticket = int(body.get("ticket") or 0)
+
+    def run():
+        o = next((o for o in (mt5.orders_get(ticket=ticket) or []) if ADDON_LO <= o.magic <= ADDON_HI), None)
+        if o is None:
+            raise HTTPException(404, "주문이 없습니다 (체결 또는 취소됨).")
+        info = mt5.symbol_info(o.symbol)
+        sl = round(float(body.get("sl") or 0), getattr(info, "digits", 5))
+        r = mt5.order_send({"action": mt5.TRADE_ACTION_MODIFY, "order": ticket, "price": o.price_open, "sl": sl,
+                            "tp": o.tp, "type_time": o.type_time, "expiration": o.time_expiration})
+        if r is None or r.retcode != mt5.TRADE_RETCODE_DONE:
+            raise HTTPException(400, f"SL 바꾸기 실패: {getattr(r, 'retcode', '?')} {getattr(r, 'comment', '')}")
+        return {"ok": True, "sl": sl}
+
+    return await asyncio.to_thread(run)
