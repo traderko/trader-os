@@ -289,7 +289,7 @@ async def _notify_trade(account_id: int, account_number: str, trade_id: int, dat
                     body += "\n\n" + "\n".join(sim)
     except Exception as e:
         print(f"[trade] 알림 문구 만들기 실패: {e}")
-        title, body, buttons = f"[{data.entry_type}] {data.symbol}", f"{data.position} {data.volume:g}lot @{data.price}", None
+        title, body, buttons = f"[{data.entry_type}] {data.symbol}", f"{data.position} {data.volume:g}lot 📍{data.price}", None
     fcm.send(title, body, json.dumps(payload), buttons=buttons)
 
 
@@ -464,7 +464,7 @@ def _side_summary(positions: list[dict]) -> str:
         if side:
             vol = sum(p["volume"] for p in side)
             avg = sum(p["price_open"] * p["volume"] for p in side) / vol if vol else 0
-            out.append(f"{label} {vol:g}lot @{_price(avg)} ({len(side)}개)")
+            out.append(f"{label} {vol:g}lot 📍{_price(avg)} ({len(side)}개)")
     return " · ".join(out)
 
 

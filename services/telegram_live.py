@@ -103,6 +103,11 @@ def _s(v: float) -> str:
     return ("+" if v > 0 else "") + _f(v)
 
 
+def _money(v: float) -> str:
+    """손익 앞에 💰(이익) / 💸(손실)"""
+    return ("💸" if v < 0 else "💰") + _s(v)
+
+
 def _hm(sec: int) -> str:
     sec = max(0, int(sec))
     h, m = divmod(sec // 60, 60)
@@ -147,8 +152,8 @@ def _positions_block(positions: list[dict]) -> list[str]:
             if side:
                 vol = sum(p["volume"] for p in side)
                 avg = sum(p["price_open"] * p["volume"] for p in side) / vol if vol else 0
-                sides.append(f"{label} {_f(vol)} @{_f(avg)}")
-        out.append(f"{icon} <b>{html.escape(sym)}</b>  {' · '.join(sides)}  <b>{_s(profit)}</b>")
+                sides.append(f"{label} {vol:g}lot 📍{_f(avg)}")
+        out.append(f"{icon} <b>{html.escape(sym)}</b>  {' · '.join(sides)}  <b>{_money(profit)}</b>")
         # 구간매매로 넣은 포지션은 따로 (직접 거래와 구분)
         from services.grid import kind_of, MODE_KR
         grids: dict[int, list] = {}
@@ -159,9 +164,9 @@ def _positions_block(positions: list[dict]) -> list[str]:
             mine = [p for p in ps if not kind_of(p.get("magic"))]
             for mg, gp in grids.items():
                 gpl = sum(p["profit"] + (p.get("swap") or 0) for p in gp)
-                out.append(f"    🧱 {MODE_KR[kind_of(mg)]} {len(gp)}개 {_f(sum(p['volume'] for p in gp))}lot  {_s(gpl)}")
+                out.append(f"    🧱 {MODE_KR[kind_of(mg)]} {len(gp)}개 {_f(sum(p['volume'] for p in gp))}lot  {_money(gpl)}")
             if mine:
-                out.append(f"    ✋ 직접 {len(mine)}개 {_f(sum(p['volume'] for p in mine))}lot  {_s(sum(p['profit'] + (p.get('swap') or 0) for p in mine))}")
+                out.append(f"    ✋ 직접 {len(mine)}개 {_f(sum(p['volume'] for p in mine))}lot  {_money(sum(p['profit'] + (p.get('swap') or 0) for p in mine))}")
         if pv is not None:
             proj = []
             for key, label in (("sl", "SL시"), ("tp", "TP시")):
@@ -431,7 +436,7 @@ class TelegramLive:
         avg = sum(p["price_open"] * p["volume"] for p in targets) / vol if vol else me["price_open"]
         d = me.get("digits")
         what = f"#{me['ticket']}" if len(targets) == 1 else f"{len(targets)}개"
-        return f"{html.escape(me['symbol'])} {side} {vol:g}lot @{self._fmt_price(avg, d)} ({what})"
+        return f"{html.escape(me['symbol'])} {side} {vol:g}lot 📍{self._fmt_price(avg, d)} ({what})"
 
     async def pos_button(self, client, token, chat_id: str, data: str) -> str:
         """pos:<sl|tp|be>:<o|a>:<계좌id>:<티켓> 버튼. 콜백 답(짧은 글) 을 돌려줌"""
