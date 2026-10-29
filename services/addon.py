@@ -1,6 +1,6 @@
 # services/addon.py
 #
-# 첫 진입 추가 리밋 - 첫 진입이 끝나면 평균가에서 N KTR 불리한 곳(매도는 위, 매수는 아래)에 같은 랏 리밋 1개.
+# 첫 진입 추가 리밋 - 첫 진입이 끝나면 평균가에서 거리 KTR 마다 불리한 쪽(매도는 위, 매수는 아래)으로 같은 랏 리밋 N개 (addon_n).
 # 설정: 관리 화면 텔레그램 탭 '구간매매' → 첫 진입 추가 리밋 (data/settings.json "grid" 의 addon_*)
 #
 #   첫 진입 = 같은 계좌·종목·방향으로 열린 직접 거래 포지션이 '한 번의 진입'뿐일 때
@@ -161,11 +161,8 @@ async def _evaluate(aid: int, accnum: str, symbol: str, side: str) -> None:
     src = c.get("addon_src") or "mt5"
     ktrs = await _ktrs(aid, symbol, src)
     prop = {"aid": aid, "accnum": accnum, "symbol": symbol, "side": side, "lots": lots, "avg": avg, "sl": sl,
-            "digits": digits, "mult": mult, "ktrs": ktrs, "src": src, "n": len(base), "at": time.time(), "now": now}
-    for tf, k in ktrs.items():
-        if "ktr" in k:
-            k["price"] = round(avg + (mult * k["ktr"] if side == "sell" else -mult * k["ktr"]), digits if isinstance(digits, int) else 5)
-            k["why"] = _invalid(prop, k["price"])
+            "digits": digits, "mult": mult, "ktrs": ktrs, "src": src, "n": len(base), "at": time.time(), "now": now,
+            "count": max(1, min(10, int(c.get("addon_n") or 1)))}
     head = (f"계좌 {accnum} · {symbol} {side.upper()} {lots:g}lot" + (f" ({len(base)}번 나눠)" if len(base) > 1 else "")
             + f" · 평균 {_fmt(avg, digits)}" + (f" · SL {_fmt(sl, digits)}" if sl else " · SL 없음"))
     if c.get("addon_auto"):
@@ -174,17 +171,32 @@ async def _evaluate(aid: int, accnum: str, symbol: str, side: str) -> None:
         if "ktr" not in k:
             _send("⚠️ 추가 리밋 못 걸었음", f"{head}\n{TF_KR[tf]}봉 KTR 을 못 구했습니다: {k.get('error', '?')}")
             return
-        if k["why"]:
-            _send("⚠️ 추가 리밋 안 걸었음", f"{head}\n{TF_KR[tf]}봉 {mult:g}KTR → {_fmt(k['price'], digits)}: {k['why']}")
+        lv = _levels(prop, tf)
+        if not any(not why for _, _, why in lv):
+            _send("⚠️ 추가 리밋 안 걸었음", f"{head}\n{TF_KR[tf]}봉 {mult:g}KTR → {_fmt(lv[0][1], digits)}: {lv[0][2]}")
             return
         await _place_and_tell(prop, tf, title="➕ 추가 리밋 걸었음 (자동)")
         return
-    # 물어보기: KTR 표 + 시간봉 버튼
+    # 물어보기: KTR 표 + 시간봉 버튼 (+ 몇 번 걸지 N)
     key = secrets.token_hex(3)
     _props[key] = prop
     for k_ in [k_ for k_, v in _props.items() if time.time() - v["at"] > 6 * 3600]:
         _props.pop(k_, None)
     _send("➕ 첫 진입 추가 리밋?", _table(prop), _buttons(key, prop))
+
+
+def _levels(prop: dict, tf: str) -> list[tuple[int, float, str]]:
+    """[(번째, 가격, 못 거는 이유)] - i 번째 = 평균가에서 i × 거리 KTR"""
+    k = prop["ktrs"].get(tf) or {}
+    if "ktr" not in k:
+        return []
+    d = prop["digits"] if isinstance(prop["digits"], int) else 5
+    step = prop["mult"] * k["ktr"] * (1 if prop["side"] == "sell" else -1)
+    out = []
+    for i in range(1, prop["count"] + 1):
+        price = round(prop["avg"] + step * i, d)
+        out.append((i, price, _invalid(prop, price)))
+    return out
 
 
 def _invalid(prop: dict, price: float) -> str:
@@ -202,17 +214,25 @@ def _invalid(prop: dict, price: float) -> str:
 def _table(prop: dict) -> str:
     d = prop["digits"]
     sess = next((k.get("session") for k in prop["ktrs"].values() if k.get("session")), "")
+    n = prop["count"]
     lines = [f"계좌 {prop['accnum']} · {prop['symbol']} {prop['side'].upper()} {prop['lots']:g}lot"
              + (f" ({prop['n']}번 나눠)" if prop["n"] > 1 else ""),
              f"평균 {_fmt(prop['avg'], d)}" + (f" · SL {_fmt(prop['sl'], d)}" if prop["sl"] else " · SL 없음"),
-             f"\n{'위' if prop['side'] == 'sell' else '아래'}로 {prop['mult']:g}KTR 에 {prop['lots']:g}lot 리밋 · KTR ({sess} · {'OANDA' if prop['src'] == 'oanda' else 'MT5'})"]
+             f"\n{'위' if prop['side'] == 'sell' else '아래'}로 {prop['mult']:g}KTR 마다 {prop['lots']:g}lot 리밋 {n}개"
+             f" · KTR ({sess} · {'OANDA' if prop['src'] == 'oanda' else 'MT5'})"]
     for tf in TFS:
         k = prop["ktrs"].get(tf) or {}
-        if "ktr" in k:
-            lines.append(f"{TF_KR[tf]:>4}  {_fmt(k['ktr'], d)} → {_fmt(k['price'], d)}" + (f"  ✕ {k['why']}" if k["why"] else ""))
-        else:
+        if "ktr" not in k:
             lines.append(f"{TF_KR[tf]:>4}  - ({k.get('error', '?')})")
-    lines.append("\n시간봉을 누르면 그 가격에 겁니다. 첫 진입을 다 청산하면 리밋은 저절로 취소됩니다.")
+            continue
+        lv = _levels(prop, tf)
+        ok = [p for _, p, why in lv if not why]
+        bad = [why for _, _, why in lv if why]
+        lines.append(f"{TF_KR[tf]:>4}  {_fmt(k['ktr'], d)} → " + " / ".join(_fmt(p, d) for _, p, _ in lv)
+                     + (f"  ✕ {len(bad)}개 {bad[0]}" if bad else ""))
+        if bad and not ok:
+            lines[-1] += " (못 걸음)"
+    lines.append("\n시간봉을 누르면 그 가격들에 겁니다 (✕ 는 빼고). 첫 진입을 다 청산하면 리밋은 저절로 취소됩니다.")
     return "\n".join(lines)
 
 
@@ -220,14 +240,17 @@ def _buttons(key: str, prop: dict) -> list:
     d = prop["digits"]
     row, rows = [], []
     for tf in TFS:
-        k = prop["ktrs"].get(tf) or {}
-        if "ktr" in k and not k["why"]:
-            row.append({"text": f"{TF_KR[tf]} {_fmt(k['price'], d)}", "callback_data": f"ad:p:{key}:{tf}"})
+        lv = [x for x in _levels(prop, tf) if not x[2]]
+        if lv:
+            row.append({"text": f"{TF_KR[tf]} {_fmt(lv[0][1], d)}" + (f" ×{len(lv)}" if len(lv) > 1 else ""),
+                        "callback_data": f"ad:p:{key}:{tf}"})
             if len(row) == 2:
                 rows.append(row)
                 row = []
     if row:
         rows.append(row)
+    # 몇 개 걸지 (N) - 누르면 표가 바뀜
+    rows.append([{"text": ("✓" if prop["count"] == i else "") + f"N{i}", "callback_data": f"ad:k:{key}:{i}"} for i in range(1, 6)])
     rows.append([{"text": "안 걸기", "callback_data": f"ad:n:{key}"}])
     return rows
 
@@ -242,11 +265,24 @@ async def _place(prop: dict, tf: str) -> dict:
     addons = await worker_get(prop["aid"], "/grid/addons")
     if any(o["symbol"] == prop["symbol"] and o["side"] == prop["side"] for o in addons):
         raise RuntimeError("이미 추가 리밋이 걸려 있습니다.")
-    k = prop["ktrs"][tf]
-    sl = _common_sl(base) if cfg().get("addon_sl_follow", True) else 0.0
-    return await worker_post(prop["aid"], "/grid/addon", {
-        "symbol": prop["symbol"], "side": prop["side"], "price": k["price"], "lot": prop["lots"], "sl": sl,
-        "magic": ADDON_LO + random.randint(0, 99_999), "comment": f"TOS addon {TF_KR[tf]}"})
+    prop = dict(prop, sl=_common_sl(base) if cfg().get("addon_sl_follow", True) else 0.0,
+                now=base[0].get("price_current") or prop["now"])
+    magic = ADDON_LO + random.randint(0, 99_999)            # 이번에 거는 리밋들은 같은 번호 (한꺼번에 취소)
+    placed, failed = [], []
+    for i, price, why in _levels(prop, tf):
+        if why:
+            failed.append(f"{i}번째 {_fmt(price, prop['digits'])}: {why}")
+            continue
+        try:
+            r = await worker_post(prop["aid"], "/grid/addon", {
+                "symbol": prop["symbol"], "side": prop["side"], "price": price, "lot": prop["lots"], "sl": prop["sl"],
+                "magic": magic, "comment": f"TOS addon {TF_KR[tf]} {i}"})
+            placed.append(r)
+        except Exception as e:
+            failed.append(f"{i}번째 {_fmt(price, prop['digits'])}: {str(getattr(e, 'detail', e))[:80]}")
+    if not placed:
+        raise RuntimeError("하나도 못 걸었습니다 - " + "; ".join(failed))
+    return {"magic": magic, "placed": placed, "failed": failed, "sl": prop["sl"], "digits": placed[0].get("digits", prop["digits"])}
 
 
 async def _place_and_tell(prop: dict, tf: str, title: str) -> str:
@@ -256,16 +292,19 @@ async def _place_and_tell(prop: dict, tf: str, title: str) -> str:
         msg = str(getattr(e, "detail", e))[:200]
         _send("⚠️ 추가 리밋 실패", f"계좌 {prop['accnum']} · {prop['symbol']} {prop['side'].upper()}\n{msg}")
         return f"실패: {msg}"[:190]
-    _send(title, _placed_text(prop, tf, r), [[{"text": "❌ 리밋 취소", "callback_data": f"ad:c:{prop['aid']}:{r['ticket']}"}]])
+    _send(title, _placed_text(prop, tf, r), [[{"text": "❌ 리밋 취소", "callback_data": f"ad:c:{prop['aid']}:{r['magic']}"}]])
     return "걸었습니다"
 
 
 def _placed_text(prop: dict, tf: str, r: dict) -> str:
     d = r.get("digits", prop["digits"])
     k = prop["ktrs"][tf]
-    return (f"계좌 {prop['accnum']} · {prop['symbol']} {prop['side'].upper()} {r['lot']:g}lot 리밋 @{_fmt(r['price'], d)}"
-            f"\n{TF_KR[tf]}봉 KTR {_fmt(k['ktr'], d)} × {prop['mult']:g} · 첫 진입 평균 {_fmt(prop['avg'], d)}"
+    ps = r["placed"]
+    return (f"계좌 {prop['accnum']} · {prop['symbol']} {prop['side'].upper()} {ps[0]['lot']:g}lot 리밋 {len(ps)}개 @"
+            + " / ".join(_fmt(x["price"], d) for x in ps)
+            + f"\n{TF_KR[tf]}봉 KTR {_fmt(k['ktr'], d)} × {prop['mult']:g} 간격 · 첫 진입 평균 {_fmt(prop['avg'], d)}"
             + (f" · SL {_fmt(r['sl'], d)}" if r.get("sl") else " · SL 없음")
+            + ("\n못 건 것: " + "; ".join(r["failed"]) if r.get("failed") else "")
             + "\n첫 진입을 다 청산하면 저절로 취소됩니다.")
 
 
@@ -273,17 +312,18 @@ def _placed_text(prop: dict, tf: str, r: dict) -> str:
 async def button(live, client, token, chat_id: str, data: str, message_id) -> str:
     parts = data.split(":")
     act = parts[1] if len(parts) > 1 else ""
-    if act == "c":                                # 걸어 둔 리밋 취소
+    if act == "c":                                # 걸어 둔 리밋 취소 (같은 번호 전부)
         from services.worker_client import worker_post
-        aid, ticket = int(parts[2]), int(parts[3])
+        aid, magic = int(parts[2]), int(parts[3])
         try:
-            r = await worker_post(aid, "/grid/addon-cancel", {"ticket": ticket})
+            r = await worker_post(aid, "/grid/addon-cancel", {"magic": magic})
         except Exception as e:
             return f"취소 실패: {getattr(e, 'detail', e)}"[:190]
-        note = "이미 체결됐거나 취소된 주문입니다" if r.get("gone") else "리밋을 취소했습니다"
+        n = r.get("cancelled", 0)
+        note = f"리밋 {n}개를 취소했습니다" if n else "이미 체결됐거나 취소된 주문입니다"
         await live._call(client, token, "editMessageReplyMarkup", chat_id=chat_id, message_id=message_id,
                          reply_markup={"inline_keyboard": []})
-        await live._send(client, token, chat_id, f"❌ 추가 리밋 #{ticket}: {note}")
+        await live._send(client, token, chat_id, f"❌ 추가 리밋: {note}")
         return note
     prop = _props.get(parts[2]) if len(parts) > 2 else None
     if prop is None:
@@ -295,9 +335,14 @@ async def button(live, client, token, chat_id: str, data: str, message_id) -> st
         await live._call(client, token, "editMessageReplyMarkup", chat_id=chat_id, message_id=message_id,
                          reply_markup={"inline_keyboard": []})
         return "안 걸었습니다"
+    if act == "k":                                # N 바꾸기 → 표·버튼 다시
+        prop["count"] = max(1, min(10, int(parts[3])))
+        await live._call(client, token, "editMessageText", chat_id=chat_id, message_id=message_id,
+                         text="➕ 첫 진입 추가 리밋?\n" + _table(prop), reply_markup={"inline_keyboard": _buttons(parts[2], prop)})
+        return f"N = {prop['count']}"
     if act == "p":
         tf = parts[3]
-        if tf not in prop["ktrs"] or "price" not in prop["ktrs"][tf]:
+        if not _levels(prop, tf):
             return "그 시간봉 KTR 이 없습니다"
         try:
             r = await _place(prop, tf)
@@ -306,7 +351,7 @@ async def button(live, client, token, chat_id: str, data: str, message_id) -> st
         _props.pop(parts[2], None)
         await live._call(client, token, "editMessageText", chat_id=chat_id, message_id=message_id, parse_mode="HTML",
                          text="✅ <b>추가 리밋 걸었음</b>\n" + html.escape(_placed_text(prop, tf, r)),
-                         reply_markup={"inline_keyboard": [[{"text": "❌ 리밋 취소", "callback_data": f"ad:c:{prop['aid']}:{r['ticket']}"}]]})
+                         reply_markup={"inline_keyboard": [[{"text": "❌ 리밋 취소", "callback_data": f"ad:c:{prop['aid']}:{r['magic']}"}]]})
         return "걸었습니다"
     return ""
 

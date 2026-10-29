@@ -205,7 +205,7 @@ async def grid_detail(request: Request, magic: int):
 #   magic 71800000 ~ 71899999 (구간매매 71700000~ 와 따로 - 구간 목록에 안 섞이게)
 #   POST /grid/addon         {symbol, side, price, lot, sl, magic, comment}  리밋 주문
 #   GET  /grid/addons        걸려 있는 추가 리밋들
-#   POST /grid/addon-cancel  {ticket}
+#   POST /grid/addon-cancel  {ticket} 또는 {magic} (한 번에 건 N개 전부)
 #   POST /grid/addon-sl      {ticket, sl}   SL 따라가기
 ADDON_LO, ADDON_HI = 71_800_000, 71_899_999
 
@@ -270,16 +270,22 @@ async def addon_list(request: Request):
 async def addon_cancel(request: Request, body: dict):
     state = _state(request)
     mt5 = state.mt5
-    ticket = int(body.get("ticket") or 0)
+    ticket, magic = int(body.get("ticket") or 0), int(body.get("magic") or 0)
 
     def run():
-        o = next((o for o in (mt5.orders_get(ticket=ticket) or []) if ADDON_LO <= o.magic <= ADDON_HI), None)
-        if o is None:
-            return {"ok": True, "gone": True}           # 이미 체결됐거나 취소됨
-        r = mt5.order_send({"action": mt5.TRADE_ACTION_REMOVE, "order": ticket})
-        if r is None or r.retcode != mt5.TRADE_RETCODE_DONE:
-            raise HTTPException(400, f"취소 실패: {getattr(r, 'retcode', '?')} {getattr(r, 'comment', '')}")
-        return {"ok": True}
+        # ticket 하나, 또는 magic 이 같은 리밋 전부 (한 번에 건 N개)
+        orders = [o for o in (mt5.orders_get() or []) if ADDON_LO <= o.magic <= ADDON_HI
+                  and ((ticket and o.ticket == ticket) or (magic and o.magic == magic))]
+        cancelled, errors = 0, []
+        for o in orders:
+            r = mt5.order_send({"action": mt5.TRADE_ACTION_REMOVE, "order": o.ticket})
+            if r is not None and r.retcode == mt5.TRADE_RETCODE_DONE:
+                cancelled += 1
+            else:
+                errors.append(f"#{o.ticket} {getattr(r, 'retcode', '?')} {getattr(r, 'comment', '')}")
+        if errors and not cancelled:
+            raise HTTPException(400, "취소 실패: " + "; ".join(errors))
+        return {"ok": True, "cancelled": cancelled, "gone": not orders, "errors": errors}
 
     return await asyncio.to_thread(run)
 
