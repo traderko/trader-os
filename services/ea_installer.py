@@ -191,7 +191,10 @@ def build_if_changed(terminal_dir: str | None = None, data_dir: str | None = Non
             name = os.path.basename(src)
             h = _sha(src)
             ex5 = os.path.splitext(src)[0] + ".ex5"
-            if stamp.get(name) == h and os.path.isfile(ex5):
+            st = stamp.get(name)
+            # 소스도 그대로고 .ex5 도 우리가 만든 그 파일이면 건너뜀.
+            # (업데이트 zip 에 든 예전 .ex5 가 새로 컴파일한 걸 덮어쓰면 소스가 같아도 다시 컴파일해야 함)
+            if isinstance(st, dict) and st.get("src") == h and os.path.isfile(ex5) and st.get("ex5") == _sha(ex5):
                 continue
             if h in _build_failed:
                 continue
@@ -211,7 +214,8 @@ def build_if_changed(terminal_dir: str | None = None, data_dir: str | None = Non
         for src, name, h in todo:
             ok, msg = compile_one(src, metaeditor, inc)
             if ok:
-                stamp[name] = h
+                ex5 = os.path.splitext(src)[0] + ".ex5"
+                stamp[name] = {"src": h, "ex5": _sha(ex5) if os.path.isfile(ex5) else ""}
                 built.append(os.path.splitext(name)[0] + ".ex5")
                 print(f"[ea] {name} 컴파일 완료 ({msg})")
             else:
