@@ -928,6 +928,9 @@ class TelegramLive:
                 elif mine and (text.startswith("/근거") or text.startswith("/reasons")):
                     from services import telegram_tags
                     await telegram_tags.cmd_reasons(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                elif mine and (text.startswith("/지표") or text.startswith("/events")):
+                    from services import telegram_events
+                    await telegram_events.cmd_events(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                 elif mine and text.startswith("/pos"):
                     await self.show_positions(client, token, cid)
                 elif mine and text.startswith("/cancel"):
@@ -994,6 +997,13 @@ class TelegramLive:
                                                                         (cb.get("message") or {}).get("message_id"))
                         except Exception as e:
                             answer = f"실패: {e}"[:190]
+                elif data.startswith("ev:"):          # /지표 새로고침·주요만 (services/telegram_events.py)
+                    from services import telegram_events
+                    try:
+                        answer = await telegram_events.button(self, client, token, cid, data,
+                                                              (cb.get("message") or {}).get("message_id"))
+                    except Exception as e:
+                        answer = f"실패: {e}"[:190]
                 elif data.startswith("mt5:"):         # MT5 재시작 (services/telegram_mt5.py)
                     if cid != str(telegram_cfg()["chat_id"] or ""):
                         answer = "등록된 대화에서만 쓸 수 있습니다"
@@ -1056,6 +1066,7 @@ class TelegramLive:
                                 {"command": "grids", "description": "진행 중인 구간매매·청산"},
                                 {"command": "ktr", "description": "KTR 표 (장 × 시간봉)"},
                                 {"command": "reasons", "description": "근거 없는 거래 모아 보기 (/근거 3일)"},
+                                {"command": "events", "description": "이번 주 지표 발표·지표일 잠금 (/지표)"},
                                 {"command": "sim", "description": "청산 시뮬레이션 (알림 미리보기)"},
                                 {"command": "update", "description": "새 버전 확인·업데이트"},
                                 {"command": "cancel", "description": "잠금 풀기 그만두기"},
