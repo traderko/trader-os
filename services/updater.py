@@ -114,6 +114,7 @@ def summary() -> dict:
         "current": current,
         "repo": info["repo"] if info else None,
         "latest": latest or None,
+        "notes_all": all_notes_text(latest, current) if latest else "",
         "available": bool(info and latest.get("version") and _ver(latest["version"]) > _ver(current)),
         "checked_at": st.get("checked_at"),
         "pending_restart": os.path.exists(FLAG_FILE),
@@ -147,6 +148,8 @@ async def check(notify: bool = True) -> dict:
             "asset_size": asset.get("size") if asset else None,
             "asset_digest": asset.get("digest") if asset else None,   # "sha256:..." (GitHub 가 알려주면)
         }
+        # 지금 버전 다음부터 최신까지 모든 릴리스의 노트 (여러 버전을 건너뛰어도 바뀐 점을 다 보이게)
+        latest["between"] = await _between(info["repo"], info["version"], latest)
         st = _read_state()
         st.update(latest=latest, checked_at=time.time())
         newer = _ver(latest["version"]) > _ver(info["version"])
@@ -164,6 +167,46 @@ async def check(notify: bool = True) -> dict:
     finally:
         status["checking"] = False
     return summary()
+
+
+async def _between(repo: str, current: str, latest: dict) -> list[dict]:
+    """current < 버전 <= latest 인 릴리스들 (오래된 것부터) [{version, name, notes, published_at, url}]"""
+    out: list[dict] = []
+    try:
+        async with httpx.AsyncClient(timeout=20, follow_redirects=True) as c:
+            for page in (1, 2, 3):
+                r = await c.get(f"{GITHUB_API}/repos/{repo}/releases", params={"per_page": 50, "page": page},
+                                headers={"Accept": "application/vnd.github+json", "User-Agent": "TraderOS-updater"})
+                r.raise_for_status()
+                rows = r.json()
+                for rel in rows:
+                    if rel.get("draft") or rel.get("prerelease"):
+                        continue
+                    v = (rel.get("tag_name") or "").lstrip("vV")
+                    if _ver(current) < _ver(v) <= _ver(latest["version"]):
+                        out.append({"version": v, "name": rel.get("name") or rel.get("tag_name"),
+                                    "notes": (rel.get("body") or "")[:4000], "published_at": rel.get("published_at"),
+                                    "url": rel.get("html_url")})
+                # 목록은 최신순 - 지금 버전보다 오래된 게 나오면 더 볼 필요 없음
+                if len(rows) < 50 or any(_ver((x.get("tag_name") or "").lstrip("vV")) <= _ver(current) for x in rows):
+                    break
+    except Exception as e:
+        print(f"[update] 릴리스 목록 실패 (최신 노트만 보여줌): {e}")
+    if not any(x["version"] == latest["version"] for x in out):
+        out.append({k: latest.get(k) for k in ("version", "name", "notes", "published_at", "url")})
+    return sorted(out, key=lambda x: _ver(x["version"]))
+
+
+def all_notes_text(latest: dict, current: str | None = None) -> str:
+    """관리 화면 '바뀐 점' - 버전별로 (최신이 위)"""
+    rows = latest.get("between") or [latest]
+    if current:
+        rows = [x for x in rows if _ver(x["version"]) > _ver(current)]
+    parts = []
+    for x in sorted(rows, key=lambda x: _ver(x["version"]), reverse=True):
+        head = f"■ {x['version']}" + (f"  ({(x.get('published_at') or '')[:10]})" if x.get("published_at") else "")
+        parts.append(head + "\n" + (x.get("notes") or "(노트 없음)").strip())
+    return "\n\n".join(parts)
 
 
 def _plain_notes(notes: str, limit: int = 1500) -> str:
@@ -191,9 +234,25 @@ def offer_message(current: str, latest: dict) -> tuple[str, str, list]:
         body.append(latest["name"])
     if latest.get("published_at"):
         body.append(f"공개: {latest['published_at'][:10]}")
-    notes = _plain_notes(latest.get("notes") or "")
-    if notes:
-        body += ["", "📝 릴리스 노트", notes]
+    rows = [x for x in (latest.get("between") or [latest]) if _ver(x["version"]) > _ver(current)]
+    rows = sorted(rows, key=lambda x: _ver(x["version"]), reverse=True)     # 최신이 위
+    if len(rows) > 1:
+        body += ["", f"📝 바뀐 점 ({current} 다음부터 {len(rows)}개 버전)"]
+    elif rows:
+        body += ["", "📝 릴리스 노트"]
+    budget, shown = 2800, 0
+    for x in rows:
+        notes = _plain_notes(x.get("notes") or "", limit=max(300, budget // max(1, len(rows))))
+        block = (f"▶ {x['version']}" + (f" ({x['published_at'][:10]})" if x.get("published_at") else "")
+                 + ("\n" + notes if notes else ""))
+        if budget - len(block) < 0 and shown:
+            body.append(f"… 그 전 {len(rows) - shown}개 버전은 관리 화면 '업데이트' 탭에서")
+            break
+        body += [block, ""]
+        budget -= len(block)
+        shown += 1
+    while body and body[-1] == "":
+        body.pop()
     body += ["", "업데이트하면 서버가 1~2분 꺼졌다 켜집니다 (그동안 잠금 감시도 멈춤).",
              "설정·DB·사진은 그대로 남습니다."]
     row = [{"text": "⬆️ 업데이트", "callback_data": f"upd:ask:{latest['version']}"}]

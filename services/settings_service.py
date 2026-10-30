@@ -73,6 +73,7 @@ DEFAULTS: dict = {
         "live_enabled": True,
         "live_interval_sec": 10,
         "live_position": "top",      # top: 맨 위 고정 / bottom: 항상 마지막 메시지로 유지
+        "live_grid_button": False,   # 실시간 현황 아래 [🧱 구간매매] 버튼 보이기 (기본 숨김 - /grid 는 그대로)
         # 진입·청산 알림 (api/trade.py)
         "trade_sim": True,           # 알림 아래에 랏 배수 시뮬레이션 ("10배였다면" 손익·증거금·오늘 누적)
         "trade_sim_mult": [10],      # 몇 배로 볼지 (여러 개 가능, 예: [5, 10])
@@ -279,6 +280,7 @@ def telegram_cfg() -> dict:
         "live_enabled": bool(t.get("live_enabled", True)),
         "live_interval_sec": int(t.get("live_interval_sec") or 10),
         "live_position": "bottom" if t.get("live_position") == "bottom" else "top",
+        "live_grid_button": bool(t.get("live_grid_button", False)),
         "trade_sim": bool(t.get("trade_sim", True)),
         "trade_batch_sec": int(t.get("trade_batch_sec", 3) or 0),
         "trade_sim_mult": [float(x) for x in (t.get("trade_sim_mult") or []) if isinstance(x, (int, float))],
@@ -313,6 +315,7 @@ def _validate(settings: dict) -> None:
         raise SettingsError(f"실시간 현황 갱신 간격은 5~300초 사이 정수여야 합니다. (입력: {iv})")
     if tg.get("live_position", "top") not in ("top", "bottom"):
         raise SettingsError("실시간 현황 위치는 top 또는 bottom 이어야 합니다.")
+    tg["live_grid_button"] = bool(tg.get("live_grid_button", False))
     tg["trade_sim"] = bool(tg.get("trade_sim", True))
     mult = tg.get("trade_sim_mult", [10])
     if isinstance(mult, str):

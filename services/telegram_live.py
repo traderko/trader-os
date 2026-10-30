@@ -332,8 +332,11 @@ class TelegramLive:
             rows.append([{"text": f"🛑 SL · {who}"[:40], "callback_data": f"pos:sl:{key}"},
                          {"text": "🎯 TP", "callback_data": f"pos:tp:{key}"},
                          {"text": "⚖️ 본전", "callback_data": f"pos:be:{key}"}])
-        rows.append([{"text": "🔄 새로고침", "callback_data": "live:refresh"}, {"text": "🧱 구간매매", "callback_data": "gw:new"},
-                     {"text": "🔁 MT5", "callback_data": "mt5:ask"}])
+        last = [{"text": "🔄 새로고침", "callback_data": "live:refresh"}]
+        if telegram_cfg().get("live_grid_button", False):       # 관리 화면에서 켤 수 있음 (기본 숨김)
+            last.append({"text": "🧱 구간매매", "callback_data": "gw:new"})
+        last.append({"text": "🔁 MT5", "callback_data": "mt5:ask"})
+        rows.append(last)
         return {"inline_keyboard": rows}
 
     async def _send(self, client, token, chat_id, text: str, **extra) -> dict:

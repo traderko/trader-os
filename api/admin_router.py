@@ -337,7 +337,7 @@ async def write_settings(body: dict):
             patch["telegram"]["bot_token"] = ""
         if "chat_id" in tg:
             patch["telegram"]["chat_id"] = tg["chat_id"]
-        for k in ("live_enabled", "live_interval_sec", "live_position", "trade_sim", "trade_batch_sec", "trade_sim_mult", "reason_remind"):
+        for k in ("live_enabled", "live_interval_sec", "live_position", "live_grid_button", "trade_sim", "trade_batch_sec", "trade_sim_mult", "reason_remind"):
             if k in tg:
                 patch["telegram"][k] = tg[k]
 

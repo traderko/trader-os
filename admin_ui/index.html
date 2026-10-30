@@ -442,6 +442,8 @@
         <input type="number" id="tgLiveSec" min="5" max="300" style="width:80px"><span class="unit">초마다</span></div>
       <div class="row"><label class="name">현황 위치<small>맨 아래 유지: 다른 알림이 오면 현황을 지우고 맨 아래에 다시 보냄 (안 읽은 숫자가 하나씩 오름)</small></label>
         <select id="tgLivePos"><option value="top">맨 위 고정 (기존)</option><option value="bottom">맨 아래 유지</option></select></div>
+      <div class="row"><label class="name">현황 아래 [🧱 구간매매] 버튼<small>기본은 숨김 · 숨겨도 /grid 명령은 그대로</small></label>
+        <label class="switch"><input type="checkbox" id="tgGridBtn"> 보이기</label></div>
       <div class="row"><label class="name">체결 알림에 랏 배수 시뮬레이션<small>"이 체결을 N배 랏으로 했다면" - 청산: 손익·수수료·잔고 대비 %·필요 증거금·오늘 누적 / 진입: 필요 증거금, SL 닿으면 손익</small></label>
         <label class="switch"><input type="checkbox" id="tgSim"> 켜기</label>
         <input type="text" id="tgSimMult" style="width:110px" placeholder="예: 5, 10"><span class="unit">배</span></div>
@@ -1016,7 +1018,7 @@ const DEF_FIELDS = [   // [칸, 기본값 가져오기]
       'daily_loss_warn_pct', 'daily_loss_block_pct', 'daily_loss_close_pct', 'manual_lock_max_minutes', 'weekend_off']
     .map((k) => [`#rules [data-k="${k}"]`, (d) => d.lock[k]]),
   ['#tgLive', (d) => d.telegram.live_enabled], ['#tgLiveSec', (d) => d.telegram.live_interval_sec],
-  ['#tgLivePos', (d) => d.telegram.live_position], ['#tgSim', (d) => d.telegram.trade_sim],
+  ['#tgLivePos', (d) => d.telegram.live_position], ['#tgGridBtn', (d) => d.telegram.live_grid_button], ['#tgSim', (d) => d.telegram.trade_sim],
   ['#tgSimMult', (d) => (d.telegram.trade_sim_mult || []).join(', ')], ['#tgBatch', (d) => d.telegram.trade_batch_sec],
   ['#rrOn', (d) => d.telegram.reason_remind.enabled], ['#rrMode', (d) => d.telegram.reason_remind.mode],
   ['#rrTimes', (d) => d.telegram.reason_remind.times.join(', ')], ['#rrEvery', (d) => String(d.telegram.reason_remind.every_hours)],
@@ -1205,6 +1207,7 @@ function fillTelegram() {
   $('tgLive').checked = t.live_enabled !== false;
   $('tgLiveSec').value = t.live_interval_sec || 10;
   $('tgLivePos').value = t.live_position === 'bottom' ? 'bottom' : 'top';
+  $('tgGridBtn').checked = t.live_grid_button === true;
   $('tgSim').checked = t.trade_sim !== false;
   $('tgSimMult').value = (t.trade_sim_mult || [10]).join(', ');
   $('tgBatch').value = t.trade_batch_sec ?? 3;
@@ -1220,7 +1223,7 @@ function fillTelegram() {
 }
 async function saveTelegram(extra = {}) {
   const telegram = { chat_id: $('tgChat').value.trim(), live_enabled: $('tgLive').checked,
-    live_interval_sec: Number($('tgLiveSec').value) || 10, live_position: $('tgLivePos').value,
+    live_interval_sec: Number($('tgLiveSec').value) || 10, live_position: $('tgLivePos').value, live_grid_button: $('tgGridBtn').checked,
     trade_sim: $('tgSim').checked, trade_batch_sec: Math.max(0, Math.round(Number($('tgBatch').value) || 0)),
     trade_sim_mult: $('tgSimMult').value,
     reason_remind: { enabled: $('rrOn').checked, mode: $('rrMode').value, times: $('rrTimes').value,
@@ -1599,7 +1602,7 @@ function renderUpdate(u) {
     </dl>
     ${u.error ? `<div class="warnbar">${esc(u.error)}</div>` : ''}
     <div style="margin-top:12px">${action}</div>
-    ${u.available && L.notes ? `<h3 style="margin-top:16px">바뀐 점</h3><pre class="log" style="height:auto;max-height:320px">${esc(L.notes)}</pre>` : ''}`;
+    ${u.available && (u.notes_all || L.notes) ? `<h3 style="margin-top:16px">바뀐 점 <small style="font-weight:400;color:var(--muted)">(${esc(u.current)} 다음부터 ${esc(L.version)}까지${(L.between || []).length > 1 ? ` · ${(L.between || []).filter((x) => x.version !== u.current).length}개 버전` : ''})</small></h3><pre class="log" style="height:auto;max-height:480px">${esc(u.notes_all || L.notes)}</pre>` : ''}`;
 }
 async function loadUpdate(check) {
   try { renderUpdate(await api('update' + (check ? '?check=true' : ''))); }
