@@ -83,6 +83,34 @@ def _proj(p: dict, price: float) -> float:
     return (price - p["price_open"]) * d * p["volume"] * _point_value(p)
 
 
+def _parse_amount(t: str) -> tuple[float, bool] | None:
+    """'-200' '+100' '$-200' '-$200' '-2%' → (값, %인지). 가격(부호 없는 숫자)이면 None"""
+    t = (t or "").strip().replace(",", "").replace(" ", "").replace("$", "")
+    if not t or t[0] not in "+-":
+        return None
+    pct = t.endswith("%")
+    try:
+        v = float(t.rstrip("%"))
+    except ValueError:
+        return None
+    return (v, pct) if v else None
+
+
+async def _fee_rate(aid: int, symbol: str) -> float:
+    """이 계좌·종목 최근 청산 50건의 랏당 평균 수수료 (기록이 없으면 0) - services/simulate.py 와 같은 방식"""
+    try:
+        from db.models.trade import Trade
+        async with AsyncSessionLocal() as db:
+            rows = (await db.execute(
+                select(Trade.commission, Trade.volume).where(
+                    Trade.account_id == aid, Trade.symbol == symbol, Trade.close_time != None)
+                .order_by(Trade.close_time.desc()).limit(50))).all()
+        lots = sum(v or 0 for _, v in rows)
+        return (sum(c or 0 for c, _ in rows) / lots) if lots else 0.0
+    except Exception:
+        return 0.0
+
+
 async def _balance(aid: int) -> float | None:
     try:
         info = await asyncio.wait_for(worker_get(aid, "/account-info"), 5)
@@ -467,7 +495,20 @@ class TelegramLive:
         return f"{html.escape(me['symbol'])} {side} {vol:g}lot 📍{self._fmt_price(avg, d)} ({what})"
 
     async def pos_button(self, client, token, chat_id: str, data: str) -> str:
-        """pos:<sl|tp|be>:<o|a>:<계좌id>:<티켓> 버튼. 콜백 답(짧은 글) 을 돌려줌"""
+        """pos:<sl|tp|be>:<o|a>:<계좌id>:<티켓> 버튼. 콜백 답(짧은 글) 을 돌려줌
+        pos:set:<sl|tp>:<o|a>:<계좌id>:<티켓>:<가격> - 금액으로 계산한 가격 확인 후 [✅ 이 가격으로] 버튼"""
+        if data.startswith("pos:set:"):
+            try:
+                _, _, field, scope, aid, ticket, price = data.split(":")
+                aid, ticket, price = int(aid), int(ticket), float(price)
+            except ValueError:
+                return "잘못된 버튼"
+            me, targets = await self._targets(aid, ticket, scope)
+            if me is None:
+                await self._send(client, token, chat_id, "이 포지션은 이미 청산됐거나 MT5에 연결되지 않았습니다.")
+                return "포지션 없음"
+            self._bg(self._apply_level(client, token, chat_id, aid, field, price, targets, me))
+            return ("SL" if field == "sl" else "TP") + " 설정 중"
         try:
             _, field, scope, aid, ticket = data.split(":")
             aid, ticket = int(aid), int(ticket)
@@ -491,8 +532,9 @@ class TelegramLive:
             f"{self._describe(me, targets)}\n{label} 가격을 보내세요.\n"
             f"현재가 {self._fmt_price(me.get('price_current'), me.get('digits'))}"
             + (f" · 지금 {label.split('(')[0]} {self._fmt_price(cur, me.get('digits'))}" if len(targets) == 1 else "")
+            + "\n금액도 됩니다: <code>-200</code> 손실 200 자리 · <code>+100</code> 수익 100 자리 · <code>-2%</code> 잔고의 2%"
             + "\n0 을 보내면 해제 · 그만두려면 /cancel",
-            reply_markup={"force_reply": True, "input_field_placeholder": "예: 3990.5"},
+            reply_markup={"force_reply": True, "input_field_placeholder": "예: 3990.5 또는 -200"},
         )
         if r.get("ok"):
             self.pending[chat_id] = {"type": "pos", "field": field, "aid": aid, "ticket": ticket, "scope": scope,
@@ -508,10 +550,19 @@ class TelegramLive:
         t = text.strip().replace(",", "")
         if t in ("없음", "해제"):
             t = "0"
+        amt = _parse_amount(t)
+        if amt is not None:
+            me, targets = await self._targets(p["aid"], p["ticket"], p["scope"])
+            self.pending.pop(chat_id, None)
+            if me is None:
+                await self._send(client, token, chat_id, "이 포지션은 이미 청산됐거나 MT5에 연결되지 않았습니다.")
+                return
+            await self._send_amount_level(client, token, chat_id, p["aid"], me, targets, amt, p["field"], p["scope"])
+            return
         try:
             price = float(t)
         except ValueError:
-            await self._send(client, token, chat_id, "숫자로 보내 주세요. (예: 3990.5, 해제는 0 · 그만두려면 /cancel)")
+            await self._send(client, token, chat_id, "가격이나 금액으로 보내 주세요. (예: 3990.5 · -200 · +100 · -2%, 해제는 0 · 그만두려면 /cancel)")
             return
         me, targets = await self._targets(p["aid"], p["ticket"], p["scope"])
         self.pending.pop(chat_id, None)
@@ -519,6 +570,80 @@ class TelegramLive:
             await self._send(client, token, chat_id, "이 포지션은 이미 청산됐거나 MT5에 연결되지 않았습니다.")
             return
         self._bg(self._apply_level(client, token, chat_id, p["aid"], p["field"], price, targets, me))
+
+    async def _level_for(self, aid: int, targets: list[dict], amount: float) -> dict:
+        """같은 종목·방향 포지션들이 '수수료·스왑 포함' amount 손익이 되는 가격.
+        손익이 amount 보다 나빠지지 않는 쪽으로 반올림 (손실 -200 → -199.9, 수익 +100 → +100.1)"""
+        me = targets[0]
+        d = 1 if me["type"] == 0 else -1
+        vol = sum(p["volume"] for p in targets)
+        avg = sum(p["price_open"] * p["volume"] for p in targets) / vol
+        swap = sum(p.get("swap") or 0 for p in targets)
+        fee = -abs(await _fee_rate(aid, me["symbol"])) * vol            # 청산까지 합친 랏당 평균 수수료 (최근 기록)
+        pv = _point_value(me)
+        need = amount - swap - fee                                       # 가격 손익으로 만들어야 하는 금액
+        price = avg + d * need / (vol * pv)
+        try:                                                             # 환율이 낀 종목은 MT5 계산으로 한 번 보정
+            r = await asyncio.wait_for(worker_get(aid, "/calc", {"symbol": me["symbol"], "side": "BUY" if d > 0 else "SELL",
+                                                                 "volume": vol, "price_open": avg, "price_close": price}), 5)
+            move = (price - avg) * d * vol
+            if r.get("profit") is not None and abs(move) > 1e-9 and abs(r["profit"]) > 1e-9:
+                pv = r["profit"] / move
+                price = avg + d * need / (vol * pv)
+        except Exception:
+            pass
+        dg = me.get("digits") if isinstance(me.get("digits"), int) else 2
+        step = 10 ** -dg
+        import math
+        price = (math.ceil(price / step - 1e-9) if d > 0 else math.floor(price / step + 1e-9)) * step
+        price = round(price, dg)
+        at = (price - avg) * d * vol * pv + swap + fee
+        cur = me.get("price_current") or 0
+        now = sum(p.get("profit") or 0 for p in targets) + swap + fee
+        return {"price": price, "at": at, "now": now, "cur": cur, "d": d, "digits": dg, "fee": fee, "swap": swap,
+                "sl_ok": bool(cur) and (price - cur) * d < 0, "tp_ok": bool(cur) and (price - cur) * d > 0}
+
+    async def _send_amount_level(self, client, token, chat_id, aid: int, me: dict, targets: list[dict],
+                                 amt: tuple, field: str | None, scope: str) -> None:
+        """금액 → 가격 미리보기 + [✅ 이 가격으로 SL/TP]. field 가 None 이면(/calc) 걸 수 있는 쪽 버튼만"""
+        value, is_pct = amt
+        bal = await _balance(aid)
+        if is_pct:
+            if not bal:
+                await self._send(client, token, chat_id, "잔고를 읽지 못해 %로 계산할 수 없습니다. 금액으로 보내 주세요.")
+                return
+            value = bal * value / 100
+        L = await self._level_for(aid, targets, value)
+        dg = L["digits"]
+        dist = abs(L["price"] - L["cur"]) if L["cur"] else None
+        arrow = "🔺" if L["price"] > L["cur"] else "🔻"
+        lines = [self._describe(me, targets) + f" · 지금 {self._fmt_price(L['cur'], dg)} ({_money(L['now'])})",
+                 f"{'손실' if value < 0 else '수익'} {_money(value)}{' (잔고 ' + format(amt[0], 'g') + '%)' if is_pct else ''}"
+                 f" → <b>{self._fmt_price(L['price'], dg)}</b>" + (f" (지금가에서 {arrow}{dist:,.{dg}f})" if dist is not None else ""),
+                 f"여기서 청산되면 <b>{_money(L['at'])}</b>{_pct(L['at'], bal)} · 수수료 {_money(L['fee'])}·스왑 {_money(L['swap'])} 포함"]
+        key = f"{scope}:{aid}:{me['ticket']}:{L['price']:.{dg}f}"
+        btns = []
+        if field == "sl":
+            if L["sl_ok"]:
+                btns.append({"text": "✅ 이 가격으로 SL", "callback_data": f"pos:set:sl:{key}"})
+            else:
+                lines.append(f"⚠️ 지금 손익({_money(L['now'])})보다 좋은 자리라 SL로는 못 겁니다. (SL은 지금가보다 불리한 쪽)")
+                if L["tp_ok"]:
+                    btns.append({"text": "🎯 TP로 걸기", "callback_data": f"pos:set:tp:{key}"})
+        elif field == "tp":
+            if L["tp_ok"]:
+                btns.append({"text": "✅ 이 가격으로 TP", "callback_data": f"pos:set:tp:{key}"})
+            else:
+                lines.append(f"⚠️ 지금 손익({_money(L['now'])})보다 나쁜 자리라 TP로는 못 겁니다. (TP는 지금가보다 유리한 쪽)")
+                if L["sl_ok"]:
+                    btns.append({"text": "🛑 SL로 걸기", "callback_data": f"pos:set:sl:{key}"})
+        else:
+            if L["sl_ok"]:
+                btns.append({"text": "🛑 이 가격으로 SL", "callback_data": f"pos:set:sl:{key}"})
+            if L["tp_ok"]:
+                btns.append({"text": "🎯 이 가격으로 TP", "callback_data": f"pos:set:tp:{key}"})
+        extra = {"reply_markup": {"inline_keyboard": [btns]}} if btns else {}
+        await self._send(client, token, chat_id, "\n".join(lines), **extra)
 
     def _bg(self, coro) -> None:
         """오래 걸리는 일(포지션 수십 개 SL/TP)은 뒤에서 - 그동안 다른 버튼·명령도 바로 받게"""
@@ -563,9 +688,11 @@ class TelegramLive:
         what = "해제" if not price else self._fmt_price(price, me.get("digits"))
         msg = f"{'✅' if not failed else '⚠️'} {self._describe(me, targets)}\n{label} {what} · {okn}/{len(targets)}개 적용"
         if price:
-            t = sum(_proj(p, price) for p in targets)
-            now = sum((p.get("profit") or 0) + (p.get("swap") or 0) for p in targets)
-            msg += f"\n닿으면 <b>{_s(t)}</b>{_pct(t, await _balance(aid))} · 지금 대비 {_s(t - now)}"
+            fee = -abs(await _fee_rate(aid, me["symbol"])) * sum(p["volume"] for p in targets)
+            swap = sum(p.get("swap") or 0 for p in targets)
+            t = sum(_proj(p, price) for p in targets) + swap + fee
+            now = sum(p.get("profit") or 0 for p in targets) + swap + fee
+            msg += f"\n닿으면 <b>{_money(t)}</b>{_pct(t, await _balance(aid))} · 지금 대비 {_s(t - now)} (수수료·스왑 포함)"
         if failed:
             reasons = {f.get("reason", "") for f in failed}
             msg += "\n실패: " + html.escape(", ".join(sorted(reasons))[:200])
@@ -579,7 +706,8 @@ class TelegramLive:
                  "• <code>/calc 2640</code> - 지금 포지션이 2640 에 닿으면 손익 (가격이 비슷한 종목 자동)\n"
                  "• <code>/calc 골드 2640</code> - 종목을 정해서\n"
                  "• <code>/calc buy 2650 sl 2640 tp 2670 0.1</code> - 새로 들어갈 때 예상 손익·손익비\n"
-                 "  (sl 대신 <code>risk 100</code> 또는 <code>risk 1%</code> 를 넣으면 맞는 랏을 계산)")
+                 "  (sl 대신 <code>risk 100</code> 또는 <code>risk 1%</code> 를 넣으면 맞는 랏을 계산)\n"
+                 "• <code>/calc -200</code> · <code>/calc 나스닥 +100</code> · <code>/calc -2%</code> - 지금 포지션이 이 손익(수수료·스왑 포함)이 되는 가격 + [SL/TP 걸기] 버튼")
 
     async def calc(self, client, token, chat_id: str, args: str) -> None:
         parts = args.replace(",", "").split()
@@ -588,6 +716,10 @@ class TelegramLive:
             return
         if parts[0].lower() in ("buy", "sell", "b", "s", "매수", "매도", "롱", "숏", "long", "short"):
             await self._calc_new(client, token, chat_id, parts)
+            return
+        amt = _parse_amount(parts[-1])
+        if amt is not None:
+            await self._calc_amount(client, token, chat_id, " ".join(parts[:-1]).strip().lower(), amt)
             return
         try:
             price = float(parts[-1])
@@ -637,6 +769,30 @@ class TelegramLive:
                              + (" (종목 이름을 확인하세요)" if want else " 종목을 정하려면 예: <code>/calc 골드 2640</code>"))
             return
         await self._send(client, token, chat_id, "🧮 <b>예상 손익</b> (수수료·스왑 제외)\n\n" + "\n\n".join(lines))
+
+    async def _calc_amount(self, client, token, chat_id: str, want: str, amt: tuple) -> None:
+        """/calc -200 [종목] - 보유 포지션(계좌·종목·방향별)이 이 손익이 되는 가격"""
+        async with AsyncSessionLocal() as db:
+            accounts = (await db.execute(select(Account).where(Account.lock_enabled == True))).scalars().all()
+        sent = 0
+        for a in accounts:
+            try:
+                rows = await asyncio.wait_for(worker_get(a.id, "/positions-all"), 5)
+            except Exception:
+                continue
+            groups: dict[tuple, list] = {}
+            for p in rows:
+                if want:
+                    g = symbols.group_of(p["symbol"]) or {}
+                    names = [g.get("key", ""), g.get("label", ""), p["symbol"]] + list(g.get("names") or [])
+                    if not any(want in str(x).lower() for x in names if x):
+                        continue
+                groups.setdefault((p["symbol"], p["type"]), []).append(p)
+            for ps in groups.values():
+                await self._send_amount_level(client, token, chat_id, a.id, ps[0], ps, amt, None, "a")
+                sent += 1
+        if not sent:
+            await self._send(client, token, chat_id, "보유 포지션이 없습니다." + (" (종목 이름을 확인하세요)" if want else ""))
 
     async def _calc_new(self, client, token, chat_id: str, parts: list[str]) -> None:
         """/calc buy 2650 sl 2640 tp 2670 0.1 [골드]  ·  sl 대신 risk 100 / risk 1%"""
