@@ -106,6 +106,8 @@ async def _follow(live, client, token, chat_id, aid: int, num: str) -> None:
     st = ea_status.state(aid, RUNTIME.get("started_at", 0))
     ea = ("EA 연결됨" if st["state"] == "ok" else "EA 아직 연결 안 됨 (조금 더 기다려 보세요)")
     if vi.get("version"):
-        ea += f" · v{vi['version']}" + (f" (최신 v{vi['latest']} 아님)" if vi["outdated"] else "")
+        ea += f" · v{vi['version']}" + (f" (최신 v{vi['latest']} 아님)" if vi["outdated"] and not vi.get("dup") else "")
+    if vi.get("dup"):
+        ea += " · ⚠️ 예전 EA 도 같이 돌고 있음 (다른 차트나 다른 PC 의 MT5 - 그 EA 를 빼야 함)"
     await live._send(client, token, chat_id, f"✅ {html.escape(num)} MT5 재시작 끝 · {html.escape(ea)}")
     live.force.set()

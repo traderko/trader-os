@@ -798,6 +798,8 @@ function eaBadge(a) {
   const e = a.ea;
   if (e.state === 'ok') {
     const ver = e.version ? `v${esc(e.version)}` : '버전 없음';
+    if (e.dup)
+      return `<span class="badge warn" title="${esc((e.sources || []).map((x) => (x.version ? 'v' + x.version : '예전 것') + ' ← ' + (x.ip || '?')).join(' · '))}">⚠ EA 두 개 (새 v${esc(e.latest || '?')} + 예전 것) · 다른 차트/PC의 예전 EA를 빼세요</span>`;
     if (e.outdated || (e.version === '' && e.latest))
       return `<span class="badge warn" title="새 EA는 설치됐지만 MT5가 예전 EA를 계속 돌리고 있습니다 - [MT5 재시작]을 누르면 새 EA(v${esc(e.latest || '?')})로 바뀝니다">⚠ EA ${ver} → v${esc(e.latest || '?')} · MT5 재시작 필요</span>`;
     return `<span class="badge ok" title="EA가 서버에 잠금 상태를 묻고 있습니다 (WebRequest 허용됨)">EA 연결됨 · ${ver}</span>`;

@@ -260,7 +260,9 @@ class TelegramLive:
             try:                               # EA 가 예전 버전이면 한 줄 (서버를 다시 켜면 새로 컴파일·설치)
                 from services import ea_status
                 vi = ea_status.version_info(a.id)
-                if vi["outdated"]:
+                if vi.get("dup"):
+                    lines.append(f"⚠️ EA 가 두 개 돌고 있음 (새 v{html.escape(vi['latest'])} + 예전 것) · 다른 차트나 다른 PC 의 MT5 에서 예전 EA 를 빼세요")
+                elif vi["outdated"]:
                     lines.append(f"⚠️ EA {'v' + html.escape(vi['version']) if vi['version'] else '예전 버전'} → 최신 v{html.escape(vi['latest'])}"
                                  " · <b>MT5를 재시작하세요</b> (아래 🔁 MT5 버튼)")
             except Exception:
