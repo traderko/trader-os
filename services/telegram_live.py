@@ -232,7 +232,8 @@ class TelegramLive:
                 from services import ea_status
                 vi = ea_status.version_info(a.id)
                 if vi["outdated"]:
-                    lines.append(f"⚠️ EA {'v' + html.escape(vi['version']) if vi['version'] else '예전 버전'} → 최신 v{html.escape(vi['latest'])}")
+                    lines.append(f"⚠️ EA {'v' + html.escape(vi['version']) if vi['version'] else '예전 버전'} → 최신 v{html.escape(vi['latest'])}"
+                                 " · <b>MT5를 재시작하세요</b> (관리 화면 [MT5 재시작])")
             except Exception:
                 pass
             try:

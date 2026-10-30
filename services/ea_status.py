@@ -28,9 +28,26 @@ def latest_version() -> str | None:
         return None
 
 
-def mark(account_id: int, version: str | None = None) -> None:
+_warned: dict[int, str] = {}        # 계좌 → 예전 EA 알림을 보낸 버전 (서버를 켜 있는 동안 한 번만)
+
+
+def mark(account_id: int, version: str | None = None, account_number: str = "") -> None:
     _seen[account_id] = time.time()
     _ver[account_id] = (version or "").strip()[:20]
+    info = version_info(account_id)
+    if info["outdated"] and _warned.get(account_id) != info["version"]:
+        _warned[account_id] = info["version"]
+        try:
+            from services.fcm_service import get_fcm_service
+            get_fcm_service().send(
+                "⚠️ EA 예전 버전 - MT5 재시작 필요",
+                f"계좌 {account_number or account_id}: MT5 에서 tradeLock EA {'v' + info['version'] if info['version'] else '(버전 표시 없는 예전 것)'} 가 돌고 있습니다."
+                f"\n새 EA v{info['latest']} 는 설치돼 있으니 MT5 를 재시작하면 바뀝니다 (관리 화면 계좌 탭 [MT5 재시작] 또는 MT5 를 직접 껐다 켜기).",
+                '{"type":"ea_outdated"}')
+        except Exception as e:
+            print(f"[ea] 예전 EA 알림 실패: {e}")
+    elif not info["outdated"]:
+        _warned.pop(account_id, None)
 
 
 def version_info(account_id: int) -> dict:
