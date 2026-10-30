@@ -487,6 +487,15 @@ void CloseAllOpenPositions(string tag)
          isProtected = true;
       }
 
+      // TraderOS '첫 진입 추가 리밋'(magic 71800000~71899999)이 체결된 것 - 서버가 잠금 중에는 새로 걸지 않으므로
+      // 잠금 전에 미리 정해 둔 주문. 대기주문 스냅샷이 빠졌거나(EA 재시작·늦은 폴링) 어긋나도 청산하지 않음.
+      long pmagic = PositionGetInteger(POSITION_MAGIC);
+      if(!isProtected && pmagic >= 71800000 && pmagic <= 71899999)
+      {
+         PrintFormat("[TradeLock] %s 티켓 %I64u: 첫 진입 추가 리밋(magic %I64d)이 체결된 것이라 청산하지 않음", sym, ticket, pmagic);
+         isProtected = true;
+      }
+
       PrintFormat("[TradeLock 진단] 티켓=%d 스냅샷보호=%s 비교=%s",
                   ticket, isProtected ? "예" : "아니오",
                   isProtected ? "보호(스킵)" : "청산대상");
