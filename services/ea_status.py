@@ -31,11 +31,11 @@ def latest_version() -> str | None:
 _warned: dict[int, str] = {}        # 계좌 → 예전 EA 알림을 보낸 버전 (서버를 켜 있는 동안 한 번만)
 
 
-def mark(account_id: int, version: str | None = None, account_number: str = "") -> None:
+def mark(account_id: int, version: str | None = None, account_number: str = "", notify: bool = True) -> None:
     _seen[account_id] = time.time()
     _ver[account_id] = (version or "").strip()[:20]
     info = version_info(account_id)
-    if info["outdated"] and _warned.get(account_id) != info["version"]:
+    if notify and info["outdated"] and _warned.get(account_id) != info["version"]:
         _warned[account_id] = info["version"]
         try:
             from services.fcm_service import get_fcm_service
