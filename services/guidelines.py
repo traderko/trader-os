@@ -348,7 +348,7 @@ async def loop() -> None:
 
 # 장 시작 시각 - 브로커 서버시간(뉴욕 + 7시간, 서머타임 자동) 기준, 브로커 날짜 월~금
 #   아시아 01:00 → KST 07:00 (서머타임) / 08:00
-#   유로   10:00 → KST 16:00 / 17:00
+#   유로   런던 08:00 → KST 16:00 / 17:00 (미국·영국 서머타임이 어긋나는 주도 런던 기준 - services/market_time.py)
 #   미국   16:30 → KST 22:30 / 23:30 (= 뉴욕 09:30)
 MARKET_OPENS = [("asia_open", "아시아장 시작", 1, 0), ("euro_open", "유로장 시작", 10, 0), ("us_open", "미국장 개장", 16, 30)]
 
@@ -391,7 +391,11 @@ async def _check_positions() -> None:
                 upcoming.append((e.event_time.astimezone(KST), star(e.event_name.replace("[FF] ", ""))))
             for key, name, hh, mm in MARKET_OPENS:
                 if r_ev.get(key, True):
-                    at = _open_after(now, hh, mm)
+                    if key == "euro_open":
+                        from services.market_time import euro_open_after
+                        at = euro_open_after(now).astimezone(KST)
+                    else:
+                        at = _open_after(now, hh, mm)
                     if at <= horizon:
                         upcoming.append((at, name))
 

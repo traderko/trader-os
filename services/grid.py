@@ -7,7 +7,8 @@
 #   장(아시아·유로·미장) 시작 봉의 크기. 플러터 앱 'KTR 매매'와 같은 계산:
 #     유로장·미장 : 장 시작 첫 봉의 고가 - 저가
 #     아시아장    : 장 시작 직전 봉 + 첫 봉 두 개를 합친 고가 - 저가 (장 시작 갭 포함)
-#   장 시작 = 브로커 서버시간(뉴욕 + 7시간, 서머타임 자동) 아시아 01:00 / 유로 10:00 / 미국 16:30
+#   장 시작 = 브로커 서버시간(뉴욕 + 7시간, 서머타임 자동) 아시아 01:00 / 미국 16:30, 유로는 런던 08:00
+#            (미국·영국 서머타임 날짜가 다른 주에는 브로커 10:00 이 아니라 11:00 = 한국 17:00)
 #           = 한국 시간 07:00 / 16:00 / 22:30 (서머타임), 08:00 / 17:00 / 23:30 (그 외)
 #   시간봉 2분·5분·10분·1시간·2시간, 시세는 이 계좌 MT5 또는 OANDA(관리 화면에 API 토큰).
 #
@@ -62,7 +63,11 @@ def _from_broker(b: datetime) -> datetime:
 
 
 def session_open(sid: str, now: datetime) -> datetime:
-    """지금 이전 가장 최근의 그 장 시작 (KST) - 브로커 날짜 월~금"""
+    """지금 이전 가장 최근의 그 장 시작 (KST) - 브로커 날짜 월~금
+    유로장은 런던 08:00 (미국·영국 서머타임이 어긋나는 주에도 트레이딩뷰와 같게 - services/market_time.py)"""
+    if sid == "euro":
+        from services.market_time import euro_open_before
+        return euro_open_before(now).astimezone(KST)
     _, hh, mm = SESSIONS[sid]
     b = _broker_now(now)
     for i in range(8):

@@ -33,6 +33,8 @@ KST = ZoneInfo("Asia/Seoul")
 # 거래일도 브로커 서버시간 날짜 기준 (목 03:00 KST FOMC → 수요일 거래일).
 # 문구: phrase_type "session"은 모든 구간 공통, "session:<구간id>"는 그 구간 전용.
 # 구간 목록(아시아장·유로장·미장 등)은 관리 화면 설정 lock.sessions 에서 정한다.
+# 브로커 10:00(600분)으로 정한 경계는 '유로장 시작'으로 본다 = 런던 08:00.
+#   미국·영국 서머타임 날짜가 다른 주(3월·10~11월)에는 브로커 11:00 (한국 17:00) - 트레이딩뷰 시가박스와 같게.
 
 PHRASE_TYPE_CHECKIN = "checkin"
 PHRASE_TYPE_SESSION = "session"
@@ -136,6 +138,10 @@ async def get_session_window(db: AsyncSession, now: datetime) -> SessionWindow |
     minute = wall.hour * 60 + wall.minute
     day = wall.replace(hour=0, minute=0, second=0, microsecond=0)
     events = None  # 필요할 때만 DB 조회
+    from services.market_time import euro_open_broker_minute, EURO_OPEN_BROKER_DEFAULT
+    eu = euro_open_broker_minute(wall.date())
+    adj = lambda m: eu if m == EURO_OPEN_BROKER_DEFAULT else m      # 브로커 10:00 경계 = 유로장 시작(런던 08:00)
+    sessions = [dict(x, start_min=adj(x["start_min"]), end_min=adj(x["end_min"])) for x in sessions]
 
     hits = []
     for x in sessions:
