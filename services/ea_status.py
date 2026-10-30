@@ -43,7 +43,7 @@ def mark(account_id: int, version: str | None = None, account_number: str = "") 
                 "⚠️ EA 예전 버전 - MT5 재시작 필요",
                 f"계좌 {account_number or account_id}: MT5 에서 tradeLock EA {'v' + info['version'] if info['version'] else '(버전 표시 없는 예전 것)'} 가 돌고 있습니다."
                 f"\n새 EA v{info['latest']} 는 설치돼 있으니 MT5 를 재시작하면 바뀝니다 (관리 화면 계좌 탭 [MT5 재시작] 또는 MT5 를 직접 껐다 켜기).",
-                '{"type":"ea_outdated"}')
+                '{"type":"ea_outdated"}', buttons=[[{"text": "🔁 MT5 재시작", "callback_data": f"mt5:ask:{account_id}"}]])
         except Exception as e:
             print(f"[ea] 예전 EA 알림 실패: {e}")
     elif not info["outdated"]:

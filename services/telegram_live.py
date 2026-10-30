@@ -234,7 +234,7 @@ class TelegramLive:
                 vi = ea_status.version_info(a.id)
                 if vi["outdated"]:
                     lines.append(f"⚠️ EA {'v' + html.escape(vi['version']) if vi['version'] else '예전 버전'} → 최신 v{html.escape(vi['latest'])}"
-                                 " · <b>MT5를 재시작하세요</b> (관리 화면 [MT5 재시작])")
+                                 " · <b>MT5를 재시작하세요</b> (아래 🔁 MT5 버튼)")
             except Exception:
                 pass
             try:
@@ -332,7 +332,8 @@ class TelegramLive:
             rows.append([{"text": f"🛑 SL · {who}"[:40], "callback_data": f"pos:sl:{key}"},
                          {"text": "🎯 TP", "callback_data": f"pos:tp:{key}"},
                          {"text": "⚖️ 본전", "callback_data": f"pos:be:{key}"}])
-        rows.append([{"text": "🔄 새로고침", "callback_data": "live:refresh"}, {"text": "🧱 구간매매", "callback_data": "gw:new"}])
+        rows.append([{"text": "🔄 새로고침", "callback_data": "live:refresh"}, {"text": "🧱 구간매매", "callback_data": "gw:new"},
+                     {"text": "🔁 MT5", "callback_data": "mt5:ask"}])
         return {"inline_keyboard": rows}
 
     async def _send(self, client, token, chat_id, text: str, **extra) -> dict:
@@ -988,6 +989,16 @@ class TelegramLive:
                         try:
                             answer = await telegram_tags.button_pressed(self, client, token, cid, data,
                                                                         (cb.get("message") or {}).get("message_id"))
+                        except Exception as e:
+                            answer = f"실패: {e}"[:190]
+                elif data.startswith("mt5:"):         # MT5 재시작 (services/telegram_mt5.py)
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        from services import telegram_mt5
+                        try:
+                            answer = await telegram_mt5.button(self, client, token, cid, data,
+                                                               (cb.get("message") or {}).get("message_id"))
                         except Exception as e:
                             answer = f"실패: {e}"[:190]
                 elif data.startswith("ad:"):          # 첫 진입 추가 리밋 (services/addon.py)
