@@ -43,9 +43,10 @@ class ManualLockRequest(BaseModel):
  
  
 @router.get("/status")
-async def lock_status(account_number: int, db: AsyncSession = Depends(get_db), _=Depends(verify_api_key)):
+async def lock_status(account_number: int, ea: str | None = None, db: AsyncSession = Depends(get_db),
+                      _=Depends(verify_api_key)):
     account_id = await _resolve_account_id(db, account_number)
-    ea_status.mark(account_id)   # 관리 화면의 "EA 연결됨" 표시용 (WebRequest 허용 여부 확인)
+    ea_status.mark(account_id, ea)   # 관리 화면의 "EA 연결됨 · 버전" 표시용 (ea = EA 버전, 예전 EA 는 안 보냄)
     return await svc.get_lock_state(db, account_id)
  
  

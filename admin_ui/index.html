@@ -784,7 +784,12 @@ const EA_HELP = 'MT5에서 <b>도구 → 옵션 → 전문가 조언자</b> → 
 function eaBadge(a) {
   if (!a.lock_enabled || !a.ea) return '';
   const e = a.ea;
-  if (e.state === 'ok') return '<span class="badge ok" title="EA가 서버에 잠금 상태를 묻고 있습니다 (WebRequest 허용됨)">EA 연결됨</span>';
+  if (e.state === 'ok') {
+    const ver = e.version ? `v${esc(e.version)}` : '버전 없음';
+    if (e.outdated || (e.version === '' && e.latest))
+      return `<span class="badge warn" title="서버에 있는 EA는 v${esc(e.latest || '?')} - 서버를 다시 켜면 새로 컴파일·설치됩니다 (MT5 전문가 탭 확인)">EA 연결됨 · ${ver} (예전 · 최신 v${esc(e.latest || '?')})</span>`;
+    return `<span class="badge ok" title="EA가 서버에 잠금 상태를 묻고 있습니다 (WebRequest 허용됨)">EA 연결됨 · ${ver}</span>`;
+  }
   if (e.state === 'waiting') return '<span class="badge warn">EA 확인 중…</span>';
   return `<span class="badge bad" title="${e.ago_sec == null ? '서버 시작 후 EA 요청이 한 번도 없습니다' : Math.round(e.ago_sec / 60) + '분째 EA 요청 없음'}">EA 연결 안 됨</span>`;
 }

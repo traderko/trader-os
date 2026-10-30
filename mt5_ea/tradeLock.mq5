@@ -3,6 +3,11 @@
 //|      FastAPI 락 서버 연동 - 시간대락/연속손절락 + 즉시청산       |
 //+------------------------------------------------------------------+
 #property strict
+// EA 버전 - 고칠 때마다 올림. 서버(관리 화면 '계좌' 탭, 텔레그램 실시간 현황)가 이 값을 받아 최신인지 보여줌
+//   (서버는 mt5_ea/tradeLock.mq5 의 이 줄을 읽어 '최신 버전'으로 씀 - 공백 없이)
+#define EA_VERSION "1.1.0"
+#property version   "1.10"
+#property description "TraderOS tradeLock EA v1.1.0 - 2026-10-30 첫 진입 추가 리밋 보호"
 #include <Trade\Trade.mqh>
 #include <Controls\Dialog.mqh>
 #include <Controls\Edit.mqh>
@@ -274,7 +279,7 @@ int OnInit()
    g_dialog.Run();
 
    PollLockStatus();
-   Print("TradeLock_EA 시작.");
+   Print("TradeLock_EA v", EA_VERSION, " 시작.");
    return INIT_SUCCEEDED;
 }
 
@@ -315,7 +320,7 @@ void OnTimer()
 void PollLockStatus()
 {
    long accountLogin = AccountInfoInteger(ACCOUNT_LOGIN);
-   string url = StringFormat("%s/lock/status?account_number=%d", InpServerUrl, accountLogin);
+   string url = StringFormat("%s/lock/status?account_number=%d&ea=%s", InpServerUrl, accountLogin, EA_VERSION);
    char post[], result[];
    string headers = "";
    if(InpApiKey != "") headers = "Authorization: Bearer " + InpApiKey + "\r\n";
@@ -330,7 +335,7 @@ void PollLockStatus()
       if(!g_pollFailed)
          PrintFormat("[TradeLock] 서버 통신 실패 (code=%d, err=%d) - 응답이 올 때까지 자동청산 중지", res, GetLastError());
       g_pollFailed = true;
-      Comment(StringFormat("[TradeLock] 서버 통신 실패 (code=%d, err=%d) - 자동청산 중지됨", res, GetLastError()));
+      Comment(StringFormat("[TradeLock v%s] 서버 통신 실패 (code=%d, err=%d) - 자동청산 중지됨", EA_VERSION, res, GetLastError()));
       g_dialog.ShowResult("서버 연결 끊김 - 자동청산 중지", clrOrange);
       return;
    }
@@ -379,7 +384,7 @@ void PollLockStatus()
    if(!wasLocked && locked && !firstPoll)
       Alert("[TradeLock] 거래가 잠겼습니다: " + reason);
 
-   Comment(StringFormat("[TradeLock] %s | %s", locked ? "LOCKED" : "UNLOCKED", reason));
+   Comment(StringFormat("[TradeLock v%s] %s | %s", EA_VERSION, locked ? "LOCKED" : "UNLOCKED", reason));
 }
 
 //==================================================================

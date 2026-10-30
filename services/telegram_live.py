@@ -228,6 +228,13 @@ class TelegramLive:
 
         async def one(a: Account) -> list[str]:
             lines = [f"<b>{html.escape(a.account_number)}</b>  {_lock_line(locks.get(a.id))}"]
+            try:                               # EA 가 예전 버전이면 한 줄 (서버를 다시 켜면 새로 컴파일·설치)
+                from services import ea_status
+                vi = ea_status.version_info(a.id)
+                if vi["outdated"]:
+                    lines.append(f"⚠️ EA {'v' + html.escape(vi['version']) if vi['version'] else '예전 버전'} → 최신 v{html.escape(vi['latest'])}")
+            except Exception:
+                pass
             try:
                 info, positions = await asyncio.gather(
                     asyncio.wait_for(worker_get(a.id, "/account-info"), 5),
