@@ -111,6 +111,42 @@ async def _report_from_trades(db: AsyncSession, account_id: int, start: datetime
     }
 
 
+def _parse_time(v) -> datetime | None:
+    try:
+        if isinstance(v, (int, float)):
+            return datetime.fromtimestamp(v / 1000 if v > 1e11 else v, KST)
+        t = datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+        return t if t.tzinfo else t.replace(tzinfo=KST)
+    except (TypeError, ValueError):
+        return None
+
+
+def _drop_failed_withdrawals(deposits: list, withdrawals: list, window_days: int = 7) -> tuple[list, list, list]:
+    """출금 실패: 브로커가 출금(-X)을 넣었다가 같은 금액 입금(+X)으로 되돌려 줌 → 둘 다 없던 일로 뺀다.
+    출금 뒤 window_days 안에 들어온 같은 금액(0.01 차이까지) 입금 하나와 짝지음. 잔고에는 영향 없음 (둘이 상쇄)"""
+    used_d, pairs = set(), []
+    keep_w = []
+    ds = sorted(enumerate(deposits), key=lambda x: _parse_time(x[1].get("time")) or datetime.max.replace(tzinfo=KST))
+    for w in sorted(withdrawals, key=lambda x: _parse_time(x.get("time")) or datetime.min.replace(tzinfo=KST)):
+        wt, wa = _parse_time(w.get("time")), abs(w.get("amount") or 0)
+        hit = None
+        for i, d in ds:
+            if i in used_d or abs(abs(d.get("amount") or 0) - wa) > 0.01:
+                continue
+            dt_ = _parse_time(d.get("time"))
+            if wt and dt_ and not (wt <= dt_ <= wt + timedelta(days=window_days)):
+                continue
+            hit = (i, d)
+            break
+        if hit:
+            used_d.add(hit[0])
+            pairs.append({"withdrawal": w, "refund": hit[1], "amount": wa})
+        else:
+            keep_w.append(w)
+    keep_d = [d for i, d in enumerate(deposits) if i not in used_d]
+    return keep_d, keep_w, pairs
+
+
 async def _report(db: AsyncSession, account: Account, start: datetime, end: datetime, key: str) -> dict:
     try:
         starting = await worker_get(account.id, "/balance-at", {"before_time": start.isoformat()})
@@ -132,7 +168,7 @@ async def _report(db: AsyncSession, account: Account, start: datetime, end: date
 
     starting_balance = starting["balance"]
     ending_balance = ending["balance"]
-    deposits, withdrawals = balances["deposits"], balances["withdrawals"]
+    deposits, withdrawals, canceled = _drop_failed_withdrawals(balances["deposits"], balances["withdrawals"])
     deposit_total = sum(d["amount"] for d in deposits)
     withdrawal_total = sum(abs(w["amount"]) for w in withdrawals)
     pnl, commission = pnl_data["pnl"], pnl_data["commission"]
@@ -145,7 +181,7 @@ async def _report(db: AsyncSession, account: Account, start: datetime, end: date
         "starting_balance": starting_balance,
         "deposit_total": deposit_total, "withdrawal_total": withdrawal_total,
         "pnl": pnl, "commission": commission, "ending_balance": ending_balance,
-        "deposits": deposits, "withdrawals": withdrawals,
+        "deposits": deposits, "withdrawals": withdrawals, "canceled_withdrawals": canceled,
     }
     _save_cache(account.id, key, data)
     return {**data, "source": "mt5"}
@@ -181,6 +217,74 @@ async def get_monthly_report(
     month_end = datetime(year + 1, 1, 1, tzinfo=KST) if month == 12 else datetime(year, month + 1, 1, tzinfo=KST)
     return {"year": year, "month": month,
             **(await _report(db, account, month_start, month_end, f"{year}-{month:02d}"))}
+
+
+@router.get("/{account_number}/withdraw-rule")
+async def get_withdraw_rule(account_number: int, db: AsyncSession = Depends(get_db)):
+    """일일 출금 규칙: 오늘(거래일, 한국 시간 06:00 시작) 순수익의 pct% 까지 뺄 수 있고, 오늘 이미 뺀 출금은 차감.
+    오늘 순수익 = 지금 잔고 - 거래일 시작 잔고 - 오늘 입금 + 오늘 출금 (청산된 손익·수수료·스왑, 열린 포지션 평가손익은 빠짐).
+    손실인 날은 0. 다음 거래일 06:00에 리셋"""
+    from services.settings_service import get_settings
+    from services.loss_limit import day_start, next_day_start, trading_day
+    account = await get_account_or_default(db, account_number)
+    if account is None:
+        raise HTTPException(404, f"account not found: {account_number}")
+    pct = float((get_settings().get("pnl") or {}).get("withdraw_pct", 50))
+
+    now = datetime.now(KST)
+    day, start, end = trading_day(now), day_start(now), next_day_start(now)
+    source = "mt5"
+    try:
+        b0 = await worker_get(account.id, "/balance-at", {"before_time": start.isoformat()})
+        b1 = await worker_get(account.id, "/balance-at", {"before_time": end.isoformat()})
+        # 출금 실패(출금 -X 뒤 같은 금액 +X 되돌림)는 '이미 출금'에서 뺌. 어제 출금 → 오늘 되돌림도 있어 7일 앞부터 받아 짝지음
+        flows = await worker_get(account.id, "/balances", {"start_time": (start - timedelta(days=7)).isoformat(), "end_time": end.isoformat()})
+        today = lambda f: (lambda t: t is not None and start <= t < end)(_parse_time(f.get("time")))
+        _, wds, canceled = _drop_failed_withdrawals(flows["deposits"], flows["withdrawals"])
+        data = {
+            "day": day, "start_balance": b0["balance"], "balance": b1["balance"],
+            # 순수익 계산용 - 잔고 변화에서 그날 입출금을 전부(실패 포함) 빼야 거래 손익만 남음
+            "deposit_total": sum(d["amount"] for d in flows["deposits"] if today(d)),
+            "raw_withdrawal_total": sum(abs(w["amount"]) for w in flows["withdrawals"] if today(w)),
+            # 규칙에서 차감할 '오늘 실제로 나간 출금'
+            "withdrawal_total": sum(abs(w["amount"]) for w in wds if today(w)),
+            "canceled_total": sum(c["amount"] for c in canceled if today(c["withdrawal"]) or today(c["refund"])),
+        }
+        data["net_profit"] = data["balance"] - data["start_balance"] - data["deposit_total"] + data["raw_withdrawal_total"]
+        _save_cache(account.id, "withdraw-day", data)
+    except HTTPException as e:
+        if e.status_code != 503:          # 503 = 워커 없음 (MT5를 안 띄운 계좌)
+            raise
+        data = _load_cache(account.id, "withdraw-day")
+        if data and data.get("day") == day:
+            source = "cache"
+        else:                             # 오늘 MT5를 한 번도 못 봄 → 저장된 거래로 손익만 (입출금은 모름)
+            rows = (await db.execute(
+                select(Trade.profit, Trade.commission).where(
+                    Trade.account_id == account.id, Trade.close_time != None,
+                    Trade.close_time >= start, Trade.close_time < end,
+                )
+            )).all()
+            data = {"day": day, "balance": None, "start_balance": None, "deposit_total": 0, "withdrawal_total": 0,
+                    "net_profit": sum((r.profit or 0) - abs(r.commission or 0) for r in rows)}
+            source = "trades"
+
+    net, wd = data["net_profit"], data["withdrawal_total"]
+    allowed = max(0.0, net) * pct / 100            # 오늘 규칙상 뺄 수 있는 총액
+    withdrawable = max(0.0, allowed - wd)
+    if data.get("balance") is not None:
+        withdrawable = min(withdrawable, max(0.0, data["balance"]))
+    r2 = lambda v: None if v is None else round(v, 2)
+    return {
+        "pct": pct, "available": True, "source": source, "cached_at": data.get("cached_at"),
+        "day": day, "reset_at": end.isoformat(),
+        "start_balance": r2(data.get("start_balance")), "balance": r2(data.get("balance")),
+        "deposit_total": r2(data["deposit_total"]), "withdrawal_total": r2(wd),
+        "raw_withdrawal_total": r2(data.get("raw_withdrawal_total", wd)),
+        "net_profit": r2(net), "allowed": r2(allowed), "withdrawable": r2(withdrawable),
+        "canceled_total": r2(data.get("canceled_total") or 0),      # 오늘 걸친 출금 실패 (계산에서 뺌)
+        "over": r2(max(0.0, wd - allowed)),          # 오늘 규칙보다 더 뺀 금액
+    }
 
 
 @router.get("/balance")

@@ -542,6 +542,11 @@
 #tab-pos.viewonly > :not(#viewOnly) { display: none !important; }
 .viewonly-note h2 { margin: 0 0 6px; }
 .viewonly-note p { margin: 0; line-height: 1.6; }
+.wdrule .top { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; }
+.wdrule .top small { font-size: 12px; color: var(--muted, #888); }
+.wdrule .top strong { font-size: 22px; }
+.wdrule .calc { margin-top: 6px; font-size: 12.5px; color: var(--muted, #888); line-height: 1.6; }
+.wdrule .calc b { color: var(--fg, inherit); font-weight: 600; }
 .pnote { grid-column: 1 / -1; font-size: 12px; color: var(--muted, #888); line-height: 1.5; }
 .lock small.daily { display: block; margin-top: 3px; }
 </style>
@@ -696,6 +701,7 @@
     <label class="muted" id="pAllWrap" style="font-size:12.5px;display:none" title="모든 계좌의 거래를 합쳐서 봅니다 (입출금·잔고는 선택한 계좌 기준)">
       <input type="checkbox" id="pAll"> 모든 계좌</label>
   </div>
+  <section class="panel wdrule" id="pWd" hidden></section>
   <section class="panel"><div class="pnlsum" id="pSum"><div class="empty">불러오는 중…</div></div></section>
   <section class="panel"><div class="chart" id="pBalance"></div></section>
   <section class="panel"><div class="chart" id="pBars"></div></section>
@@ -2429,12 +2435,39 @@ async function loadPnl() {
     $('pSum').innerHTML = '<div class="empty" style="grid-column:1/-1">불러오는 중…</div>';
     $('pRows').innerHTML = ''; $('pBalance').innerHTML = ''; $('pBars').innerHTML = '';
   }
+  loadWithdrawRule();
   try {
     await swr(paths, ([report, list]) => { if (!cur()) return; pnlData = buildPnl(report, list, yearMode); renderPnl(); }, cur);
   } catch (e) {
     if (!cur()) return;
     $('pSum').innerHTML = `<div class="empty" style="grid-column:1/-1">손익을 불러오지 못했습니다: ${esc(e.message)}</div>`;
   }
+}
+
+// 일일 출금 규칙 - 오늘(거래일) 순수익의 N% 에서 오늘 이미 뺀 출금을 뺀 금액, 다음 거래일 시작에 리셋 (N은 관리 화면 설정)
+async function loadWithdrawRule() {
+  const an = acc.account_number, path = `/accounts/${encodeURIComponent(an)}/withdraw-rule`;
+  try {
+    await swr([path], ([w]) => { if (acc && acc.account_number === an) renderWithdrawRule(w); }, () => acc && acc.account_number === an);
+  } catch { $('pWd').hidden = true; }
+}
+function renderWithdrawRule(w) {
+  const el = $('pWd');
+  if (!w || !w.available) { el.hidden = true; return; }
+  const p = `${+w.pct.toFixed(2)}%`;
+  const reset = w.reset_at ? (() => { const d = dt(w.reset_at); return `${d.getMonth() + 1}/${d.getDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; })() : '';
+  const calc = w.net_profit > 0
+    ? `오늘 순수익 <b class="num">${fmt(w.net_profit)}</b> × ${p} = <b class="num">${fmt(w.allowed)}</b>${w.withdrawal_total ? ` − 오늘 출금 <b class="num">${fmt(w.withdrawal_total)}</b>` : ''}`
+    : `오늘 순수익 <b class="num ${cls(w.net_profit)}">${signed(w.net_profit)}</b> - 수익이 없는 날은 출금 가능 0`;
+  el.innerHTML = `
+    <div class="top"><small>💵 오늘 출금 가능 (${p} 규칙)</small><strong class="num ${w.withdrawable > 0 ? 'up' : ''}">${fmt(w.withdrawable)}</strong></div>
+    <div class="calc">${calc}<br>
+      ${w.balance != null ? `오늘 순수익 = 잔고 ${fmt(w.balance)} − 거래일 시작 잔고 ${fmt(w.start_balance)}${w.deposit_total ? ` − 입금 ${fmt(w.deposit_total)}` : ''}${(w.raw_withdrawal_total ?? w.withdrawal_total) ? ` + 출금 ${fmt(w.raw_withdrawal_total ?? w.withdrawal_total)}` : ''} · ` : ''}청산된 손익 기준 (열린 포지션 평가손익은 빠짐) · ${reset} 리셋
+      ${w.canceled_total > 0 ? `<br>출금 실패로 되돌아온 금액 ${fmt(w.canceled_total)} - '오늘 출금'에서 제외` : ''}
+      ${w.over > 0 ? `<br><span class="down">오늘 규칙보다 ${fmt(w.over)} 더 출금했습니다.</span>` : ''}
+      ${w.source === 'cache' ? `<br>MT5가 꺼져 있어 ${esc(String(w.cached_at || '').slice(11, 16))} 기준입니다.` : ''}
+      ${w.source === 'trades' ? '<br>MT5가 꺼져 있어 저장된 거래 손익만으로 계산했습니다 (오늘 출금은 반영 안 됨).' : ''}</div>`;
+  el.hidden = false;
 }
 
 function buildPnl(report, list, yearMode) {

@@ -502,6 +502,16 @@
       <div class="actions"><button class="btn primary" id="grSave">저장</button></div>
     </div>
     <div class="panel">
+      <h2>출금 규칙</h2>
+      <p class="hint">웹 손익 탭 맨 위에 <b>오늘 출금 가능 금액</b>을 보여줍니다. 하루 단위 규칙이고, 다음 거래일 시작(한국 시간 06:00)에 리셋됩니다.
+        오늘 순수익 = 지금 잔고 − 거래일 시작 잔고 − 오늘 입금 + 오늘 출금 (청산된 손익·수수료·스왑 포함, 열린 포지션 평가손익은 빠짐).
+        오늘 출금 가능 = 오늘 순수익 × 아래 % − 오늘 이미 출금한 금액 (손실인 날이나 0 아래면 0).<br>
+        예: 50%, 오늘 수익 1,000 → 500 · 그중 200을 뺐으면 300.</p>
+      <div class="row"><label class="name">오늘 순수익 중 출금 가능 비율</label>
+        <input type="number" id="wdPct" min="0" max="100" step="1" inputmode="decimal" style="width:90px"><span class="unit">%</span></div>
+      <div class="actions"><button class="btn primary" id="wdSave">저장</button></div>
+    </div>
+    <div class="panel">
       <h2>OANDA 시세</h2>
       <p class="hint">웹 화면 <b>구간</b> 탭에서 KTR 값을 OANDA 봉으로 계산할 때만 씁니다 (주문은 MT5 로). 없으면 MT5 시세만 씁니다.
         OANDA 계정 → <b>Manage API Access</b> 에서 토큰을 발급받아 넣으세요. 토큰은 이 PC의 설정 파일에만 저장되고 화면에는 다시 보이지 않습니다.</p>
@@ -1007,7 +1017,7 @@ $('sessAdd').onclick = () => {
 
 async function loadSettings() {
   settings = await api('settings');
-  fillRules(); fillTelegram(); fillOanda(); fillGrid();
+  fillRules(); fillTelegram(); fillOanda(); fillGrid(); fillWithdraw();
   loadDefaults();
 }
 
@@ -1026,7 +1036,7 @@ const DEF_FIELDS = [   // [칸, 기본값 가져오기]
   ['#rrLook', (d) => String(d.telegram.reason_remind.lookback_hours)],
   ['#acDays', (d) => d.access.session_days], ['#arDays', (d) => d.admin_remote.session_days],
   ['#gdCooldown', (d) => d.guidelines.cooldown_min], ['#gdGap', (d) => d.guidelines.entry_gap_sec],
-  ['#evKw', (d) => d.events.highlight.join(', ')],
+  ['#evKw', (d) => d.events.highlight.join(', ')], ['#wdPct', (d) => d.pnl.withdraw_pct],
   ['#grGap', (d) => d.grid.min_gap_ktr], ['#grStop', (d) => d.grid.ktr_stop_gap],
   ['#adAuto', (d) => d.grid.addon_auto], ['#adAsk', (d) => d.grid.addon_ask], ['#adTf', (d) => d.grid.addon_tf],
   ['#adMult', (d) => d.grid.addon_mult], ['#adN', (d) => d.grid.addon_n], ['#adLot', (d) => d.grid.addon_lot], ['#adSl', (d) => d.grid.addon_sl_follow], ['#adSrc', (d) => d.grid.addon_src],
@@ -1270,6 +1280,15 @@ $('grSave').onclick = async () => {
       addon_auto: $('adAuto').checked, addon_ask: $('adAsk').checked, addon_tf: $('adTf').value, addon_mult: parseFloat($('adMult').value), addon_n: parseInt($('adN').value, 10), addon_lot: $('adLot').value,
       addon_sl_follow: $('adSl').checked, addon_src: $('adSrc').value } }) });
     fillGrid(); refreshDefChips(); toast('저장했습니다.');
+  } catch (e) { toast(e.message, true); }
+};
+
+// ── 출금 규칙 ──
+function fillWithdraw() { $('wdPct').value = (settings.pnl || {}).withdraw_pct ?? 50; }
+$('wdSave').onclick = async () => {
+  try {
+    settings = await api('settings', { method: 'PUT', body: JSON.stringify({ pnl: { withdraw_pct: parseFloat($('wdPct').value) } }) });
+    fillWithdraw(); refreshDefChips(); toast('저장했습니다.');
   } catch (e) { toast(e.message, true); }
 };
 

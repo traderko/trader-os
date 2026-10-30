@@ -155,6 +155,8 @@ DEFAULTS: dict = {
             "Federal Funds", "Fed Chair", "Powell", "Warsh", "Non-Farm", "Unemployment", "Crude Oil",
         ],
     },
+    # 손익 탭 일일 출금 규칙 - 오늘(거래일) 순수익의 withdraw_pct % 까지 출금 가능 (오늘 이미 뺀 출금은 차감, 06:00 리셋)
+    "pnl": {"withdraw_pct": 50},
     # 관리 화면(:8100)을 다른 기기에서 열기 (services/admin_remote.py) - 기본 꺼짐, 켜기·비밀번호는 이 PC에서만
     "admin_remote": {
         "enabled": False,
@@ -424,6 +426,14 @@ def _validate(settings: dict) -> None:
     if len(hl) > 60 or any(len(w) > 40 for w in hl):
         raise SettingsError("강조할 단어는 60개까지, 한 단어는 40자까지 넣을 수 있습니다.")
     ev["highlight"] = hl
+
+    pn = settings["pnl"]
+    try:
+        pn["withdraw_pct"] = round(float(pn.get("withdraw_pct", 50)), 2)
+    except (TypeError, ValueError):
+        raise SettingsError("출금 규칙 %는 숫자여야 합니다.")
+    if not (0 <= pn["withdraw_pct"] <= 100):
+        raise SettingsError("출금 규칙 %는 0~100 이어야 합니다.")
 
 
 # 지침 규칙별 숫자 범위 (key → (최소, 최대))

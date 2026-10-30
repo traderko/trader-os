@@ -284,6 +284,7 @@ def _public_settings() -> dict:
         "live_enabled": s["telegram"].get("live_enabled", True),
         "live_interval_sec": s["telegram"].get("live_interval_sec", 10),
         "live_position": s["telegram"].get("live_position", "top"),
+        "live_grid_button": s["telegram"].get("live_grid_button", False),
         "trade_sim": s["telegram"].get("trade_sim", True),
         "trade_batch_sec": s["telegram"].get("trade_batch_sec", 3),
         "trade_sim_mult": s["telegram"].get("trade_sim_mult", [10]),
@@ -355,6 +356,11 @@ async def write_settings(body: dict):
         gr = body["grid"] or {}
         patch["grid"] = {k: gr[k] for k in ("min_gap_ktr", "ktr_stop_gap", "addon_auto", "addon_ask", "addon_tf",
                                              "addon_mult", "addon_n", "addon_lot", "addon_sl_follow", "addon_src") if k in gr}
+
+    if "pnl" in body:
+        pn = body["pnl"] or {}
+        if "withdraw_pct" in pn:
+            patch["pnl"] = {"withdraw_pct": pn["withdraw_pct"]}
 
     if "events" in body:
         ev = body["events"] or {}
