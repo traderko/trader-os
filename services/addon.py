@@ -14,6 +14,10 @@
 #     SL 따라가기(addon_sl_follow): 첫 진입의 SL 을 리밋에도. SL 이 리밋 가격 안쪽으로 오면(본전 SL 등) 리밋 취소
 #
 # 실제 주문은 계좌 워커(api/worker/worker_grid.py /grid/addon*)가 MT5 로 넣는다.
+#
+# ⚠ 잠금 중에는 걸지 않는다: tradeLock EA 는 '잠금 걸리는 순간 이미 있던 대기주문'이 체결된 것만 봐주고,
+#   잠금 중에 새로 건 리밋이 체결되면 바로 강제청산한다. 그래서 자동이든 버튼이든 잠금 중이면 거절
+#   (잠금 전에 걸어 둔 리밋은 EA 가 보호하므로 그대로 둠 - SL 따라가기는 가격을 안 바꿔서 보호가 유지됨).
 
 import asyncio
 import html
@@ -113,6 +117,23 @@ async def _after_quiet(aid: int, accnum: str, symbol: str, side: str) -> None:
         print(f"[addon] 첫 진입 확인 실패: {e}")
 
 
+async def _locked(aid: int) -> str:
+    """잠겨 있으면 이유 (아니면 '') - 조회 실패도 안전하게 '확인 못 함'으로 막음"""
+    try:
+        from db.session import AsyncSessionLocal
+        from services import trade_lock_service as lock_svc
+        async with AsyncSessionLocal() as db:
+            st = await lock_svc.get_lock_state(db, aid)
+        if st.get("locked"):
+            r = str(st.get("reason") or "")
+            names = {"session_window": "집중 구간", "restricted_window": "정기 재확인", "consec_loss": "연속 손절",
+                     "manual": "수동/손실 한도 잠금"}
+            return next((v for k, v in names.items() if r.startswith(k)), r or "잠금")
+        return ""
+    except Exception as e:
+        return f"잠금 상태를 확인하지 못함 ({str(e)[:60]})"
+
+
 def _fill_size(ps: list[dict]) -> float:
     """체결 한 번의 크기 - 크기가 섞여 있으면 가장 많이 나온 것 (같으면 마지막 체결 쪽)"""
     cnt: dict[float, int] = {}
@@ -179,6 +200,10 @@ async def _evaluate(aid: int, accnum: str, symbol: str, side: str) -> None:
             "count": max(1, min(10, int(c.get("addon_n") or 1)))}
     head = (f"계좌 {accnum} · {symbol} {side.upper()} {lots:g}lot" + (f" ({len(base)}번 나눠)" if len(base) > 1 else "")
             + f" · 평균 {_fmt(avg, digits)}" + (f" · SL {_fmt(sl, digits)}" if sl else " · SL 없음"))
+    why_locked = await _locked(aid)
+    if why_locked:
+        _send("🔒 추가 리밋 안 걸었음", f"{head}\n지금 거래 잠금 중입니다 ({why_locked}). 잠금 중에 건 리밋이 체결되면 EA 가 바로 강제청산해서 걸지 않았습니다.")
+        return
     if c.get("addon_auto"):
         tf = c.get("addon_tf") or "10m"
         k = ktrs.get(tf) or {}
@@ -272,6 +297,9 @@ def _buttons(key: str, prop: dict) -> list:
 
 async def _place(prop: dict, tf: str) -> dict:
     from services.worker_client import worker_get, worker_post
+    why_locked = await _locked(prop["aid"])
+    if why_locked:                                # 버튼을 잠금 중에 눌렀을 때 - 체결되면 강제청산되므로 거절
+        raise RuntimeError(f"지금 거래 잠금 중입니다 ({why_locked}). 잠금이 풀린 뒤 다시 누르세요.")
     # 누르는 사이 바뀌었을 수 있어 다시 확인
     positions = await worker_get(prop["aid"], "/positions-all")
     base = [p for p in positions if p["symbol"] == prop["symbol"] and _side(p["type"]) == prop["side"] and _manual(p)]
