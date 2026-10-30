@@ -187,6 +187,7 @@ class TelegramLive:
         self.force = asyncio.Event()
         self.seen: dict[str, int] = {}   # 봇별로 이미 처리한 마지막 update_id
         self.locked: list[tuple[int, str]] = []   # 문구로 풀 수 있는 잠금 계좌 (id, 계좌번호) - 버튼용
+        self.pos_groups: list[tuple] = []         # (계좌id, 계좌번호, 종목, 방향 0/1, 대표 티켓, 개수) - SL/TP 버튼용
         self.pending: dict[str, dict] = {}        # 대화방별 '문구 입력 기다리는 중'
 
     # ── 상태 파일 ──
@@ -254,11 +255,19 @@ class TelegramLive:
             except Exception:
                 pass
             lines += _positions_block(positions)
+            # 종목·방향 묶음마다 SL/TP 버튼 (/pos 안 쓰고 바로) - 대표 티켓 + 'a'(같은 종목·방향 전체)
+            seen: dict[tuple, list] = {}
+            for p in positions:
+                seen.setdefault((p["symbol"], p["type"]), []).append(p)
+            for (sym, typ), ps in sorted(seen.items()):
+                groups.append((a.id, a.account_number, sym, typ, ps[0]["ticket"], len(ps)))
             return lines
 
         self.locked = [(a.id, a.account_number) for a in accounts
                        if (locks.get(a.id) or {}).get("locked") and locks[a.id].get("reason") != "manual"]
+        groups: list[tuple] = []
         blocks = await asyncio.gather(*(one(a) for a in accounts)) if accounts else []
+        self.pos_groups = groups
         body = "\n\n".join("\n".join(b) for b in blocks) or "잠금을 켠 계좌가 없습니다."
         return f"📌 <b>TraderOS 실시간</b> · {datetime.now().strftime('%H:%M:%S')}\n\n{body}"
 
@@ -316,6 +325,13 @@ class TelegramLive:
 
     def _markup(self) -> dict:
         rows = [[{"text": f"🔓 {num} 잠금 풀기", "callback_data": f"unlock:{aid}"}] for aid, num in self.locked]
+        many_acc = len({g[0] for g in self.pos_groups}) > 1
+        for aid, num, sym, typ, ticket, n in self.pos_groups[:6]:
+            key = f"a:{aid}:{ticket}"                 # 같은 종목·방향 전체에 적용
+            who = (f"{str(num)[-4:]} " if many_acc else "") + f"{sym} {'BUY' if typ == 0 else 'SELL'}" + (f" {n}개" if n > 1 else "")
+            rows.append([{"text": f"🛑 SL · {who}"[:40], "callback_data": f"pos:sl:{key}"},
+                         {"text": "🎯 TP", "callback_data": f"pos:tp:{key}"},
+                         {"text": "⚖️ 본전", "callback_data": f"pos:be:{key}"}])
         rows.append([{"text": "🔄 새로고침", "callback_data": "live:refresh"}, {"text": "🧱 구간매매", "callback_data": "gw:new"}])
         return {"inline_keyboard": rows}
 
