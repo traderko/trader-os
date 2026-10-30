@@ -10,6 +10,11 @@
 #   2) else publish.msg in the repo folder (UTF-8; first line = title, rest = details).
 #      Claude writes this file when it changes files; it is deleted after a successful push.
 #   3) else made from the changed paths, e.g. "update: web_ui, services/guidelines (3 files)"
+# Version bump: a line "bump: minor - reason" (or "bump: major - reason") in publish.msg / -m is taken out of the
+#   commit message and remembered in .git/traderos-bump.txt (not committed). The next release then raises the
+#   middle number (v0.2.50 -> v0.3.0) instead of the last one, shows the reasons, and lets you pick p = patch instead.
+#   Claude adds this line when a change is big enough (a new feature/screen, not fixes or tweaks).
+#   The file is cleared after a release is tagged.
 # Release tag message: commit titles since the previous tag (made automatically).
 # Release page text: .github/workflows/release.yml writes it from the full commit messages since the previous tag.
 #
@@ -37,6 +42,18 @@ if (-not $msg) {
         if ($t -and $t.Trim()) { $msg = $t.Trim(); $msgFile = $f }
     }
 }
+# "bump: minor|major - reason" lines -> remembered for the next release, not part of the commit message
+$bumpNew = @()
+if ($msg) {
+    $keep = @()
+    foreach ($line in ($msg -split "\r?\n")) {
+        if ($line -match '^\s*bump\s*:\s*(minor|major)\b[\s:-]*(.*)$') { $bumpNew += ($Matches[1].ToLower() + "`t" + $Matches[2].Trim()) }
+        else { $keep += $line }
+    }
+    $msg = ($keep -join "`n").Trim()
+    if (-not $msg) { $msg = $null }
+}
+$bumpFile = Join-Path $repo '.git\traderos-bump.txt'
 $utf8 = New-Object System.Text.UTF8Encoding $false
 $tmpDir = if ($env:TEMP) { $env:TEMP } else { [IO.Path]::GetTempPath() }
 $tmpMsg = Join-Path $tmpDir 'traderos-publish-msg.txt'
@@ -107,6 +124,11 @@ try {
     Git push -q | Out-Null
     Write-Host "   pushed" -ForegroundColor Green
     if ($msgFile) { Remove-Item $msgFile -ErrorAction SilentlyContinue }   # used - next changes start a new one
+    if ($bumpNew.Count) {
+        $old = if (Test-Path $bumpFile) { [IO.File]::ReadAllText($bumpFile, $utf8) } else { '' }
+        [IO.File]::WriteAllText($bumpFile, $old + (($bumpNew -join "`n") + "`n"), $utf8)
+        Write-Host "   next release will raise the middle number (bump: $(($bumpNew | ForEach-Object { ($_ -split "`t")[0] } | Select-Object -Unique) -join ', '))" -ForegroundColor Yellow
+    }
 
     if ($release) {
         Step "release"
@@ -114,20 +136,40 @@ try {
         $tags = @(Git tag --list 'v*' | ForEach-Object {
             $v = $_.ToString().TrimStart('v'); try { [version]$v } catch { $null } } | Where-Object { $_ } | Sort-Object)
         $last = if ($tags.Count) { $tags[-1] } else { $null }
-        if (-not $version) {
-            $version = if ($last) { "{0}.{1}.{2}" -f $last.Major, $last.Minor, ([Math]::Max($last.Build, 0) + 1) } else { '0.1.0' }
+        # pending bumps written by earlier publishes (see "Version bump" above)
+        $pending = @()
+        if (Test-Path $bumpFile) { $pending = @([IO.File]::ReadAllLines($bumpFile, $utf8) | Where-Object { $_.Trim() }) }
+        $level = 'patch'
+        foreach ($p in $pending) {
+            $lv = ($p -split "`t")[0]
+            if ($lv -eq 'major') { $level = 'major' } elseif ($lv -eq 'minor' -and $level -ne 'major') { $level = 'minor' }
+        }
+        $patchVer = if ($last) { "{0}.{1}.{2}" -f $last.Major, $last.Minor, ([Math]::Max($last.Build, 0) + 1) } else { '0.1.0' }
+        $auto = -not $version
+        if ($auto) {
+            $version = $patchVer
+            if ($last -and $level -eq 'major') { $version = "{0}.0.0" -f ($last.Major + 1) }
+            if ($last -and $level -eq 'minor') { $version = "{0}.{1}.0" -f $last.Major, ($last.Minor + 1) }
         }
         $tag = "v$version"
-        if (Git tag --list $tag) { throw "tag $tag already exists - give a version: release.bat 0.3.0" }
         if ($last) { Write-Host "   latest: v$last" }
-        $ans = Read-Host "   Create release $tag ? (y/N)"
-        if ($ans -notmatch '^[yY]') { Write-Host "   skipped"; exit 0 }
+        $choice = '(y/N)'
+        if ($auto -and $last -and $level -ne 'patch') {
+            Write-Host "   $level version up - reasons:" -ForegroundColor Yellow
+            $pending | ForEach-Object { $r = ($_ -split "`t", 2)[1]; Write-Host "     - $(if ($r) { $r } else { '(no reason)' })" }
+            $choice = "(y = $tag / p = v$patchVer instead / N)"
+        }
+        $ans = Read-Host "   Create release $tag ? $choice"
+        if ($auto -and $ans -match '^[pP]') { $version = $patchVer; $tag = "v$version" }
+        elseif ($ans -notmatch '^[yY]') { Write-Host "   skipped"; exit 0 }
+        if (Git tag --list $tag) { throw "tag $tag already exists - give a version: release.bat 0.3.0" }
         $range = if ($last) { "v$last..HEAD" } else { 'HEAD' }
         $log = Git log --format='- %s' -n 50 $range
         $notes = "TraderOS $tag`n`n" + (($log | ForEach-Object { "$_" }) -join "`n")
         [IO.File]::WriteAllText($tmpMsg, $notes + "`n", $utf8)
         Git tag -a $tag -F $tmpMsg | Out-Null
         Git push -q origin $tag | Out-Null
+        Remove-Item $bumpFile -ErrorAction SilentlyContinue    # used by this release
         $url = (Git remote get-url origin | Select-Object -First 1).ToString() -replace '\.git$', '' -replace '^git@github\.com:', 'https://github.com/'
         Write-Host "   tagged $tag - GitHub is building the release (1-2 min):" -ForegroundColor Green
         Write-Host "   $url/releases"
