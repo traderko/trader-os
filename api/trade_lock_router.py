@@ -43,13 +43,19 @@ class ManualLockRequest(BaseModel):
  
  
 @router.get("/status")
-async def lock_status(request: Request, account_number: int, ea: str | None = None, db: AsyncSession = Depends(get_db),
+async def lock_status(request: Request, account_number: int, ea: str | None = None, src: str | None = None,
+                      db: AsyncSession = Depends(get_db),
                       _=Depends(verify_api_key)):
     account_id = await _resolve_account_id(db, account_number)
     acc = await db.get(Account, account_id)
     # MT5 실행을 꺼 둔 계좌(직접 띄운 MT5)는 서버가 재시작할 수 없으니 '예전 EA - MT5 재시작' 알림을 보내지 않음
-    ea_status.mark(account_id, ea, str(account_number), notify=bool(acc and acc.lock_enabled),
-                   ip=request.client.host if request.client else "")   # 관리 화면의 "EA 연결됨 · 버전" 표시용 (ea = EA 버전, 예전 EA 는 안 보냄)
+    # EA 가 부른 것만 EA 로 셈. 웹 화면(src=web)·브라우저·앱도 같은 주소로 잠금 상태를 읽는데,
+    # 버전(ea)을 안 보내서 '예전 EA' 로 잘못 잡혔었음. 예전 EA 는 ea 없이 MT5 WebRequest 로 옴 (브라우저·앱이 아님)
+    ua = (request.headers.get("user-agent") or "").lower()
+    browser = any(x in ua for x in ("mozilla", "dart", "okhttp", "cfnetwork"))
+    if src != "web" and (ea or not browser):
+        ea_status.mark(account_id, ea, str(account_number), notify=bool(acc and acc.lock_enabled),
+                       ip=request.client.host if request.client else "")   # 관리 화면의 "EA 연결됨 · 버전" 표시용 (ea = EA 버전, 예전 EA 는 안 보냄)
     return await svc.get_lock_state(db, account_id)
  
  

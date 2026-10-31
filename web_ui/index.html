@@ -1167,7 +1167,7 @@ function reasonText(s) {
 async function loadLock() {
   if (!acc || viewOnly()) return;
   try {
-    lockState = await api(`/lock/status?account_number=${encodeURIComponent(acc.account_number)}`);
+    lockState = await api(`/lock/status?account_number=${encodeURIComponent(acc.account_number)}&src=web`);
     $('dot').className = 'dot ok';
   } catch (e) {
     lockState = null;
