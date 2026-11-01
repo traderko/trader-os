@@ -215,6 +215,19 @@ def _close_all_sync(mt5) -> tuple[int, list[str]]:
     return closed, failed
 
 
+def _cancel_pending_sync(mt5) -> tuple[int, list[str]]:
+    """대기 주문(리밋·스탑 - 첫 진입 추가 리밋·구간매매 포함) 전부 취소. (취소한 개수, 실패 설명 목록)
+    손실 한도로 막은 뒤 남은 리밋이 체결되면 새 포지션이 생기므로 (추가 리밋은 EA 강제청산 예외라 그대로 남음)"""
+    done, failed = 0, []
+    for o in mt5.orders_get() or []:
+        res = mt5.order_send({"action": mt5.TRADE_ACTION_REMOVE, "order": o.ticket})
+        if res is not None and res.retcode == mt5.TRADE_RETCODE_DONE:
+            done += 1
+        else:
+            failed.append(f"{o.symbol} #{o.ticket} ({getattr(res, 'retcode', None)} {getattr(res, 'comment', '') if res else mt5.last_error()})")
+    return done, failed
+
+
 async def _loss_limit_loop(mt5, account_row):
     from services import loss_limit as LL
     from services import trade_lock_service as lock_svc
@@ -266,9 +279,17 @@ async def _loss_limit_loop(mt5, account_row):
                 st["stage"] = level
                 LL.write_state(aid, st)
                 saved_at = _time.time()
+                pend_txt = ""
                 if level >= 2:
                     async with AsyncSessionLocal() as db:
                         await lock_svc.set_loss_limit_lock(db, aid, until)
+                    try:
+                        nc, nf = await asyncio.to_thread(_cancel_pending_sync, mt5)
+                        if nc or nf:
+                            pend_txt = f"\n대기 주문 {nc}개 취소" + (f" · 취소 실패 {len(nf)}개: " + ", ".join(nf[:3]) if nf else "")
+                            print(f"[loss_limit] {number} 대기 주문 취소 {nc}개, 실패 {len(nf)}개")
+                    except Exception as e:
+                        pend_txt = f"\n⚠️ 대기 주문 취소 오류: {e}"
                 if level == 1:
                     try:
                         from services import guidelines
@@ -282,15 +303,18 @@ async def _loss_limit_loop(mt5, account_row):
                 elif level == 2:
                     _fcm.send("⛔ 일일 손실 한도 - 새 진입 차단",
                               f"계좌 {number}: 오늘 손실 {pct:.1f}%\n{until.strftime('%m/%d %H:%M')}까지 새로 들어가는 포지션은 바로 청산됩니다. "
-                              f"지금 포지션은 그대로 둡니다. (문구로 풀 수 없음)\n한도: {limits}",
+                              f"지금 포지션은 그대로 둡니다. (문구로 풀 수 없음)\n한도: {limits}{pend_txt}",
                               '{"type":"daily_loss_block","account_number":"%s"}' % number)
 
-            if st.get("stage", 0) >= 3 and close_tries < 5 and await asyncio.to_thread(lambda: bool(mt5.positions_get())):
+            if st.get("stage", 0) >= 3 and close_tries < 5 and await asyncio.to_thread(lambda: bool(mt5.positions_get() or mt5.orders_get())):
                 close_tries += 1
+                nc, nf = await asyncio.to_thread(_cancel_pending_sync, mt5)     # 먼저 대기 주문 - 청산하는 사이 체결되지 않게
                 closed, failed = await asyncio.to_thread(_close_all_sync, mt5)
+                failed = failed + [f"주문 취소 {x}" for x in nf]
                 after = await asyncio.to_thread(mt5.account_info)
                 eq = after.equity if after else info.equity
-                msg = (f"계좌 {number}: 오늘 손실 {pct:.1f}%로 청산 한도를 넘어 포지션 {closed}개를 청산했습니다.\n"
+                msg = (f"계좌 {number}: 오늘 손실 {pct:.1f}%로 청산 한도를 넘어 포지션 {closed}개를 청산"
+                       + (f", 대기 주문 {nc}개를 취소" if nc else "") + "했습니다.\n"
                        f"평가금 {eq:,.2f} · {until.strftime('%m/%d %H:%M')}까지 거래 잠금 (문구로 풀 수 없음)")
                 if failed:
                     msg += f"\n청산 실패 {len(failed)}개 - 다시 시도합니다 ({close_tries}/5): " + ", ".join(failed[:5])
