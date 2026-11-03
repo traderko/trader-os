@@ -832,7 +832,7 @@ function renderAccounts(s) {
       const lossLock = L.manual_kind === 'loss_limit';
       lock = L.locked
         ? `<div class="lockbox locked"><b>🔒 잠김 · ${lossLock ? '일일 손실 한도' : esc(why)}${causes}</b><small>${L.reason === 'manual' ? `${lossLock ? '다음 거래일 06:00에 풀림 · ' : ''}남은 시간 ${hm(L.remaining_sec)}` : (L.phrase_type === 'session' ? '전용 문구를 입력해야 풀립니다' : '확인 문구를 입력해야 풀립니다')}</small>
-            ${L.reason === 'manual' ? '' : `<div><button class="btn unlock-btn" data-unlock="${a.id}">잠금 풀기</button></div>`}
+            ${L.reason === 'manual' ? (lossLock ? `<div><button class="btn unlock-btn" data-loss-release="${a.id}">손실 한도 잠금 풀기</button></div>` : '') : `<div><button class="btn unlock-btn" data-unlock="${a.id}">잠금 풀기</button></div>`}
             <div class="unlock" id="unlock-${a.id}" hidden></div>${dl}</div>`
         : `<div class="lockbox open"><b>🔓 거래 가능</b><small>${esc(why)} · ${hm(L.remaining_sec)} 뒤 다시 잠김</small>${dl}</div>`;
     }
@@ -1672,6 +1672,13 @@ const unlocking = () => [...document.querySelectorAll('.unlock:not([hidden])')].
 setInterval(() => { if (!document.hidden && $('dash').classList.contains('on') && !unlocking()) loadStatus(); }, 5000);
 
 $('accounts').addEventListener('click', async (e) => {
+  const rel = e.target.closest('[data-loss-release]');
+  if (rel) {
+    if (!confirm('일일 손실 한도 잠금을 지금 풀까요?\n(손실 한도를 계속 쓰려면 그대로 두고, 오늘만 풀려면 확인. 끄려면 잠금 규칙 탭에서 꺼 주세요)')) return;
+    try { await api(`accounts/${rel.dataset.lossRelease}/loss-limit-release`, { method: 'POST' }); toast('손실 한도 잠금을 풀었습니다.'); loadStatus(); }
+    catch (err) { toast(err.message, true); }
+    return;
+  }
   const open = e.target.closest('[data-unlock]');
   if (open) {
     const id = open.dataset.unlock, box = $('unlock-' + id);

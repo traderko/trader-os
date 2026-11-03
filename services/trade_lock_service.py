@@ -476,6 +476,19 @@ async def set_loss_limit_lock(db: AsyncSession, account_id: int, until: datetime
     await db.commit()
 
 
+async def release_loss_limit_lock(db: AsyncSession, account_id: int) -> bool:
+    """일일 손실 한도로 걸린 잠금만 풂 (관리 화면 버튼). 사람이 건 수동 잠금이면 건드리지 않고 False"""
+    from services import loss_limit
+    lock = await _get_or_create_lock(db, account_id)
+    until = lock.manual_lock_until.replace(tzinfo=KST) if lock.manual_lock_until else None
+    if until is None or until <= datetime.now(KST) or not loss_limit.locked_by_limit(account_id, lock.manual_lock_until):
+        return False
+    lock.manual_lock_until = None
+    lock.manual_lock_since = None
+    await db.commit()
+    return True
+
+
 async def set_manual_lock(db: AsyncSession, account_id: int, account_number: str, minutes: int) -> dict:
     max_minutes = lock_cfg()["manual_lock_max_minutes"]
     if minutes <= 0 or minutes > max_minutes:

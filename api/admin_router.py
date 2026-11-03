@@ -965,6 +965,22 @@ async def unlock(account_id: int, body: UnlockIn, db: AsyncSession = Depends(get
         raise HTTPException(403, "수동 잠금은 문구로 풀 수 없습니다. 설정한 시간이 지나야 풀립니다.")
 
 
+@router.post("/api/accounts/{account_id}/loss-limit-release")
+async def loss_limit_release(account_id: int, db: AsyncSession = Depends(get_db)):
+    """일일 손실 한도 잠금 풀기 - 관리 화면에서만 (웹·텔레그램에는 없음)"""
+    acc = await _get_account(db, account_id)
+    if not await lock_svc.release_loss_limit_lock(db, account_id):
+        raise HTTPException(400, "일일 손실 한도로 걸린 잠금이 아닙니다.")
+    print(f"[loss_limit] {acc.account_number} 관리 화면에서 손실 한도 잠금을 풀었습니다")
+    try:
+        from services.fcm_service import get_fcm_service
+        get_fcm_service().send("🔓 일일 손실 한도 잠금 해제", f"계좌 {acc.account_number}: 관리 화면에서 손실 한도 잠금을 풀었습니다.",
+                               '{"type":"daily_loss_release"}')
+    except Exception:
+        pass
+    return {"status": "released"}
+
+
 # ── 로그 ────────────────────────────────────────────────────────────
 def _log_dir() -> str:
     return RUNTIME.get("log_dir") or os.path.join(BASE_DIR, "logs")
