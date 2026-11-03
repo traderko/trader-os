@@ -915,7 +915,7 @@
       <input type="date" id="jDate" aria-label="날짜 직접 입력">
     </div>
     <div class="jcal" id="jCal"></div>
-    <p class="hint2" style="margin:8px 0 0">거래가 있는 날만 누를 수 있습니다 · 하루 = 06:00 ~ 다음날 06:00 · 지금 고른 종목·필터 기준</p>
+    <p class="hint2" style="margin:8px 0 0">거래가 있는 날만 누를 수 있습니다 · 하루 = 07:00 ~ 다음날 07:00 (서머타임 아닐 때 08:00) · 지금 고른 종목·필터 기준</p>
     <div class="acts"><button class="btn" id="jToday">오늘</button><span class="sp" style="flex:1"></span><button class="btn" data-close>닫기</button></div>
   </div>
 </div>
@@ -1188,7 +1188,7 @@ function renderLock() {
     const manual = s.reason === 'manual';
     el.className = 'lock locked';
     el.innerHTML = `<div><b>🔒 잠김 · ${esc(why)}${causes}</b>
-      <small>${manual ? `${hm(s.remaining_sec)} 뒤 자동으로 풀립니다${lossLock ? ' (다음 거래일 06:00)' : ''}` : (s.phrase_type && s.phrase_type.startsWith('session') ? '전용 문구를 입력해야 풀립니다' : '확인 문구를 입력해야 풀립니다')}</small></div>
+      <small>${manual ? `${hm(s.remaining_sec)} 뒤 자동으로 풀립니다${lossLock ? ' (다음 거래일 시작 07:00/08:00)' : ''}` : (s.phrase_type && s.phrase_type.startsWith('session') ? '전용 문구를 입력해야 풀립니다' : '확인 문구를 입력해야 풀립니다')}</small></div>
       ${dl}</div>
       ${manual ? '' : '<button class="btn small" id="unlockOpen">잠금 풀기</button>'}`;
   } else {
@@ -1628,8 +1628,14 @@ const pad2 = (n) => String(n).padStart(2, '0');
 const dt = (s) => s ? new Date(s) : null;
 const hmOf = (d) => d ? `${pad2(d.getHours())}:${pad2(d.getMinutes())}` : '';
 const dayKey = (d) => `${d.getFullYear()}.${pad2(d.getMonth() + 1)}.${pad2(d.getDate())}`;
-// 거래일: 오전 6시에 바뀜 (새벽 거래는 전날로) - 손익 탭·일일 손실 한도·텔레그램 '오늘 누적'과 같은 기준
-const tdDate = (d) => new Date(d.getTime() - 6 * 3600e3);
+// 거래일: 뉴욕 18:00(브로커 01:00, 아시아장 시작)에 바뀜 = 한국 시간 07:00 (미국 서머타임) / 08:00 (서머타임 아닐 때)
+//   새벽 거래는 전날로 - 손익 탭·일일 손실 한도·텔레그램 '오늘 누적'과 같은 기준
+const usDstAt = (t) => {   // 미국 서머타임: 3월 둘째 일요일 07:00 UTC ~ 11월 첫 일요일 06:00 UTC
+  const y = t.getUTCFullYear(), sun = (m, n, h) => { const d = new Date(Date.UTC(y, m - 1, 1)); while (d.getUTCDay() !== 0) d.setUTCDate(d.getUTCDate() + 1); d.setUTCDate(d.getUTCDate() + 7 * (n - 1)); d.setUTCHours(h); return d; };
+  return t >= sun(3, 2, 7) && t < sun(11, 1, 6);
+};
+const cutH = (d) => usDstAt(d) ? 7 : 8;          // 그 시각의 거래일 시작 (한국 시간 몇 시)
+const tdDate = (d) => new Date(d.getTime() - cutH(d) * 3600e3);
 const WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 const symKeyOf = (symbol) => { const n = normSym(symbol); for (const s of SYMBOLS) if ((s.names || []).some((x) => n.startsWith(normSym(x)))) return s.key; return 'other'; };
 const net = (t) => (t.profit || 0) + (t.commission || 0);
@@ -2399,12 +2405,11 @@ $('dSave').onclick = async () => {
 //  - 월간 수익률: 일별 Modified Dietz 수익률을 곱해서(입출금 시각 가중). 이월자본이 0이면 입금액 대비.
 let pMode = 'month';
 let pYm = (() => { const d = new Date(); return { y: d.getFullYear(), m: d.getMonth() + 1 }; })();
-const CUTOFF_H = 6;
-const tradingDay = (d) => { const x = new Date(d.getTime() - CUTOFF_H * 3600e3); return `${x.getFullYear()}.${pad2(x.getMonth() + 1)}.${pad2(x.getDate())}`; };
+const tradingDay = (d) => { const x = tdDate(d); return `${x.getFullYear()}.${pad2(x.getMonth() + 1)}.${pad2(x.getDate())}`; };
 const monthKey = (d) => `${d.getFullYear()}.${pad2(d.getMonth() + 1)}`;
 const dayWeight = (d) => {   // 그 거래일에서 이 시각 이후 남은 비율 (0~1)
-  const x = new Date(d.getTime() - CUTOFF_H * 3600e3);
-  const start = new Date(x.getFullYear(), x.getMonth(), x.getDate(), CUTOFF_H);
+  const x = tdDate(d);
+  const start = new Date(x.getFullYear(), x.getMonth(), x.getDate(), cutH(d));
   return Math.min(1, Math.max(0, (start.getTime() + 864e5 - d.getTime()) / 864e5));
 };
 const pct = (v) => v == null || !isFinite(v) ? '-' : (v > 0 ? '+' : '') + (v * 100).toFixed(2) + '%';
@@ -2649,7 +2654,7 @@ let stPeriod = (() => { try { return localStorage.getItem('stPeriod') || '3m'; }
 const PERIOD_LABEL = { week: '이번 주', '1m': '최근 1개월', '3m': '최근 3개월', year: '' };
 function periodFrom(now = new Date()) {
   if (stPeriod === 'year') return new Date(stYear, 0, 1);
-  if (stPeriod === 'week') { const td = tradingDate(now); return new Date(td.getFullYear(), td.getMonth(), td.getDate() - (td.getDay() + 6) % 7, TD_CUTOFF); }
+  if (stPeriod === 'week') { const td = tradingDate(now); return new Date(td.getFullYear(), td.getMonth(), td.getDate() - (td.getDay() + 6) % 7, cutH(now)); }
   const m = stPeriod === '1m' ? 1 : 3;
   return new Date(now.getFullYear(), now.getMonth() - m, now.getDate(), now.getHours(), now.getMinutes());
 }
@@ -2770,8 +2775,7 @@ function breakdown(ts, keyOf, labelOf) {
 }
 
 // 거래일·세션·서머타임 (KST, 앱과 같은 규칙)
-const TD_CUTOFF = 6;
-const tradingDate = (d) => { const x = new Date(d.getTime() - TD_CUTOFF * 3600e3); return new Date(x.getFullYear(), x.getMonth(), x.getDate()); };
+const tradingDate = (d) => { const x = tdDate(d); return new Date(x.getFullYear(), x.getMonth(), x.getDate()); };
 const nthSundayUtc = (y, m, n, h) => { const d = new Date(Date.UTC(y, m - 1, 1)); while (d.getUTCDay() !== 0) d.setUTCDate(d.getUTCDate() + 1); d.setUTCDate(d.getUTCDate() + 7 * (n - 1)); d.setUTCHours(h); return d; };
 const lastSundayUtc = (y, m, h) => { const d = new Date(Date.UTC(y, m, 0)); while (d.getUTCDay() !== 0) d.setUTCDate(d.getUTCDate() - 1); d.setUTCHours(h); return d; };
 const isUsDst = (t) => { const y = t.getUTCFullYear(); return t >= nthSundayUtc(y, 3, 2, 7) && t < nthSundayUtc(y, 11, 1, 6); };
@@ -2781,12 +2785,12 @@ const DST_LABEL = ['서머타임', '표준시', '전환기'];
 const SESSION_LABEL = ['아시아장', '유럽장', '미국장'];
 const bounds = (t) => ({ eu: isUkDst(t) ? 7 : 8, us: isUsDst(t) ? 13.5 : 14.5 });
 const sessionOf = (t) => {
-  const h = t.getUTCHours() + t.getUTCMinutes() / 60, start = (TD_CUTOFF - 9 + 24) % 24, b = bounds(t);
+  const h = t.getUTCHours() + t.getUTCMinutes() / 60, start = (cutH(t) - 9 + 24) % 24, b = bounds(t);
   return h >= start || h < b.eu ? 0 : h < b.us ? 1 : 2;
 };
 const schedule = (at) => {
   const k = (u) => { const m = Math.round((u + 9) * 60) % 1440; return `${pad2(m / 60 | 0)}:${pad2(m % 60)}`; };
-  const b = bounds(at), st = k((TD_CUTOFF - 9 + 24) % 24);
+  const b = bounds(at), st = k((cutH(at) - 9 + 24) % 24);
   return `아시아 ${st}–${k(b.eu)} · 유럽 ${k(b.eu)}–${k(b.us)} · 미국 ${k(b.us)}–${st}`;
 };
 
@@ -2943,7 +2947,7 @@ function breakdownFor(ts) {
     case 'weekday': return breakdown(ts, (t) => (tradingDate(t.open).getDay() + 6) % 7, (k) => ['월', '화', '수', '목', '금', '토', '일'][k]);
     case 'session': return breakdown(ts, (t) => sessionOf(t.open), (k) => SESSION_LABEL[k]);
     case 'dst': return breakdown(ts, (t) => dstOf(t.open) * 10 + sessionOf(t.open), (k) => `${DST_LABEL[k / 10 | 0]} · ${SESSION_LABEL[k % 10]}`);
-    case 'hour': return breakdown(ts, (t) => (t.open.getHours() - TD_CUTOFF + 24) % 24, (k) => `${pad2((k + TD_CUTOFF) % 24)}시`);
+    case 'hour': return breakdown(ts, (t) => (t.open.getHours() - cutH(new Date()) + 24) % 24, (k) => `${pad2((k + cutH(new Date())) % 24)}시`);
   }
 }
 
@@ -2955,7 +2959,7 @@ function renderStats() {
   const now = new Date(), y = now.getFullYear();
   const sched = stMode === 'session' || stMode === 'dst'
     ? `서머타임: ${schedule(new Date(Date.UTC(y, 6, 15, 3)))}<br>표준시: ${schedule(new Date(Date.UTC(y, 0, 15, 3)))}<br>전환기: 미국·영국 중 한쪽만 서머타임인 3월·10~11월 기간 · 진입 시각 기준 (KST)`
-    : '하루 = 06:00 ~ 다음날 06:00 (KST), 손익 탭과 같은 기준';
+    : '하루 = 07:00 ~ 다음날 07:00 (KST, 미국 서머타임 아닐 때 08:00), 손익 탭과 같은 기준';
   const maxAbs = ex ? Math.max(0, ...ex.byOrder.map((o) => Math.abs(o.avg))) : 0;
   const pickName = stTagPick === null ? null : stTagPick === 0 ? '근거 없음' : (ts.flatMap((t) => [...stTagsOf(t, stTagType)]).find(([id]) => id === stTagPick) || [])[1];
   if (stTagPick !== null && pickName == null) stTagPick = null;   // 기간을 바꿔서 그 근거가 없어졌으면 풂

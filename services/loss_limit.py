@@ -1,6 +1,6 @@
 # services/loss_limit.py
 #
-# 일일 손실 한도 - 거래일 시작(한국 시간 06:00) 평가금 대비 손실률로 단계별 조치.
+# 일일 손실 한도 - 거래일 시작(한국 시간 07:00, 미국 서머타임 아닐 때 08:00) 평가금 대비 손실률로 단계별 조치.
 #   1) warn  : 텔레그램 경고
 #   2) block : 새 진입 차단 - 다음 거래일 06:00까지 '풀 수 없는 잠금'(수동 잠금과 같은 방식)
 #              EA는 잠금 순간의 포지션은 두고, 그 뒤에 들어간 포지션만 바로 청산함
@@ -37,17 +37,23 @@ def cfg() -> dict:
     }
 
 
+NY = ZoneInfo("America/New_York")
+
+
 def trading_day(now: datetime) -> str:
-    return (now.astimezone(KST) - timedelta(hours=DAY_START.hour, minutes=DAY_START.minute)).date().isoformat()
+    """거래일 = 뉴욕 18:00(브로커 01:00)에 바뀜 → 한국 시간 07:00(미국 서머타임) / 08:00(아닐 때). 웹 손익·거래내역과 같은 기준"""
+    return (now.astimezone(NY).replace(tzinfo=None) + timedelta(hours=6)).date().isoformat()
 
 
 def day_start(now: datetime) -> datetime:
-    d = datetime.fromisoformat(trading_day(now)).date()
-    return datetime.combine(d, DAY_START, KST)
+    """그 거래일 시작 = 전날 뉴욕 18:00"""
+    d = datetime.fromisoformat(trading_day(now)).date() - timedelta(days=1)
+    return datetime(d.year, d.month, d.day, 18, 0, tzinfo=NY).astimezone(KST)
 
 
 def next_day_start(now: datetime) -> datetime:
-    return day_start(now) + timedelta(days=1)
+    d = datetime.fromisoformat(trading_day(now)).date()
+    return datetime(d.year, d.month, d.day, 18, 0, tzinfo=NY).astimezone(KST)
 
 
 def stage_for(pct: float, c: dict) -> int:
