@@ -43,6 +43,7 @@ from services import symbols
 STATE_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "telegram_live.json")
 API = "https://api.telegram.org/bot{token}/{method}"
 POLL_SEC = 2
+LONG_POLL_SEC = 20     # getUpdates 롱 폴링 (이 안에 버튼·메시지가 오면 바로 받음)
 FORCE_EDIT_SEC = 60          # 내용이 같아도 이 간격으로는 시각을 갱신
 UNLOCK_TTL = 300             # 잠금 풀기 문구를 보여준 뒤 답장을 기다리는 시간(초)
 TYPE_SEC_PER_CHAR = 0.15     # 이보다 빨리 온 답장은 붙여넣기로 보고 거절 (한글 직접 입력은 보통 글자당 0.2초 이상)
@@ -235,9 +236,9 @@ class TelegramLive:
             pass
 
     # ── 텔레그램 API ──
-    async def _call(self, client: httpx.AsyncClient, token: str, method: str, **params) -> dict:
+    async def _call(self, client: httpx.AsyncClient, token: str, method: str, _timeout: float = 15, **params) -> dict:
         try:
-            r = await client.post(API.format(token=token, method=method), json=params, timeout=15)
+            r = await client.post(API.format(token=token, method=method), json=params, timeout=_timeout)
             return r.json()
         except Exception as e:
             return {"ok": False, "description": str(e).replace(token, "***")}
@@ -1030,7 +1031,8 @@ class TelegramLive:
         params = {"timeout": 0, "allowed_updates": ["message", "callback_query"]}
         if confirm:
             params["offset"] = max(offsets.get(key, 0), seen + 1)
-        r = await self._call(client, token, "getUpdates", **params)
+            params["timeout"] = LONG_POLL_SEC     # 롱 폴링: 버튼·메시지가 오면 텔레그램이 바로 돌려줌 (2초 기다림 없음)
+        r = await self._call(client, token, "getUpdates", _timeout=params["timeout"] + 10, **params)
         if not r.get("ok"):
             desc = r.get("description") or "알 수 없는 오류"
             if "webhook" in desc.lower():
@@ -1200,50 +1202,78 @@ class TelegramLive:
             self._save()
 
     async def run(self) -> None:
+        """봇 메시지·버튼 확인과 실시간 고정 메시지 갱신을 따로 돌림.
+        (예전엔 한 줄로 돌아서, 실시간 메시지를 만드는 몇 초 동안 - 특히 청산 직후 - 누른 버튼이 늦게 처리됐음)"""
         print("[telegram-live] 시작")
-        next_update = 0.0
         async with httpx.AsyncClient() as client:
-            while True:
-                try:
-                    cfg = telegram_cfg()
-                    token, chat_id = cfg["bot_token"], cfg["chat_id"]
-                    status["has_token"] = bool(token)
-                    if not token:
-                        await asyncio.sleep(5)
-                        continue
-                    if status["bot"] is None:
-                        me = await self._call(client, token, "getMe")
-                        if me.get("ok"):
-                            status["bot"] = "@" + (me["result"].get("username") or "")
-                            print(f"[telegram-live] 봇 {status['bot']} 연결됨 - 봇에게 /start 를 보내면 chat id를 알려줍니다")
-                            await self._call(client, token, "setMyCommands", commands=[
-                                {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
-                                {"command": "pos", "description": "포지션 SL/TP 설정"},
-                                {"command": "calc", "description": "SL·TP 예상 손익 계산"},
-                                {"command": "grid", "description": "구간매매 - 버튼으로 하나씩 설정 (또는 한 줄로)"},
-                                {"command": "grids", "description": "진행 중인 구간매매·청산"},
-                                {"command": "ktr", "description": "KTR 표 (장 × 시간봉)"},
-                                {"command": "reasons", "description": "근거 없는 거래 모아 보기 (/근거 3일)"},
-                                {"command": "events", "description": "이번 주 지표 발표·지표일 잠금 (/지표)"},
-                                {"command": "sim", "description": "청산 시뮬레이션 (알림 미리보기)"},
-                                {"command": "update", "description": "새 버전 확인·업데이트"},
-                                {"command": "cancel", "description": "잠금 풀기 그만두기"},
-                                {"command": "id", "description": "이 대화의 chat id 보기"},
-                            ])
-                    await self.poll(client, token, confirm=bool(chat_id))
+            live_task = asyncio.create_task(self._live_loop(client))
+            try:
+                await self._poll_loop(client)
+            finally:
+                live_task.cancel()
+
+    async def _poll_loop(self, client: httpx.AsyncClient) -> None:
+        while True:
+            wait = POLL_SEC
+            try:
+                cfg = telegram_cfg()
+                token, chat_id = cfg["bot_token"], cfg["chat_id"]
+                status["has_token"] = bool(token)
+                if not token:
+                    await asyncio.sleep(5)
+                    continue
+                if status["bot"] is None:
+                    me = await self._call(client, token, "getMe")
+                    if me.get("ok"):
+                        status["bot"] = "@" + (me["result"].get("username") or "")
+                        print(f"[telegram-live] 봇 {status['bot']} 연결됨 - 봇에게 /start 를 보내면 chat id를 알려줍니다")
+                        await self._call(client, token, "setMyCommands", commands=[
+                            {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
+                            {"command": "pos", "description": "포지션 SL/TP 설정"},
+                            {"command": "calc", "description": "SL·TP 예상 손익 계산"},
+                            {"command": "grid", "description": "구간매매 - 버튼으로 하나씩 설정 (또는 한 줄로)"},
+                            {"command": "grids", "description": "진행 중인 구간매매·청산"},
+                            {"command": "ktr", "description": "KTR 표 (장 × 시간봉)"},
+                            {"command": "reasons", "description": "근거 없는 거래 모아 보기 (/근거 3일)"},
+                            {"command": "events", "description": "이번 주 지표 발표·지표일 잠금 (/지표)"},
+                            {"command": "sim", "description": "청산 시뮬레이션 (알림 미리보기)"},
+                            {"command": "update", "description": "새 버전 확인·업데이트"},
+                            {"command": "cancel", "description": "잠금 풀기 그만두기"},
+                            {"command": "id", "description": "이 대화의 chat id 보기"},
+                        ])
+                await self.poll(client, token, confirm=bool(chat_id))
+                if chat_id and not status["error"]:
+                    wait = 0                  # 롱 폴링이 이미 기다렸음 - 바로 다음 확인
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                print(f"[telegram-live] 오류: {e}")
+            if wait:
+                await asyncio.sleep(wait)
+
+    async def _live_loop(self, client: httpx.AsyncClient) -> None:
+        """실시간 고정 메시지 - live_interval_sec 마다, 또는 force 가 켜지면 바로"""
+        next_update = 0.0
+        while True:
+            try:
+                cfg = telegram_cfg()
+                token, chat_id = cfg["bot_token"], cfg["chat_id"]
+                if token and chat_id and cfg["live_enabled"]:
                     forced = self.force.is_set()
-                    if chat_id and cfg["live_enabled"] and (forced or time.time() >= next_update):
+                    if forced or time.time() >= next_update:
                         self.force.clear()
                         await self.update(client, token, chat_id, force=forced, position=cfg["live_position"])
                         next_update = time.time() + cfg["live_interval_sec"]
-                except asyncio.CancelledError:
-                    raise
-                except Exception as e:
-                    print(f"[telegram-live] 오류: {e}")
-                try:
-                    await asyncio.wait_for(self.force.wait(), POLL_SEC)
-                except asyncio.TimeoutError:
-                    pass
+                else:
+                    self.force.clear()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                print(f"[telegram-live] 실시간 메시지 오류: {e}")
+            try:
+                await asyncio.wait_for(self.force.wait(), 1)
+            except asyncio.TimeoutError:
+                pass
 
 
 live = TelegramLive()
