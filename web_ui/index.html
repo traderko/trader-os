@@ -2088,15 +2088,38 @@ async function pineCodeText() {
     pineTpl = await r.text();
   }
   // 묶지 않은 개별 거래를 넣음 - 묶기·개별 보기 전환은 파인 지표 설정 [보기 방식]에서
-  const closed = pineInRange().filter((t) => t.close_time && t.price_close != null && t.profit != null);
+  let closed = pineInRange().filter((t) => t.close_time && t.price_close != null && t.profit != null);
   closed.sort((a, b) => dt(a.close_time) - dt(b.close_time));
   if (!closed.length) return null;
+  const all = closed.length;
   const sec = (v) => Math.floor(dt(v).getTime() / 1000);
-  const base = Math.min(...closed.map((t) => sec(t.open_time)));
-  const num = (v) => String(+Number(v).toFixed(5));
-  const rows = closed.map((t) => [sec(t.open_time) - base, num(t.price_open), sec(t.close_time) - base, num(t.price_close),
-    String(t.position || '').toLowerCase().startsWith('b') ? 'b' : 's', num(t.volume), num(t.profit), String(t.symbol).replace(/,/g, '')].join(','));
-  const chunks = []; let cur = [], size = 0;              // 문자열 하나당 3000자 이하로 (파인 문자열 길이 제한)
+  // 트레이딩뷰 컴파일 토큰 한도(약 10만) - 코드 몫을 빼고 데이터는 이 글자 수까지. 넘으면 오래된 거래부터 뺌
+  const BUDGET = 50000;
+  const decOf = (v) => { const t = String(+Number(v).toFixed(5)); return t.includes('.') ? t.split('.')[1].length : 0; };
+  // 압축 형식 (trade_history.pine 의 f_parseCompact 와 짝): 진입시각차,보유초,진입가차(틱),청산-진입(틱),b|s,랏×100,손익×100,종목번호
+  const encode = (list) => {
+    const syms = [...new Set(list.map((t) => t.symbol))];
+    const dig = syms.map((sy) => Math.max(0, ...list.filter((t) => t.symbol === sy).flatMap((t) => [decOf(t.price_open), decOf(t.price_close)])));
+    const base = Math.min(...list.map((t) => sec(t.open_time)));
+    let prevO = base; const last = syms.map(() => 0);
+    const rows = list.map((t) => {
+      const si = syms.indexOf(t.symbol), m = 10 ** dig[si], o = sec(t.open_time);
+      const tk = Math.round(Number(t.price_open) * m), tc = Math.round(Number(t.price_close) * m);
+      const r = [o - prevO, sec(t.close_time) - o, tk - last[si], tc - tk,
+        String(t.position || '').toLowerCase().startsWith('b') ? 'b' : 's',
+        Math.round(Number(t.volume) * 100), Math.round(Number(t.profit) * 100), si].join(',');
+      prevO = o; last[si] = tk; return r;
+    });
+    return { rows, base, syms: syms.map((sy, i) => `${String(sy).replace(/[|:,]/g, '')}:${dig[i]}`).join('|') };
+  };
+  let enc = encode(closed), len = enc.rows.reduce((n, r) => n + r.length + 1, 0);
+  while (len > BUDGET && closed.length > 1) {
+    const avg = len / closed.length;
+    closed = closed.slice(Math.max(1, Math.ceil((len - BUDGET) / avg)));
+    enc = encode(closed); len = enc.rows.reduce((n, r) => n + r.length + 1, 0);
+  }
+  const rows = enc.rows, base = enc.base;
+  const chunks = []; let cur = [], size = 0;              // 문자열 하나당 3000자 이하로
   for (const r of rows) {
     if (cur.length && size + r.length + 2 > 3000) { chunks.push(cur.join('\n')); cur = []; size = 0; }
     cur.push(r); size += r.length + 2;
@@ -2114,6 +2137,7 @@ async function pineCodeText() {
     '// ▼▼▼ TRADEROS DATA BEGIN — TraderOS가 자동 생성, 직접 수정 금지 ▼▼▼',
     `const int    DATA_BASE_MS   = ${base * 1000}`,
     `const string DATA_GENERATED = "${q(label)}"`,
+    `const string DATA_SYMS      = "${q(enc.syms)}"`,
     ...fns,
     'f_data() =>',
     '    a = array.new<string>()',
@@ -2123,15 +2147,15 @@ async function pineCodeText() {
   ].join('\n');
   const re = /^\/\/ ▼▼▼ TRADEROS DATA BEGIN[\s\S]*?^\/\/ ▲▲▲ TRADEROS DATA END[^\n]*$/m;
   if (!re.test(pineTpl)) throw new Error('템플릿에서 데이터 자리를 찾지 못했습니다');
-  return { code: pineTpl.replace(re, () => block), n: rows.length, syms: [...new Set(closed.map((t) => t.symbol))] };
+  return { code: pineTpl.replace(re, () => block), n: rows.length, dropped: all - rows.length, syms: [...new Set(closed.map((t) => t.symbol))] };
 }
 $('pineCode').onclick = async () => {
   try {
     const r = await pineCodeText();
     if (!r) return toast('이 기간에 청산된 거래가 없습니다', true);
     await copyText(r.code);
-    toast(`TV 코드를 복사했습니다 · ${r.n}건 · ${r.syms.length}종목 · ${Math.round(r.code.length / 1024)}KB`);
-    if (r.code.length > 300000) toast('코드가 매우 큽니다. 트레이딩뷰가 저장을 거부하면 기간을 줄여 주세요.', true);
+    if (r.dropped) toast(`TV 코드를 복사했습니다 · 최근 ${r.n}건 · 트레이딩뷰 코드 한도 때문에 이전 ${r.dropped}건은 빠짐 (기간을 줄이면 다 들어감)`, true);
+    else toast(`TV 코드를 복사했습니다 · ${r.n}건 · ${r.syms.length}종목`);
   } catch (e) { toast(e.message === 'copy' ? '복사하지 못했습니다' : e.message, true); }
 };
 

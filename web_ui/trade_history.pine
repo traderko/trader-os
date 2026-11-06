@@ -5,11 +5,14 @@ indicator("TraderOS 거래내역", overlay=true, max_lines_count=500, max_labels
 // ▼▼▼ TRADEROS DATA BEGIN — TraderOS가 자동 생성, 직접 수정 금지 ▼▼▼
 const int    DATA_BASE_MS   = 0
 const string DATA_GENERATED = "-"
+const string DATA_SYMS      = ""
 f_data() =>
     array.from("")
 // ▲▲▲ TRADEROS DATA END ▲▲▲
 // 데이터는 f_data() 함수(들) 안에 - 전역에 두면 '본문이 너무 길다'(CE10295)로 거부됨
-// 행 형식: openOffsetSec,openPrice,closeOffsetSec,closePrice,b|s,lot,profit,symbol  (청산 시각 순, 묶지 않은 개별 거래)
+// 컴파일 토큰 한도(약 10만)가 있어서 압축 형식: 청산 시각 순, 한 줄 = 거래 하나
+//   진입시각차(초, 앞 줄 진입 기준),보유(초),진입가차(틱, 같은 종목 앞 줄 기준),청산-진입(틱),b|s,랏×100,손익×100,종목번호
+//   DATA_SYMS = "종목:소수자리|종목:소수자리" (종목번호 순)
 // 웹 TraderOS → 거래내역 → TV → [TV 코드 복사] 로 이 파일 전체를 새로 만들어 붙여넣으면 됨
 // ============================================================
 
@@ -146,9 +149,37 @@ f_parseRows(string src, int baseMs, string defaultSym, bool isOffset, array<Trad
 // 1) 파싱 + 묶기: 처음 한 번 (차트를 옮기거나 설정을 바꾸면 지표가 처음부터 다시 계산되므로 그때마다 다시)
 //    전역 코드가 너무 길면 파인이 거부해서(CE10295) 전부 함수 안에 둠
 // ============================================================
+// 압축 데이터 한 덩어리 읽기 (st: [앞 줄 진입 ms], lastTicks: 종목별 앞 줄 진입가 틱)
+f_parseCompact(string src, array<string> syms, array<float> scales, array<int> st, array<float> lastTicks, array<TradeRecord> out) =>
+    for row in str.split(src, "\n")
+        f = str.split(row, ",")
+        if array.size(f) >= 8
+            si      = int(str.tonumber(array.get(f, 7)))
+            sc      = array.get(scales, si)
+            openMs  = array.get(st, 0) + int(str.tonumber(array.get(f, 0))) * 1000
+            array.set(st, 0, openMs)
+            closeMs = openMs + int(str.tonumber(array.get(f, 1))) * 1000
+            ticks   = array.get(lastTicks, si) + str.tonumber(array.get(f, 2))
+            array.set(lastTicks, si, ticks)
+            sy      = array.get(syms, si)
+            if f_symMatch(sy)
+                array.push(out, TradeRecord.new(openMs, ticks / sc, closeMs, (ticks + str.tonumber(array.get(f, 3))) / sc,
+                     array.get(f, 4) == "b" ? "buy" : "sell", str.tonumber(array.get(f, 5)) / 100, str.tonumber(array.get(f, 6)) / 100,
+                     sy, 1, closeMs, array.new<int>()))
+    true
+
 f_load(array<TradeRecord> raw, array<TradeRecord> groups) =>
+    syms   = array.new<string>()
+    scales = array.new<float>()
+    if str.length(DATA_SYMS) > 0
+        for it in str.split(DATA_SYMS, "|")
+            kv = str.split(it, ":")
+            array.push(syms, array.get(kv, 0))
+            array.push(scales, math.pow(10, array.size(kv) > 1 ? str.tonumber(array.get(kv, 1)) : 2))
+    st = array.from(DATA_BASE_MS)
+    lastTicks = array.new<float>(array.size(syms), 0.0)
     for chunk in f_data()
-        f_parseRows(chunk, DATA_BASE_MS, "", true, raw)
+        f_parseCompact(chunk, syms, scales, st, lastTicks, raw)
     if str.length(tradeDataInput) > 0
         cleanInput = str.replace_all(str.replace_all(tradeDataInput, "\r\n", "\n"), "\r", "\n")
         hdr = str.split(array.get(str.split(cleanInput, "\n"), 0), ",")
