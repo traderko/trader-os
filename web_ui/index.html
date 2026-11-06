@@ -861,7 +861,7 @@
 <div class="modal" id="pineModal" hidden>
   <div class="sheet">
     <h3>트레이딩뷰에 붙여넣을 거래내역</h3>
-    <p><b>[TV 코드 복사]</b>: 고른 기간의 <b>모든 종목</b> 거래가 들어간 파인 코드 전체를 복사합니다. 트레이딩뷰 Pine 편집기에서 전체 선택 → 붙여넣기 → 저장하면 차트 종목에 맞는 거래만, 화면에 보이는 구간만 자동으로 그립니다 (스크립트는 비공개로 저장). 묶음/개별 보기는 지표 설정 [보기 방식]에서 바꿉니다.
+    <p><b>[TV 코드 (전체)·(묶음)]</b>: 고른 기간의 <b>모든 종목</b> 거래가 들어간 파인 코드 전체를 복사합니다. 트레이딩뷰 Pine 편집기에서 전체 선택 → 붙여넣기 → 저장하면 차트 종목에 맞는 거래만, 화면에 보이는 구간만 자동으로 그립니다 (스크립트는 비공개로 저장). (전체)는 체결 하나하나, (묶음)은 분할 진입을 평단으로 묶고 실제 진입 자리도 표시 - 저장한 뒤에도 지표 설정 [보기 방식]에서 바꿀 수 있습니다.
       <br><small class="muted">[전체 거래 복사]·[묶음 거래 복사]는 예전 방식 - 아래 종목 데이터만 입력창에 붙여넣기용. 묶음 = 같은 방향·1분 안에 같이 청산한 분할 진입을 한 줄로 (평균 진입가·합계 랏·합계 손익)</small></p>
     <div class="seg" id="pineSyms"></div>
     <div class="pinebar">
@@ -885,7 +885,8 @@
       <button class="btn" data-close>닫기</button>
       <button class="btn" id="pineCopy">전체 거래 복사</button>
       <button class="btn" id="pineCopyMerged">묶음 거래 복사</button>
-      <button class="btn primary" id="pineCode">TV 코드 복사</button>
+      <button class="btn primary" id="pineCode">TV 코드 (전체)</button>
+      <button class="btn primary" id="pineCodeMerged">TV 코드 (묶음)</button>
     </div>
   </div>
 </div>
@@ -2080,7 +2081,7 @@ async function copyText(text) {
 
 // TV 코드: trade_history.pine 템플릿의 DATA 블록을 고른 기간 모든 종목 거래로 채운 파인 코드 전체
 let pineTpl = null;
-async function pineCodeText() {
+async function pineCodeText(merged = false) {
   if (!pineTpl) {
     const r = await fetch('trade_history.pine', { cache: 'no-cache' });
     if (!r.ok) throw new Error('템플릿을 불러오지 못했습니다 (' + r.status + ')');
@@ -2146,17 +2147,31 @@ async function pineCodeText() {
   ].join('\n');
   const re = /^\/\/ ▼▼▼ TRADEROS DATA BEGIN[\s\S]*?^\/\/ ▲▲▲ TRADEROS DATA END[^\n]*$/m;
   if (!re.test(pineTpl)) throw new Error('템플릿에서 데이터 자리를 찾지 못했습니다');
-  return { code: pineTpl.replace(re, () => block), n: rows.length, dropped: all - rows.length, syms: [...new Set(closed.map((t) => t.symbol))] };
+  // 전체/묶음 버튼에 맞춰 [보기 방식] 기본값과 지표 이름을 바꿈 (둘 다 다른 이름으로 저장해 두고 골라 써도 됨)
+  //   제목·설정 창 [데이터]: 계좌 · 기간 · 전체/묶음 · 건수
+  const kind = merged ? '묶음' : '전체';
+  const period = $('pineRange').textContent.replace(/[()]/g, '').trim().replace(/^전체$/, '전체 기간');
+  const shortP = (all - rows.length) ? `${period} 중 최근 ${rows.length}건` : period;
+  const title = `TraderOS ${acc.account_number} · ${shortP} (${kind})`;
+  const info = `계좌 ${acc.account_number} · ${shortP} · ${kind} · ${rows.length}건 · ${stamp} 생성`;
+  let code = pineTpl.replace(re, () => block)
+    .replace(/^(viewMode\s*=\s*input\.string\()"[^"]*"/m, `$1"${merged ? '묶음 + 개별 진입점' : '개별 거래'}"`)
+    .replace(/^indicator\("TraderOS 거래내역"/m, `indicator("${q(title)}"`)
+    .replace(/^(dataInfo\s*=\s*input\.string\()"-"(.*?)options=\["-"\]/m, (_m, a, b) => `${a}"${q(info)}"${b}options=["${q(info)}"]`);
+  return { code, n: rows.length, dropped: all - rows.length, syms: [...new Set(closed.map((t) => t.symbol))] };
 }
-$('pineCode').onclick = async () => {
+async function pineCodeCopy(merged) {
   try {
-    const r = await pineCodeText();
+    const r = await pineCodeText(merged);
     if (!r) return toast('이 기간에 청산된 거래가 없습니다', true);
     await copyText(r.code);
-    if (r.dropped) toast(`TV 코드를 복사했습니다 · 최근 ${r.n}건 · 트레이딩뷰 코드 한도 때문에 이전 ${r.dropped}건은 빠짐 (기간을 줄이면 다 들어감)`, true);
-    else toast(`TV 코드를 복사했습니다 · ${r.n}건 · ${r.syms.length}종목`);
+    const kind = merged ? '묶음' : '전체';
+    if (r.dropped) toast(`TV 코드(${kind})를 복사했습니다 · 최근 ${r.n}건 · 트레이딩뷰 코드 한도 때문에 이전 ${r.dropped}건은 빠짐 (기간을 줄이면 다 들어감)`, true);
+    else toast(`TV 코드(${kind})를 복사했습니다 · ${r.n}건 · ${r.syms.length}종목`);
   } catch (e) { toast(e.message === 'copy' ? '복사하지 못했습니다' : e.message, true); }
-};
+}
+$('pineCode').onclick = () => pineCodeCopy(false);
+$('pineCodeMerged').onclick = () => pineCodeCopy(true);
 
 async function pineCopyData(merged) {
   const text = merged ? pine.merged : pine.text;
