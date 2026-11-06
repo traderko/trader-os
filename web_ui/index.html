@@ -511,6 +511,7 @@
   .sheet.fit > .acts { flex: none; padding-top: 10px; margin-top: 2px; border-top: 1px solid var(--line); }
   #tagApplyModal .tamem { max-height: 132px; }
   #gdModal .acts { flex-wrap: wrap; }
+  #pineModal .acts { flex-wrap: wrap; }
   .cmp { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; text-align: center; }
   .cmp small { display: block; font-size: 11.5px; color: var(--muted); }
   .cmp span { font-weight: 600; font-size: 15px; }
@@ -861,7 +862,7 @@
   <div class="sheet">
     <h3>트레이딩뷰에 붙여넣을 거래내역</h3>
     <p><b>[TV 코드 복사]</b>: 고른 기간의 <b>모든 종목</b> 거래가 들어간 파인 코드 전체를 복사합니다. 트레이딩뷰 Pine 편집기에서 전체 선택 → 붙여넣기 → 저장하면 차트 종목에 맞는 거래만, 화면에 보이는 구간만 자동으로 그립니다 (스크립트는 비공개로 저장). 묶음/개별 보기는 지표 설정 [보기 방식]에서 바꿉니다.
-      <br><small class="muted">[복사하기]는 예전 방식 - 아래 종목 데이터만 입력창에 붙여넣기용</small></p>
+      <br><small class="muted">[전체 거래 복사]·[묶음 거래 복사]는 예전 방식 - 아래 종목 데이터만 입력창에 붙여넣기용. 묶음 = 같은 방향·1분 안에 같이 청산한 분할 진입을 한 줄로 (평균 진입가·합계 랏·합계 손익)</small></p>
     <div class="seg" id="pineSyms"></div>
     <div class="pinebar">
       <input type="number" id="pineDays" min="1" max="3650" value="7" inputmode="numeric" aria-label="일수">
@@ -878,13 +879,12 @@
       <button class="btn small ghost" data-pq="week">이번 주</button><button class="btn small ghost" data-pq="lweek">지난 주</button>
       <button class="btn small ghost" data-pq="month">이번 달</button><button class="btn small ghost" data-pq="lmonth">지난 달</button>
     </div>
-    <label class="pinemerge"><input type="checkbox" id="pineMerge"> 같이 청산한 분할 진입은 한 줄로 합치기
-      <small class="muted">(같은 방향·1분 안에 청산 → 평균 진입가·합계 랏·합계 손익. 트뷰는 그림 개수 제한이 있어 많으면 오래된 게 안 보임)</small></label>
     <textarea id="pineText" readonly spellcheck="false"></textarea>
     <div class="pinemeta muted" id="pineMeta"></div>
     <div class="acts">
       <button class="btn" data-close>닫기</button>
-      <button class="btn" id="pineCopy">복사하기</button>
+      <button class="btn" id="pineCopy">전체 거래 복사</button>
+      <button class="btn" id="pineCopyMerged">묶음 거래 복사</button>
       <button class="btn primary" id="pineCode">TV 코드 복사</button>
     </div>
   </div>
@@ -1925,9 +1925,9 @@ function pineMerge(list) {
     open_time: new Date(g._o).toISOString(), close_time: new Date(g._c).toISOString() }));
 }
 
-function pineText(list, symbol) {
+function pineText(list, symbol, merge = false) {
   let closed = list.filter((t) => t.close_time && t.price_close != null && t.profit != null && (!symbol || t.symbol === symbol));
-  if ($('pineMerge').checked) closed = pineMerge(closed);
+  if (merge) closed = pineMerge(closed);
   closed.sort((a, b) => dt(a.open_time) - dt(b.open_time));
   if (!closed.length) return '';
   const base = dt(closed[0].open_time).getTime();
@@ -1997,16 +1997,17 @@ function pineRender() {
   const list = pineInRange().filter((t) => pine.sym === 'all' || symKeyOf(t.symbol) === pine.sym);
   // 이 묶음에서 실제 심볼이 하나면 첫 줄에 한 번만, 여러 개면(브로커가 바뀐 경우 등) 줄마다
   const one = pine.sym !== 'all' && opt.symbols.length === 1 ? opt.symbols[0] : null;
-  const text = pineText(list, one);
+  const text = pineText(list, one), merged = pineText(list, one, true);
+  pine.text = text; pine.merged = merged;               // 미리보기는 전체(개별) 거래
   $('pineText').value = text || '(내보낼 청산 거래가 없습니다)';
-  $('pineCopy').disabled = !text;
+  $('pineCopy').disabled = $('pineCopyMerged').disabled = !text;
   $('pineRange').textContent = pine.from ? `(${pine.from === pine.to ? pineShort(pine.from) : pineShort(pine.from) + ' ~ ' + pineShort(pine.to)})`
     : pine.days == null ? '(전체)' : `(최근 ${pine.days}일)`;
   document.querySelectorAll('#pineRecent, #pineAll, #pineRangeGo').forEach((b) => b.classList.remove('primary'));
   $(pine.from ? 'pineRangeGo' : pine.days == null ? 'pineAll' : 'pineRecent').classList.add('primary');
   const n = text ? text.split('\n').length - 1 : 0;
-  const raw = $('pineMerge').checked ? list.filter((t) => t.close_time && (!one || t.symbol === one)).length : n;
-  $('pineMeta').textContent = text ? `${n}줄${raw !== n ? ` (거래 ${raw}건을 합침)` : ''} · ${text.length.toLocaleString()}자${one ? ` · 심볼 ${one}` : (opt.symbols.length > 1 ? ' · 심볼이 여러 개라 줄마다 표시' : '')}` : '';
+  const nm = merged ? merged.split('\n').length - 1 : 0;
+  $('pineMeta').textContent = text ? `전체 ${n}줄 · 묶음 ${nm}줄 · ${text.length.toLocaleString()}자${one ? ` · 심볼 ${one}` : (opt.symbols.length > 1 ? ' · 심볼이 여러 개라 줄마다 표시' : '')}` : '';
 }
 
 async function openPine() {
@@ -2030,8 +2031,6 @@ async function pineSetDays(days) {
   try { await pineLoad(); pineRender(); } catch (e) { $('pineText').value = '거래내역을 불러오지 못했습니다: ' + e.message; }
 }
 $('tPine').onclick = openPine;
-$('pineMerge').checked = lsGet('traderos:pinemerge', '1') === '1';
-$('pineMerge').onchange = () => { lsSet('traderos:pinemerge', $('pineMerge').checked ? '1' : '0'); pineRender(); };
 $('pineSyms').onclick = (e) => { const b = e.target.closest('button[data-sym]'); if (!b) return; pine.sym = b.dataset.sym; pineRender(); };
 $('pineRecent').onclick = () => { const d = parseInt($('pineDays').value, 10); pineSetDays(d > 0 ? d : (pine.days ?? 7)); };
 $('pineAll').onclick = () => pineSetDays(null);
@@ -2159,15 +2158,14 @@ $('pineCode').onclick = async () => {
   } catch (e) { toast(e.message === 'copy' ? '복사하지 못했습니다' : e.message, true); }
 };
 
-$('pineCopy').onclick = async () => {
-  const text = $('pineText').value;
-  try {
-    // http(Tailscale·같은 네트워크)에서는 navigator.clipboard 가 없어서 예전 방식으로
-    if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
-    else { const ta = $('pineText'); ta.focus(); ta.select(); if (!document.execCommand('copy')) throw new Error('copy'); ta.setSelectionRange(0, 0); }
-    toast('클립보드에 복사했습니다');
-  } catch { $('pineText').select(); toast('복사하지 못했습니다. 글자를 길게 눌러 직접 복사하세요.', true); }
-};
+async function pineCopyData(merged) {
+  const text = merged ? pine.merged : pine.text;
+  if (!text) return;
+  try { await copyText(text); toast(`${merged ? '묶음' : '전체'} 거래 ${text.split('\n').length - 1}줄을 복사했습니다`); }
+  catch { $('pineText').value = text; $('pineText').select(); toast('복사하지 못했습니다. 글자를 길게 눌러 직접 복사하세요.', true); }
+}
+$('pineCopy').onclick = () => pineCopyData(false);
+$('pineCopyMerged').onclick = () => pineCopyData(true);
 
 $('tCollect').onclick = async () => {
   if (!acc) return;
