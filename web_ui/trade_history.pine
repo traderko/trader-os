@@ -6,12 +6,14 @@ indicator("TraderOS 거래내역", overlay=true, max_lines_count=500, max_labels
 const int    DATA_BASE_MS   = 0
 const string DATA_GENERATED = "-"
 const string DATA_SYMS      = ""
+const bool   DATA_MERGED    = false
 f_data() =>
     array.from("")
 // ▲▲▲ TRADEROS DATA END ▲▲▲
 // 데이터는 f_data() 함수(들) 안에 - 전역에 두면 '본문이 너무 길다'(CE10295)로 거부됨
 // 컴파일 토큰 한도(약 10만)가 있어서 압축 형식: 청산 시각 순, 한 줄 = 거래 하나
-//   진입시각차(초, 앞 줄 진입 기준),보유(초),진입가차(틱, 같은 종목 앞 줄 기준),청산-진입(틱),b|s,랏×100,손익×100,종목번호
+//   진입시각차(초, 앞 줄 진입 기준),보유(초),진입가차(틱, 같은 종목 앞 줄 기준),청산-진입(틱),b|s,랏×100,손익×100,종목번호[,묶인 건수]
+//   DATA_MERGED = true 면 웹에서 이미 묶은 데이터 (평균 진입·청산가, 합계 랏·손익) - 묶음만 표시
 //   DATA_SYMS = "종목:소수자리|종목:소수자리" (종목번호 순)
 // 웹 TraderOS → 거래내역 → TV → [TV 코드 복사] 로 이 파일 전체를 새로 만들어 붙여넣으면 됨
 // ============================================================
@@ -64,8 +66,9 @@ aggTz        = input.string("Asia/Seoul", "집계 기준 시간대", group="Summ
 TF_MS     = timeframe.in_seconds(timeframe.period) * 1000
 MAX_LINES  = 500         // 파인 그림 한도 (선)
 MAX_LABELS = 500         // 파인 그림 한도 (라벨)
-useGroups  = viewMode != "개별 거래"
-showPicks  = viewMode == "묶음 + 개별 진입점"
+// 묶음 데이터(DATA_MERGED)면 한 줄이 이미 묶음 - 다시 묶지 않음
+useGroups  = not DATA_MERGED and viewMode != "개별 거래"
+showPicks  = not DATA_MERGED and viewMode == "묶음 + 개별 진입점"
 
 f_labelSize() =>
     switch labelSizeOpt
@@ -167,7 +170,7 @@ f_parseCompact(string src, array<string> syms, array<float> scales, array<int> s
             if f_symMatch(sy)
                 array.push(out, TradeRecord.new(openMs, ticks / sc, closeMs, (ticks + str.tonumber(array.get(f, 3))) / sc,
                      array.get(f, 4) == "b" ? "buy" : "sell", str.tonumber(array.get(f, 5)) / 100, str.tonumber(array.get(f, 6)) / 100,
-                     sy, 1, closeMs, array.new<int>()))
+                     sy, array.size(f) >= 9 ? int(str.tonumber(array.get(f, 8))) : 1, closeMs, array.new<int>()))
     true
 
 f_load(array<TradeRecord> raw, array<TradeRecord> groups) =>
@@ -325,7 +328,7 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
         cnt = winCount + lossCount
         winRate = cnt > 0 ? float(winCount) / cnt * 100 : 0.0
         pf = grossLoss != 0 ? math.abs(grossWin / grossLoss) : na
-        unit = useGroups ? "묶음" : "건"
+        unit = useGroups or DATA_MERGED ? "묶음" : "건"
         st = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
         table.cell(st, 0, 0, "보기", text_color=color.white)
         table.cell(st, 1, 0, viewMode + (useGroups ? " · 거래 " + str.tostring(array.size(raw)) + "건" : ""), text_color=color.white)
@@ -351,7 +354,7 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
         startPos  = total > maxAggRows ? total - maxAggRows : 0
         ag = table.new(f_aggTablePos(), 3, total - startPos + 1, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
         table.cell(ag, 0, 0, aggPeriod == "Weekly" ? "Week" : "Date", text_color=color.white, bgcolor=color.new(color.gray, 50))
-        table.cell(ag, 1, 0, useGroups ? "묶음" : "Trades", text_color=color.white, bgcolor=color.new(color.gray, 50))
+        table.cell(ag, 1, 0, useGroups or DATA_MERGED ? "묶음" : "Trades", text_color=color.white, bgcolor=color.new(color.gray, 50))
         table.cell(ag, 2, 0, "P/L", text_color=color.white, bgcolor=color.new(color.gray, 50))
         rowIdx = 1
         for p = startPos to total - 1

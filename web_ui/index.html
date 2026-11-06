@@ -861,7 +861,7 @@
 <div class="modal" id="pineModal" hidden>
   <div class="sheet">
     <h3>트레이딩뷰에 붙여넣을 거래내역</h3>
-    <p><b>[TV 코드 (전체)·(묶음)]</b>: 고른 기간의 <b>모든 종목</b> 거래가 들어간 파인 코드 전체를 복사합니다. 트레이딩뷰 Pine 편집기에서 전체 선택 → 붙여넣기 → 저장하면 차트 종목에 맞는 거래만, 화면에 보이는 구간만 자동으로 그립니다 (스크립트는 비공개로 저장). (전체)는 체결 하나하나, (묶음)은 분할 진입을 평단으로 묶고 실제 진입 자리도 표시 - 저장한 뒤에도 지표 설정 [보기 방식]에서 바꿀 수 있습니다.
+    <p><b>[TV 코드 (전체)·(묶음)]</b>: 고른 기간·<b>고른 종목 탭</b>(전체면 모든 종목) 거래가 들어간 파인 코드 전체를 복사합니다. 트레이딩뷰 Pine 편집기에서 전체 선택 → 붙여넣기 → 저장하면 차트 종목에 맞는 거래만, 화면에 보이는 구간만 자동으로 그립니다 (스크립트는 비공개로 저장). (전체)는 체결 하나하나, (묶음)은 분할 진입을 평단으로 묶고 실제 진입 자리도 표시 - 저장한 뒤에도 지표 설정 [보기 방식]에서 바꿀 수 있습니다.
       <br><small class="muted">[전체 거래 복사]·[묶음 거래 복사]는 예전 방식 - 아래 종목 데이터만 입력창에 붙여넣기용. 묶음 = 같은 방향·1분 안에 같이 청산한 분할 진입을 한 줄로 (평균 진입가·합계 랏·합계 손익)</small></p>
     <div class="seg" id="pineSyms"></div>
     <div class="pinebar">
@@ -2087,10 +2087,18 @@ async function pineCodeText(merged = false) {
     if (!r.ok) throw new Error('템플릿을 불러오지 못했습니다 (' + r.status + ')');
     pineTpl = await r.text();
   }
-  // 묶지 않은 개별 거래를 넣음 - 묶기·개별 보기 전환은 파인 지표 설정 [보기 방식]에서
-  let closed = pineInRange().filter((t) => t.close_time && t.price_close != null && t.profit != null);
+  // (전체): 묶지 않은 개별 거래를 넣음 - 개별·묶음 보기 전환은 파인 지표 설정 [보기 방식]에서
+  // (묶음): 여기서 묶은 데이터만 넣음 (트뷰 한도 안에 더 많은 기간) - 묶음만 표시, 개별 진입점은 없음
+  // 위에서 고른 종목 탭(전체·골드·나스닥…)의 거래만
+  let closed = pineInRange().filter((t) => t.close_time && t.price_close != null && t.profit != null
+    && (pine.sym === 'all' || symKeyOf(t.symbol) === pine.sym));
   closed.sort((a, b) => dt(a.close_time) - dt(b.close_time));
   if (!closed.length) return null;
+  const rawN = closed.length;
+  const decOf0 = (v) => { const t = String(+Number(v).toFixed(5)); return t.includes('.') ? t.split('.')[1].length : 0; };
+  const digOf = {};                                         // 종목별 가격 소수 자리 (묶음 평균가도 이 자리로 반올림)
+  for (const t of closed) digOf[t.symbol] = Math.max(digOf[t.symbol] || 0, decOf0(t.price_open), decOf0(t.price_close));
+  if (merged) { closed = pineMerge(closed); closed.sort((a, b) => dt(a.close_time) - dt(b.close_time)); }
   const all = closed.length;
   const sec = (v) => Math.floor(dt(v).getTime() / 1000);
   // 트레이딩뷰 컴파일 토큰 한도(약 10만) - 코드 몫을 빼고 데이터는 이 글자 수까지. 넘으면 오래된 거래부터 뺌
@@ -2099,7 +2107,7 @@ async function pineCodeText(merged = false) {
   // 압축 형식 (trade_history.pine 의 f_parseCompact 와 짝): 진입시각차,보유초,진입가차(틱),청산-진입(틱),b|s,랏×100,손익×100,종목번호
   const encode = (list) => {
     const syms = [...new Set(list.map((t) => t.symbol))];
-    const dig = syms.map((sy) => Math.max(0, ...list.filter((t) => t.symbol === sy).flatMap((t) => [decOf(t.price_open), decOf(t.price_close)])));
+    const dig = syms.map((sy) => Math.max(digOf[sy] ?? 2, merged ? 2 : 0));   // 묶음 평균가는 소수 2자리 이상
     const base = Math.min(...list.map((t) => sec(t.open_time)));
     let prevO = base; const last = syms.map(() => 0);
     const rows = list.map((t) => {
@@ -2107,7 +2115,7 @@ async function pineCodeText(merged = false) {
       const tk = Math.round(Number(t.price_open) * m), tc = Math.round(Number(t.price_close) * m);
       const r = [o - prevO, sec(t.close_time) - o, tk - last[si], tc - tk,
         String(t.position || '').toLowerCase().startsWith('b') ? 'b' : 's',
-        Math.round(Number(t.volume) * 100), Math.round(Number(t.profit) * 100), si].join(',');
+        Math.round(Number(t.volume) * 100), Math.round(Number(t.profit) * 100), si].concat(merged ? [t.n || 1] : []).join(',');
       prevO = o; last[si] = tk; return r;
     });
     return { rows, base, syms: syms.map((sy, i) => `${String(sy).replace(/[|:,]/g, '')}:${dig[i]}`).join('|') };
@@ -2138,6 +2146,7 @@ async function pineCodeText(merged = false) {
     `const int    DATA_BASE_MS   = ${base * 1000}`,
     `const string DATA_GENERATED = "${q(label)}"`,
     `const string DATA_SYMS      = "${q(enc.syms)}"`,
+    `const bool   DATA_MERGED    = ${merged ? 'true' : 'false'}`,
     ...fns,
     'f_data() =>',
     '    a = array.new<string>()',
@@ -2150,15 +2159,20 @@ async function pineCodeText(merged = false) {
   // 전체/묶음 버튼에 맞춰 [보기 방식] 기본값과 지표 이름을 바꿈 (둘 다 다른 이름으로 저장해 두고 골라 써도 됨)
   //   제목·설정 창 [데이터]: 계좌 · 기간 · 전체/묶음 · 건수
   const kind = merged ? '묶음' : '전체';
+  const symLabel = pine.sym === 'all' ? '전 종목' : (SYMBOLS.find((g) => g.key === pine.sym)?.label || '기타');
+  const keptRaw = merged ? closed.reduce((n, t) => n + (t.n || 1), 0) : rows.length;
+  const cntTxt = merged ? `묶음 ${rows.length}개(거래 ${keptRaw}건)` : `${rows.length}건`;
   const period = $('pineRange').textContent.replace(/[()]/g, '').trim().replace(/^전체$/, '전체 기간');
-  const shortP = (all - rows.length) ? `${period} 중 최근 ${rows.length}건` : period;
-  const title = `TraderOS ${acc.account_number} · ${shortP} (${kind})`;
-  const info = `계좌 ${acc.account_number} · ${shortP} · ${kind} · ${rows.length}건 · ${stamp} 생성`;
+  const shortP = (rawN - keptRaw) ? `${period} 중 최근 ${keptRaw}건` : period;
+  const title = `TraderOS ${acc.account_number} · ${symLabel} · ${shortP} (${kind})`;
+  const info = `계좌 ${acc.account_number} · ${symLabel} · ${shortP} · ${kind} · ${cntTxt} · ${stamp} 생성`;
   let code = pineTpl.replace(re, () => block)
-    .replace(/^(viewMode\s*=\s*input\.string\()"[^"]*"/m, `$1"${merged ? '묶음 + 개별 진입점' : '개별 거래'}"`)
+    .replace(/^viewMode\s*=\s*input\.string\([\s\S]*?\)\n(?=mergeSec)/m, merged
+      ? 'viewMode     = input.string("묶음 데이터", "보기 방식", options=["묶음 데이터"], tooltip="묶음 데이터로 만든 코드라 묶음만 표시. 개별 거래·진입점도 보려면 웹에서 [TV 코드 (전체)]")\n'
+      : (m) => m.replace(/input\.string\("[^"]*"/, 'input.string("개별 거래"'))
     .replace(/^indicator\("TraderOS 거래내역"/m, `indicator("${q(title)}"`)
     .replace(/^(dataInfo\s*=\s*input\.string\()"-"(.*?)options=\["-"\]/m, (_m, a, b) => `${a}"${q(info)}"${b}options=["${q(info)}"]`);
-  return { code, n: rows.length, dropped: all - rows.length, syms: [...new Set(closed.map((t) => t.symbol))] };
+  return { code, n: rows.length, cntTxt, symLabel, dropped: rawN - keptRaw, syms: [...new Set(closed.map((t) => t.symbol))] };
 }
 async function pineCodeCopy(merged) {
   try {
@@ -2166,8 +2180,8 @@ async function pineCodeCopy(merged) {
     if (!r) return toast('이 기간에 청산된 거래가 없습니다', true);
     await copyText(r.code);
     const kind = merged ? '묶음' : '전체';
-    if (r.dropped) toast(`TV 코드(${kind})를 복사했습니다 · 최근 ${r.n}건 · 트레이딩뷰 코드 한도 때문에 이전 ${r.dropped}건은 빠짐 (기간을 줄이면 다 들어감)`, true);
-    else toast(`TV 코드(${kind})를 복사했습니다 · ${r.n}건 · ${r.syms.length}종목`);
+    if (r.dropped) toast(`TV 코드(${kind})를 복사했습니다 · ${r.symLabel} 최근 ${r.cntTxt} · 트레이딩뷰 코드 한도 때문에 이전 ${r.dropped}건은 빠짐 (기간을 줄이면 다 들어감)`, true);
+    else toast(`TV 코드(${kind})를 복사했습니다 · ${r.symLabel} ${r.cntTxt}`);
   } catch (e) { toast(e.message === 'copy' ? '복사하지 못했습니다' : e.message, true); }
 }
 $('pineCode').onclick = () => pineCodeCopy(false);
