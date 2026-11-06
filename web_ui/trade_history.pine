@@ -109,13 +109,13 @@ type TradeRecord
     float  openPrice
     int    closeTime
     float  closePrice
-    string position
-    float  volume
+    string dir
+    float  vol
     float  profit
     string symbol
 
-f_parseRows(string text, int baseMs, string defaultSym, bool isOffset, array<TradeRecord> out) =>
-    for row in str.split(text, "\n")
+f_parseRows(string src, int baseMs, string defaultSym, bool isOffset, array<TradeRecord> out) =>
+    for row in str.split(src, "\n")
         if str.length(row) > 0 and not str.startswith(row, "H,")
             f = str.split(row, ",")
             minFields = defaultSym != "" ? 7 : 8
@@ -204,14 +204,14 @@ if barstate.islast
             if visible and drawn < DRAW_LIMIT
                 drawn += 1
                 isWin = t.profit >= 0
-                isBuy = t.position == "buy"
+                isBuy = t.dir == "buy"
                 resultCol = isWin ? winColor : lossColor
                 openTimeStr  = str.format_time(t.openTime,  timeFormat, labelTz)
                 closeTimeStr = str.format_time(t.closeTime, timeFormat, labelTz)
                 tipBase = t.symbol + " " + (isBuy ? "BUY" : "SELL") + "\n" +
                      "Open:   " + openTimeStr  + "  @" + str.tostring(t.openPrice) + "\n" +
                      "Close:  " + closeTimeStr + "  @" + str.tostring(t.closePrice) + "\n" +
-                     "Volume: " + str.tostring(t.volume) + "\n" +
+                     "Volume: " + str.tostring(t.vol) + "\n" +
                      "Profit: " + str.tostring(t.profit, "#.##")
                 snappedOpen  = f_snapToBar(t.openTime)
                 snappedClose = f_snapToBar(t.closeTime)
