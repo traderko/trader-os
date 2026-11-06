@@ -860,7 +860,8 @@
 <div class="modal" id="pineModal" hidden>
   <div class="sheet">
     <h3>트레이딩뷰에 붙여넣을 거래내역</h3>
-    <p>파인스크립트 <code>input.text_area()</code> 입력창에 그대로 붙여넣으세요. 청산된 거래만 들어갑니다.</p>
+    <p><b>[TV 코드 복사]</b>: 고른 기간의 <b>모든 종목</b> 거래가 들어간 파인 코드 전체를 복사합니다. 트레이딩뷰 Pine 편집기에서 전체 선택 → 붙여넣기 → 저장하면 차트 종목에 맞는 거래만, 화면에 보이는 구간만 자동으로 그립니다 (스크립트는 비공개로 저장).
+      <br><small class="muted">[복사하기]는 예전 방식 - 아래 종목 데이터만 입력창에 붙여넣기용</small></p>
     <div class="seg" id="pineSyms"></div>
     <div class="pinebar">
       <input type="number" id="pineDays" min="1" max="3650" value="7" inputmode="numeric" aria-label="일수">
@@ -883,7 +884,8 @@
     <div class="pinemeta muted" id="pineMeta"></div>
     <div class="acts">
       <button class="btn" data-close>닫기</button>
-      <button class="btn primary" id="pineCopy">복사하기</button>
+      <button class="btn" id="pineCopy">복사하기</button>
+      <button class="btn primary" id="pineCode">TV 코드 복사</button>
     </div>
   </div>
 </div>
@@ -2067,6 +2069,64 @@ document.querySelector('.pinequick').onclick = (e) => {
   pineSetRange(isoDay(r[0]), isoDay(r[1]));
 };
 $('pineModal').addEventListener('click', (e) => { if (e.target === $('pineModal') || e.target.closest('[data-close]')) $('pineModal').hidden = true; });
+// 클립보드 복사 (http 에서는 navigator.clipboard 가 없어서 숨긴 글상자로)
+async function copyText(text) {
+  if (navigator.clipboard && window.isSecureContext) return navigator.clipboard.writeText(text);
+  const ta = document.createElement('textarea');
+  ta.value = text; ta.setAttribute('readonly', ''); ta.style.cssText = 'position:fixed;top:0;left:0;opacity:0';
+  document.body.appendChild(ta); ta.select();
+  const ok = document.execCommand('copy'); ta.remove();
+  if (!ok) throw new Error('copy');
+}
+
+// TV 코드: trade_history.pine 템플릿의 DATA 블록을 고른 기간 모든 종목 거래로 채운 파인 코드 전체
+let pineTpl = null;
+async function pineCodeText() {
+  if (!pineTpl) {
+    const r = await fetch('trade_history.pine', { cache: 'no-cache' });
+    if (!r.ok) throw new Error('템플릿을 불러오지 못했습니다 (' + r.status + ')');
+    pineTpl = await r.text();
+  }
+  let closed = pineInRange().filter((t) => t.close_time && t.price_close != null && t.profit != null);
+  if ($('pineMerge').checked) closed = pineMerge(closed);
+  closed.sort((a, b) => dt(a.close_time) - dt(b.close_time));
+  if (!closed.length) return null;
+  const sec = (v) => Math.floor(dt(v).getTime() / 1000);
+  const base = Math.min(...closed.map((t) => sec(t.open_time)));
+  const num = (v) => String(+Number(v).toFixed(5));
+  const rows = closed.map((t) => [sec(t.open_time) - base, num(t.price_open), sec(t.close_time) - base, num(t.price_close),
+    String(t.position || '').toLowerCase().startsWith('b') ? 'b' : 's', num(t.volume), num(t.profit), String(t.symbol).replace(/,/g, '')].join(','));
+  const chunks = []; let cur = [], size = 0;              // 문자열 하나당 3000자 이하로 (파인 문자열 길이 제한)
+  for (const r of rows) {
+    if (cur.length && size + r.length + 2 > 3000) { chunks.push(cur.join('\n')); cur = []; size = 0; }
+    cur.push(r); size += r.length + 2;
+  }
+  if (cur.length) chunks.push(cur.join('\n'));
+  const q = (x) => x.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
+  const now = new Date(), stamp = `${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+  const label = `${stamp} · ${$('pineRange').textContent.replace(/[()]/g, '')} · ${rows.length}건`;
+  const block = [
+    '// ▼▼▼ TRADEROS DATA BEGIN — TraderOS가 자동 생성, 직접 수정 금지 ▼▼▼',
+    `const int    DATA_BASE_MS   = ${base * 1000}`,
+    `const string DATA_GENERATED = "${q(label)}"`,
+    'var array<string> DATA_CHUNKS = array.from(',
+    chunks.map((c) => `     "${q(c)}"`).join(',\n') + ')',
+    '// ▲▲▲ TRADEROS DATA END ▲▲▲',
+  ].join('\n');
+  const re = /^\/\/ ▼▼▼ TRADEROS DATA BEGIN[\s\S]*?^\/\/ ▲▲▲ TRADEROS DATA END[^\n]*$/m;
+  if (!re.test(pineTpl)) throw new Error('템플릿에서 데이터 자리를 찾지 못했습니다');
+  return { code: pineTpl.replace(re, () => block), n: rows.length, syms: [...new Set(closed.map((t) => t.symbol))] };
+}
+$('pineCode').onclick = async () => {
+  try {
+    const r = await pineCodeText();
+    if (!r) return toast('이 기간에 청산된 거래가 없습니다', true);
+    await copyText(r.code);
+    toast(`TV 코드를 복사했습니다 · ${r.n}건 · ${r.syms.length}종목 · ${Math.round(r.code.length / 1024)}KB`);
+    if (r.code.length > 300000) toast('코드가 매우 큽니다. 트레이딩뷰가 저장을 거부하면 기간을 줄여 주세요.', true);
+  } catch (e) { toast(e.message === 'copy' ? '복사하지 못했습니다' : e.message, true); }
+};
+
 $('pineCopy').onclick = async () => {
   const text = $('pineText').value;
   try {
