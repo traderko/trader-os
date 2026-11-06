@@ -181,7 +181,12 @@ def _positions_block(positions: list[dict]) -> list[str]:
             if side:
                 vol = sum(p["volume"] for p in side)
                 avg = sum(p["price_open"] * p["volume"] for p in side) / vol if vol else 0
-                sides.append(f"{label} {vol:g}lot 📍{_f(avg)}")
+                cur = side[0].get("price_current") or 0
+                pts = ""
+                if cur and avg:                  # 평단에서 지금가까지 이익 방향(+)/손실 방향(-) 포인트
+                    dg = side[0].get("digits") if isinstance(side[0].get("digits"), int) else 2
+                    pts = f" ({((cur - avg) if t == 0 else (avg - cur)):+,.{min(dg, 2)}f}pt)"
+                sides.append(f"{label} {vol:g}lot 📍{_f(avg)}{pts}")
         out.append(f"{icon} <b>{html.escape(sym)}</b>  {' · '.join(sides)}  <b>{_money(profit)}</b>")
         # 구간매매로 넣은 포지션은 따로 (직접 거래와 구분)
         from services.grid import kind_of, MODE_KR
