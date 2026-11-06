@@ -2105,12 +2105,20 @@ async function pineCodeText() {
   const q = (x) => x.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
   const now = new Date(), stamp = `${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
   const label = `${stamp} · ${$('pineRange').textContent.replace(/[()]/g, '')} · ${rows.length}건`;
+  // 파인은 전역 코드 길이에 제한이 있어(CE10295) 데이터를 함수 안에 넣음 - 함수 하나에 문자열 5개씩
+  const fns = [];
+  for (let i = 0; i < chunks.length; i += 5) {
+    fns.push(`f_d${fns.length}() =>\n    array.from(` + chunks.slice(i, i + 5).map((c) => `"${q(c)}"`).join(',\n         ') + ')');
+  }
   const block = [
     '// ▼▼▼ TRADEROS DATA BEGIN — TraderOS가 자동 생성, 직접 수정 금지 ▼▼▼',
     `const int    DATA_BASE_MS   = ${base * 1000}`,
     `const string DATA_GENERATED = "${q(label)}"`,
-    'var array<string> DATA_CHUNKS = array.from(',
-    chunks.map((c) => `     "${q(c)}"`).join(',\n') + ')',
+    ...fns,
+    'f_data() =>',
+    '    a = array.new<string>()',
+    ...fns.map((_, i) => `    array.concat(a, f_d${i}())`),
+    '    a',
     '// ▲▲▲ TRADEROS DATA END ▲▲▲',
   ].join('\n');
   const re = /^\/\/ ▼▼▼ TRADEROS DATA BEGIN[\s\S]*?^\/\/ ▲▲▲ TRADEROS DATA END[^\n]*$/m;

@@ -5,8 +5,10 @@ indicator("TraderOS 거래내역", overlay=true, max_lines_count=500, max_labels
 // ▼▼▼ TRADEROS DATA BEGIN — TraderOS가 자동 생성, 직접 수정 금지 ▼▼▼
 const int    DATA_BASE_MS   = 0
 const string DATA_GENERATED = "-"
-var array<string> DATA_CHUNKS = array.from("")
+f_data() =>
+    array.from("")
 // ▲▲▲ TRADEROS DATA END ▲▲▲
+// 데이터는 f_data() 함수(들) 안에 - 전역에 두면 '본문이 너무 길다'(CE10295)로 거부됨
 // 행 형식: openOffsetSec,openPrice,closeOffsetSec,closePrice,b|s,lot,profit,symbol  (청산 시각 순, 묶지 않은 개별 거래)
 // 웹 TraderOS → 거래내역 → TV → [TV 코드 복사] 로 이 파일 전체를 새로 만들어 붙여넣으면 됨
 // ============================================================
@@ -34,7 +36,7 @@ timeFormat    = input.string("MM-dd HH:mm", "시간 표시 형식", group="Displ
 labelTz       = input.string("Asia/Seoul", "라벨 시간대", group="Display")
 showLines     = input.bool(true,  "Show Entry-Exit Lines",  group="Display")
 showEntry     = input.bool(true,  "Show Entry Markers",     group="Display", tooltip="끄면 거래당 라벨이 1개라 한 화면에 더 많이 그림")
-showStats     = input.bool(true,  "Show Stats Table",       group="Display")
+showStats     = input.bool(false, "Show Stats Table",       group="Display")
 statsScope    = input.string("화면", "통계·집계 기준", options=["화면", "전체"], group="Display")
 labelSizeOpt  = input.string("tiny", "Label Size", options=["tiny", "small", "normal", "large"], group="Display")
 lineWidth     = input.int(1, "Line Width", minval=1, maxval=5, group="Display")
@@ -142,11 +144,10 @@ f_parseRows(string src, int baseMs, string defaultSym, bool isOffset, array<Trad
 
 // ============================================================
 // 1) 파싱 + 묶기: 처음 한 번 (차트를 옮기거나 설정을 바꾸면 지표가 처음부터 다시 계산되므로 그때마다 다시)
+//    전역 코드가 너무 길면 파인이 거부해서(CE10295) 전부 함수 안에 둠
 // ============================================================
-var array<TradeRecord> raw    = array.new<TradeRecord>()
-var array<TradeRecord> groups = array.new<TradeRecord>()
-if barstate.isfirst
-    for chunk in DATA_CHUNKS
+f_load(array<TradeRecord> raw, array<TradeRecord> groups) =>
+    for chunk in f_data()
         f_parseRows(chunk, DATA_BASE_MS, "", true, raw)
     if str.length(tradeDataInput) > 0
         cleanInput = str.replace_all(str.replace_all(tradeDataInput, "\r\n", "\n"), "\r", "\n")
@@ -181,22 +182,19 @@ if barstate.isfirst
                 ng = TradeRecord.new(r.openTime, r.openPrice, r.closeTime, r.closePrice, r.dir, r.lot, r.profit, r.sym, 1, r.closeTime, array.from(i))
                 array.push(groups, ng)
                 map.put(lastOf, k, array.size(groups) - 1)
+    true
 
 // ============================================================
 // 2) 그리기: 마지막 봉에서. 자동 페이징이면 화면에 걸친 거래만, 그림 한도가 차면 화면 안에서 최근 것부터
 // ============================================================
-var table st = na
-var table ag = na
-if barstate.islast
+f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
     // 실시간 봉마다 다시 그리므로 앞서 그린 것을 지움
     while array.size(line.all) > 0
         line.delete(array.first(line.all))
     while array.size(label.all) > 0
         label.delete(array.first(label.all))
-    if not na(st)
-        table.delete(st)
-    if not na(ag)
-        table.delete(ag)
+    while array.size(table.all) > 0
+        table.delete(array.first(table.all))
 
     list    = useGroups ? groups : raw
     n       = array.size(list)
@@ -295,7 +293,7 @@ if barstate.islast
         winRate = cnt > 0 ? float(winCount) / cnt * 100 : 0.0
         pf = grossLoss != 0 ? math.abs(grossWin / grossLoss) : na
         unit = useGroups ? "묶음" : "건"
-        st := table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
+        st = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
         table.cell(st, 0, 0, "보기", text_color=color.white)
         table.cell(st, 1, 0, viewMode + (useGroups ? " · 거래 " + str.tostring(array.size(raw)) + "건" : ""), text_color=color.white)
         table.cell(st, 0, 1, autoPage ? "표시 / 화면 / 전체" : "표시 / 전체", text_color=color.white)
@@ -318,7 +316,7 @@ if barstate.islast
         sortedIdx = array.sort_indices(periodKeys, order.ascending)
         total     = array.size(sortedIdx)
         startPos  = total > maxAggRows ? total - maxAggRows : 0
-        ag := table.new(f_aggTablePos(), 3, total - startPos + 1, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
+        ag = table.new(f_aggTablePos(), 3, total - startPos + 1, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
         table.cell(ag, 0, 0, aggPeriod == "Weekly" ? "Week" : "Date", text_color=color.white, bgcolor=color.new(color.gray, 50))
         table.cell(ag, 1, 0, useGroups ? "묶음" : "Trades", text_color=color.white, bgcolor=color.new(color.gray, 50))
         table.cell(ag, 2, 0, "P/L", text_color=color.white, bgcolor=color.new(color.gray, 50))
@@ -330,3 +328,11 @@ if barstate.islast
             table.cell(ag, 1, rowIdx, str.tostring(array.get(periodCount, idx)), text_color=color.white)
             table.cell(ag, 2, rowIdx, str.tostring(pnl, "#.##"), text_color=pnl >= 0 ? winColor : lossColor)
             rowIdx += 1
+    true
+
+var array<TradeRecord> RAW    = array.new<TradeRecord>()
+var array<TradeRecord> GROUPS = array.new<TradeRecord>()
+if barstate.isfirst
+    f_load(RAW, GROUPS)
+if barstate.islast
+    f_draw(RAW, GROUPS)
