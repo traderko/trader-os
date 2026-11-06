@@ -353,7 +353,7 @@ async def _group_message(db: AsyncSession, account_id: int, account_number: str,
         if holds:
             a, b = _hold(min(holds)), _hold(max(holds))
             hold = f" · 보유 {a}" if a == b else f" · 보유 {a}~{b}"
-        lines.append(f"평균 {_price(ao)} → {_price(ac)} ({move:+,.2f}){hold}")
+        lines.append(f"평균 {_price(ao)} → {_price(ac)} ({move:+,.2f}pt){hold}")
     lines.append(f"손익 {profit:+,.2f} · 수수료 {fee:+,.2f} · {when} · 계좌 {account_number}")
     return title, "\n".join(lines + [l for l in keep if not l.startswith(("청산가", "평균"))
                                        and "→" not in l]), buttons
@@ -476,7 +476,11 @@ def _side_summary(positions: list[dict]) -> str:
         if side:
             vol = sum(p["volume"] for p in side)
             avg = sum(p["price_open"] * p["volume"] for p in side) / vol if vol else 0
-            out.append(f"{label} {vol:g}lot 📍{_price(avg)} ({len(side)}개)")
+            cur = side[0].get("price_current") or 0
+            pts = ""
+            if cur and avg:                  # 평단에서 지금가까지 이익 방향(+)/손실 방향(-) 포인트
+                pts = f" {((cur - avg) if t == 0 else (avg - cur)):+,.2f}pt"
+            out.append(f"{label} {vol:g}lot 📍{_price(avg)}{pts} ({len(side)}개)")
     return " · ".join(out)
 
 
@@ -536,7 +540,7 @@ async def _trade_message(db: AsyncSession, account_id: int, account_number: str,
     if trade.price_open is not None:
         move = (data.price - trade.price_open) if side == "BUY" else (trade.price_open - data.price)
         hold = f" · 보유 {_hold((kst_time - trade.open_time).total_seconds())}" if trade.open_time else ""
-        lines.append(f"{_price(trade.price_open)} → {_price(data.price)} ({move:+,.2f}){hold}")
+        lines.append(f"{_price(trade.price_open)} → {_price(data.price)} ({move:+,.2f}pt){hold}")
     else:
         lines.append(f"청산가 {_price(data.price)}")
     lines.append(f"손익 {data.profit:+,.2f} · 수수료 {fee:+,.2f} · {when} · {acc_line}")
