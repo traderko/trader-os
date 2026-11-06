@@ -7,13 +7,18 @@ const int    DATA_BASE_MS   = 0
 const string DATA_GENERATED = "-"
 var array<string> DATA_CHUNKS = array.from("")
 // ▲▲▲ TRADEROS DATA END ▲▲▲
-// 행 형식: openOffsetSec,openPrice,closeOffsetSec,closePrice,b|s,volume,profit,symbol  (청산 시각 순)
+// 행 형식: openOffsetSec,openPrice,closeOffsetSec,closePrice,b|s,lot,profit,symbol  (청산 시각 순, 묶지 않은 개별 거래)
 // 웹 TraderOS → 거래내역 → TV → [TV 코드 복사] 로 이 파일 전체를 새로 만들어 붙여넣으면 됨
 // ============================================================
 
 // ============================================================
 // Inputs
 // ============================================================
+viewMode     = input.string("묶음 + 개별 진입점", "보기 방식",
+     options=["개별 거래", "묶음 (평단)", "묶음 + 개별 진입점"],
+     tooltip="묶음: 같은 종목·방향으로 잇달아 청산한 분할 진입을 한 줄로 (평균 진입가 → 평균 청산가).\n묶음 + 개별 진입점: 묶음 선 + 실제로 들어간 자리마다 진입 표시")
+mergeSec     = input.int(60, "묶기 간격 (초)", minval=1, maxval=3600,
+     tooltip="같은 종목·방향의 청산이 직전 청산과 이 안이면 같은 묶음")
 autoPage     = input.bool(true, "자동 페이징 (화면에 보이는 거래만 그림)",
      tooltip="차트를 옮기거나 확대·축소하면 그 구간 거래로 다시 그림. 화면 안 거래가 한도보다 많으면 화면 안에서 최근 것부터")
 autoSymbol   = input.bool(true, "현재 차트 종목만 자동 표시", tooltip="MT5 심볼이 차트 티커로 시작하면 일치로 봄 (XAUUSD+ → XAUUSD)")
@@ -28,7 +33,7 @@ showTimeLabel = input.bool(false, "라벨에 시간 표시", group="Display")
 timeFormat    = input.string("MM-dd HH:mm", "시간 표시 형식", group="Display")
 labelTz       = input.string("Asia/Seoul", "라벨 시간대", group="Display")
 showLines     = input.bool(true,  "Show Entry-Exit Lines",  group="Display")
-showEntry     = input.bool(true,  "Show Entry Markers",     group="Display", tooltip="끄면 거래당 라벨이 1개라 한 화면에 2배(최대 500건)까지 그림")
+showEntry     = input.bool(true,  "Show Entry Markers",     group="Display", tooltip="끄면 거래당 라벨이 1개라 한 화면에 더 많이 그림")
 showStats     = input.bool(true,  "Show Stats Table",       group="Display")
 statsScope    = input.string("화면", "통계·집계 기준", options=["화면", "전체"], group="Display")
 labelSizeOpt  = input.string("tiny", "Label Size", options=["tiny", "small", "normal", "large"], group="Display")
@@ -49,10 +54,11 @@ aggTz        = input.string("Asia/Seoul", "집계 기준 시간대", group="Summ
 // ============================================================
 // 전역
 // ============================================================
-TF_MS = timeframe.in_seconds(timeframe.period) * 1000
-// 그림 한도: 선 500 · 라벨 500 → 한 화면에 그릴 수 있는 거래 수
-LABELS_PER_TRADE = showEntry ? 2 : 1
-DRAW_LIMIT = math.min(showLines ? 500 : 100000, int(math.floor(500 / LABELS_PER_TRADE)))
+TF_MS     = timeframe.in_seconds(timeframe.period) * 1000
+MAX_LINES  = 500         // 파인 그림 한도 (선)
+MAX_LABELS = 500         // 파인 그림 한도 (라벨)
+useGroups  = viewMode != "개별 거래"
+showPicks  = viewMode == "묶음 + 개별 진입점"
 
 f_labelSize() =>
     switch labelSizeOpt
@@ -104,15 +110,19 @@ f_symMatch(string sym) =>
         ok := str.length(mapped) > 0 and (mapped == tk or str.startswith(mapped, tk) or str.startswith(tk, mapped))
     ok
 
+// 거래 한 건 또는 묶음 하나. 묶음이면 openPrice·closePrice 는 랏 가중 평균, members 는 묶인 개별 거래 번호
 type TradeRecord
     int    openTime
     float  openPrice
     int    closeTime
     float  closePrice
     string dir
-    float  vol
+    float  lot
     float  profit
-    string symbol
+    string sym
+    int    cnt = 1
+    int    lastClose = 0
+    array<int> members
 
 f_parseRows(string src, int baseMs, string defaultSym, bool isOffset, array<TradeRecord> out) =>
     for row in str.split(src, "\n")
@@ -120,33 +130,60 @@ f_parseRows(string src, int baseMs, string defaultSym, bool isOffset, array<Trad
             f = str.split(row, ",")
             minFields = defaultSym != "" ? 7 : 8
             if array.size(f) >= minFields
-                sym     = array.size(f) >= 8 ? array.get(f, 7) : defaultSym
+                sy      = array.size(f) >= 8 ? array.get(f, 7) : defaultSym
                 p       = array.get(f, 4)
                 posStr  = (p == "b" or p == "buy") ? "buy" : "sell"
                 openMs  = isOffset ? baseMs + int(str.tonumber(array.get(f, 0))) * 1000 : int(str.tonumber(array.get(f, 0)))
                 closeMs = isOffset ? baseMs + int(str.tonumber(array.get(f, 2))) * 1000 : int(str.tonumber(array.get(f, 2)))
-                if f_symMatch(sym)
+                if f_symMatch(sy)
                     array.push(out, TradeRecord.new(openMs, str.tonumber(array.get(f, 1)), closeMs, str.tonumber(array.get(f, 3)),
-                         posStr, str.tonumber(array.get(f, 5)), str.tonumber(array.get(f, 6)), sym))
+                         posStr, str.tonumber(array.get(f, 5)), str.tonumber(array.get(f, 6)), sy, 1, closeMs, array.new<int>()))
     true
 
 // ============================================================
-// 1) 파싱: 처음 한 번 (차트를 옮기면 지표가 처음부터 다시 계산되므로 그때마다 다시 읽음)
+// 1) 파싱 + 묶기: 처음 한 번 (차트를 옮기거나 설정을 바꾸면 지표가 처음부터 다시 계산되므로 그때마다 다시)
 // ============================================================
-var array<TradeRecord> trades = array.new<TradeRecord>()
+var array<TradeRecord> raw    = array.new<TradeRecord>()
+var array<TradeRecord> groups = array.new<TradeRecord>()
 if barstate.isfirst
     for chunk in DATA_CHUNKS
-        f_parseRows(chunk, DATA_BASE_MS, "", true, trades)
+        f_parseRows(chunk, DATA_BASE_MS, "", true, raw)
     if str.length(tradeDataInput) > 0
         cleanInput = str.replace_all(str.replace_all(tradeDataInput, "\r\n", "\n"), "\r", "\n")
         hdr = str.split(array.get(str.split(cleanInput, "\n"), 0), ",")
         if array.size(hdr) >= 2 and array.get(hdr, 0) == "H"
-            f_parseRows(cleanInput, int(str.tonumber(array.get(hdr, 1))), array.size(hdr) >= 3 ? array.get(hdr, 2) : "", true, trades)
+            f_parseRows(cleanInput, int(str.tonumber(array.get(hdr, 1))), array.size(hdr) >= 3 ? array.get(hdr, 2) : "", true, raw)
         else
-            f_parseRows(cleanInput, 0, "", false, trades)
+            f_parseRows(cleanInput, 0, "", false, raw)
+    // 묶기: 청산 시각 순으로 보면서 같은 종목·방향의 직전 묶음과 청산이 mergeSec 안이면 합침
+    if useGroups and array.size(raw) > 0
+        lastOf = map.new<string, int>()
+        for i = 0 to array.size(raw) - 1
+            r  = array.get(raw, i)
+            k  = r.sym + "|" + r.dir
+            gi = map.contains(lastOf, k) ? map.get(lastOf, k) : -1
+            joinIt = false
+            if gi >= 0
+                joinIt := r.closeTime - array.get(groups, gi).lastClose <= mergeSec * 1000
+            if joinIt
+                g = array.get(groups, gi)
+                v = g.lot + r.lot
+                g.openPrice  := v > 0 ? (g.openPrice * g.lot + r.openPrice * r.lot) / v : g.openPrice
+                g.closePrice := v > 0 ? (g.closePrice * g.lot + r.closePrice * r.lot) / v : g.closePrice
+                g.lot        := v
+                g.profit     := g.profit + r.profit
+                g.openTime   := math.min(g.openTime, r.openTime)
+                g.closeTime  := math.max(g.closeTime, r.closeTime)
+                g.lastClose  := r.closeTime
+                g.cnt        := g.cnt + 1
+                array.push(g.members, i)
+            else
+                ng = TradeRecord.new(r.openTime, r.openPrice, r.closeTime, r.closePrice, r.dir, r.lot, r.profit, r.sym, 1, r.closeTime, array.from(i))
+                array.push(groups, ng)
+                map.put(lastOf, k, array.size(groups) - 1)
 
 // ============================================================
-// 2) 그리기: 마지막 봉에서. 자동 페이징이면 화면에 걸친 거래만, 한도가 넘으면 화면 안에서 최근 것부터
+// 2) 그리기: 마지막 봉에서. 자동 페이징이면 화면에 걸친 거래만, 그림 한도가 차면 화면 안에서 최근 것부터
 // ============================================================
 var table st = na
 var table ag = na
@@ -161,11 +198,15 @@ if barstate.islast
     if not na(ag)
         table.delete(ag)
 
-    n       = array.size(trades)
+    list    = useGroups ? groups : raw
+    n       = array.size(list)
     visL    = chart.left_visible_bar_time
     visR    = chart.right_visible_bar_time
     inView  = 0
     drawn   = 0
+    usedLines  = 0
+    usedLabels = 0
+    full    = false
     winCount = 0
     lossCount = 0
     totalProfit = 0.0
@@ -178,12 +219,11 @@ if barstate.islast
     if n > 0
         // 청산 시각 순으로 들어 있음 → 뒤(최근)부터 보면서 한도까지 그림
         for i = n - 1 to 0
-            t = array.get(trades, i)
+            t = array.get(list, i)
             visible = not autoPage or (t.closeTime >= visL and t.openTime <= visR)
             if visible
                 inView += 1
-            countIt = statsScope == "전체" or visible
-            if countIt
+            if statsScope == "전체" or visible
                 if t.profit >= 0
                     winCount += 1
                     grossWin += t.profit
@@ -201,56 +241,78 @@ if barstate.islast
                     else
                         array.set(periodProfit, idx, array.get(periodProfit, idx) + t.profit)
                         array.set(periodCount, idx, array.get(periodCount, idx) + 1)
-            if visible and drawn < DRAW_LIMIT
-                drawn += 1
-                isWin = t.profit >= 0
-                isBuy = t.dir == "buy"
-                resultCol = isWin ? winColor : lossColor
-                openTimeStr  = str.format_time(t.openTime,  timeFormat, labelTz)
-                closeTimeStr = str.format_time(t.closeTime, timeFormat, labelTz)
-                tipBase = t.symbol + " " + (isBuy ? "BUY" : "SELL") + "\n" +
-                     "Open:   " + openTimeStr  + "  @" + str.tostring(t.openPrice) + "\n" +
-                     "Close:  " + closeTimeStr + "  @" + str.tostring(t.closePrice) + "\n" +
-                     "Volume: " + str.tostring(t.vol) + "\n" +
-                     "Profit: " + str.tostring(t.profit, "#.##")
-                snappedOpen  = f_snapToBar(t.openTime)
-                snappedClose = f_snapToBar(t.closeTime)
-                if showLines
-                    line.new(x1=snappedOpen, y1=t.openPrice, x2=snappedClose, y2=t.closePrice,
-                         xloc=xloc.bar_time, color=resultCol, width=lineWidth, style=f_lineStyle())
-                if showEntry
-                    label.new(x=snappedOpen, y=t.openPrice, xloc=xloc.bar_time,
-                         text=showTimeLabel ? openTimeStr : "", color=entryColor,
-                         style=isBuy ? label.style_triangleup : label.style_triangledown,
-                         size=f_labelSize(), tooltip="OPEN\n" + tipBase)
-                labelY = t.closePrice + t.closePrice * (offsetPct / 100) * (i % 2 == 0 ? 1 : -1)
-                profitText = (compactMode and not mobileMode) ? "" : str.tostring(t.profit, "#.##")
-                exitTimeText = showTimeLabel ? closeTimeStr : ""
-                exitText = profitText != "" and exitTimeText != "" ? exitTimeText + "\n" + profitText : profitText + exitTimeText
-                label.new(x=snappedClose, y=labelY, xloc=xloc.bar_time,
-                     text=exitText, color=resultCol, textcolor=color.white, style=label.style_square,
-                     size=f_labelSize(), tooltip="CLOSE\n" + tipBase)
+            // 이 거래(묶음)를 그리는 데 드는 선·라벨 수
+            picks    = showPicks and useGroups ? array.size(t.members) : 0
+            needLab  = 1 + (picks > 0 ? picks : (showEntry ? 1 : 0))
+            needLine = showLines ? 1 : 0
+            if visible and not full
+                if usedLabels + needLab > MAX_LABELS or usedLines + needLine > MAX_LINES
+                    full := true
+                else
+                    drawn += 1
+                    usedLabels += needLab
+                    usedLines += needLine
+                    isWin = t.profit >= 0
+                    isBuy = t.dir == "buy"
+                    resultCol = isWin ? winColor : lossColor
+                    openTimeStr  = str.format_time(t.openTime,  timeFormat, labelTz)
+                    closeTimeStr = str.format_time(t.closeTime, timeFormat, labelTz)
+                    tipBase = t.sym + " " + (isBuy ? "BUY" : "SELL") + (t.cnt > 1 ? "  (" + str.tostring(t.cnt) + "건 묶음, 평균가)" : "") + "\n" +
+                         "Open:   " + openTimeStr  + "  @" + str.tostring(t.openPrice, format.mintick) + "\n" +
+                         "Close:  " + closeTimeStr + "  @" + str.tostring(t.closePrice, format.mintick) + "\n" +
+                         "Lot:    " + str.tostring(t.lot) + "\n" +
+                         "Profit: " + str.tostring(t.profit, "#.##")
+                    snappedOpen  = f_snapToBar(t.openTime)
+                    snappedClose = f_snapToBar(t.closeTime)
+                    if showLines
+                        line.new(x1=snappedOpen, y1=t.openPrice, x2=snappedClose, y2=t.closePrice,
+                             xloc=xloc.bar_time, color=resultCol, width=lineWidth, style=f_lineStyle())
+                    if picks > 0
+                        // 묶음 + 개별 진입점: 실제로 들어간 자리마다 진입 표시
+                        for mi in t.members
+                            m = array.get(raw, mi)
+                            label.new(x=f_snapToBar(m.openTime), y=m.openPrice, xloc=xloc.bar_time,
+                                 text=showTimeLabel ? str.format_time(m.openTime, timeFormat, labelTz) : "", color=entryColor,
+                                 style=isBuy ? label.style_triangleup : label.style_triangledown, size=f_labelSize(),
+                                 tooltip="OPEN\n" + m.sym + " " + (isBuy ? "BUY" : "SELL") + "\n" +
+                                     str.format_time(m.openTime, timeFormat, labelTz) + "  @" + str.tostring(m.openPrice, format.mintick) +
+                                     "\nLot: " + str.tostring(m.lot) + "\n묶음 평균 진입가 " + str.tostring(t.openPrice, format.mintick))
+                    else if showEntry
+                        label.new(x=snappedOpen, y=t.openPrice, xloc=xloc.bar_time,
+                             text=showTimeLabel ? openTimeStr : "", color=entryColor,
+                             style=isBuy ? label.style_triangleup : label.style_triangledown,
+                             size=f_labelSize(), tooltip="OPEN\n" + tipBase)
+                    labelY = t.closePrice + t.closePrice * (offsetPct / 100) * (i % 2 == 0 ? 1 : -1)
+                    profitText = (compactMode and not mobileMode) ? "" : str.tostring(t.profit, "#.##")
+                    exitTimeText = showTimeLabel ? closeTimeStr : ""
+                    exitText = profitText != "" and exitTimeText != "" ? exitTimeText + "\n" + profitText : profitText + exitTimeText
+                    label.new(x=snappedClose, y=labelY, xloc=xloc.bar_time,
+                         text=exitText, color=resultCol, textcolor=color.white, style=label.style_square,
+                         size=f_labelSize(), tooltip="CLOSE\n" + tipBase)
 
     if showStats
         cnt = winCount + lossCount
         winRate = cnt > 0 ? float(winCount) / cnt * 100 : 0.0
         pf = grossLoss != 0 ? math.abs(grossWin / grossLoss) : na
-        st := table.new(position.top_right, 2, 7, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
-        table.cell(st, 0, 0, autoPage ? "표시 / 화면 / 전체" : "표시 / 전체", text_color=color.white)
-        table.cell(st, 1, 0, autoPage ? str.tostring(drawn) + " / " + str.tostring(inView) + " / " + str.tostring(n) : str.tostring(drawn) + " / " + str.tostring(n),
+        unit = useGroups ? "묶음" : "건"
+        st := table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
+        table.cell(st, 0, 0, "보기", text_color=color.white)
+        table.cell(st, 1, 0, viewMode + (useGroups ? " · 거래 " + str.tostring(array.size(raw)) + "건" : ""), text_color=color.white)
+        table.cell(st, 0, 1, autoPage ? "표시 / 화면 / 전체" : "표시 / 전체", text_color=color.white)
+        table.cell(st, 1, 1, (autoPage ? str.tostring(drawn) + " / " + str.tostring(inView) + " / " + str.tostring(n) : str.tostring(drawn) + " / " + str.tostring(n)) + " " + unit,
              text_color=drawn < inView ? color.orange : color.white)
-        table.cell(st, 0, 1, "Win Rate (" + statsScope + ")", text_color=color.white)
-        table.cell(st, 1, 1, str.tostring(winRate, "#.#") + "%", text_color=color.white)
-        table.cell(st, 0, 2, "Total P/L", text_color=color.white)
-        table.cell(st, 1, 2, str.tostring(totalProfit, "#.##"), text_color=totalProfit >= 0 ? winColor : lossColor)
-        table.cell(st, 0, 3, "Win / Loss", text_color=color.white)
-        table.cell(st, 1, 3, str.tostring(winCount) + " / " + str.tostring(lossCount), text_color=color.white)
-        table.cell(st, 0, 4, "Profit Factor", text_color=color.white)
-        table.cell(st, 1, 4, na(pf) ? "N/A" : str.tostring(pf, "#.##"), text_color=color.white)
-        table.cell(st, 0, 5, "안내", text_color=color.white)
-        table.cell(st, 1, 5, drawn < inView ? "한도 " + str.tostring(DRAW_LIMIT) + "건 - 확대하면 다 보임" : "전부 표시", text_color=drawn < inView ? color.orange : color.white)
-        table.cell(st, 0, 6, "Data", text_color=color.white)
-        table.cell(st, 1, 6, DATA_GENERATED, text_color=color.white)
+        table.cell(st, 0, 2, "Win Rate (" + statsScope + ")", text_color=color.white)
+        table.cell(st, 1, 2, str.tostring(winRate, "#.#") + "%", text_color=color.white)
+        table.cell(st, 0, 3, "Total P/L", text_color=color.white)
+        table.cell(st, 1, 3, str.tostring(totalProfit, "#.##"), text_color=totalProfit >= 0 ? winColor : lossColor)
+        table.cell(st, 0, 4, "Win / Loss", text_color=color.white)
+        table.cell(st, 1, 4, str.tostring(winCount) + " / " + str.tostring(lossCount), text_color=color.white)
+        table.cell(st, 0, 5, "Profit Factor", text_color=color.white)
+        table.cell(st, 1, 5, na(pf) ? "N/A" : str.tostring(pf, "#.##"), text_color=color.white)
+        table.cell(st, 0, 6, "안내", text_color=color.white)
+        table.cell(st, 1, 6, drawn < inView ? "그림 한도(500) - 확대하면 다 보임" : "전부 표시", text_color=drawn < inView ? color.orange : color.white)
+        table.cell(st, 0, 7, "Data", text_color=color.white)
+        table.cell(st, 1, 7, DATA_GENERATED, text_color=color.white)
 
     if showAggTable and array.size(periodKeys) > 0
         sortedIdx = array.sort_indices(periodKeys, order.ascending)
@@ -258,7 +320,7 @@ if barstate.islast
         startPos  = total > maxAggRows ? total - maxAggRows : 0
         ag := table.new(f_aggTablePos(), 3, total - startPos + 1, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
         table.cell(ag, 0, 0, aggPeriod == "Weekly" ? "Week" : "Date", text_color=color.white, bgcolor=color.new(color.gray, 50))
-        table.cell(ag, 1, 0, "Trades", text_color=color.white, bgcolor=color.new(color.gray, 50))
+        table.cell(ag, 1, 0, useGroups ? "묶음" : "Trades", text_color=color.white, bgcolor=color.new(color.gray, 50))
         table.cell(ag, 2, 0, "P/L", text_color=color.white, bgcolor=color.new(color.gray, 50))
         rowIdx = 1
         for p = startPos to total - 1
