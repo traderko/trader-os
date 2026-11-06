@@ -30,7 +30,7 @@ mergeSec     = input.int(60, "묶기 간격 (초)", minval=1, maxval=3600,
      tooltip="같은 종목·방향의 청산이 직전 청산과 이 안이면 같은 묶음")
 autoPage     = input.bool(true, "자동 페이징 (화면에 보이는 거래만 그림)",
      tooltip="차트를 옮기거나 확대·축소하면 그 구간 거래로 다시 그림. 화면 안 거래가 한도보다 많으면 화면 안에서 최근 것부터")
-autoSymbol   = input.bool(true, "현재 차트 종목만 자동 표시", tooltip="MT5 심볼이 차트 티커로 시작하면 일치로 봄 (XAUUSD+ → XAUUSD)")
+autoSymbol   = input.bool(true, "현재 차트 종목만 자동 표시", tooltip="MT5 심볼과 차트 티커가 같은 종목이면 표시 (꼬리표 무시: NAS100+ = NAS100. 흔한 별칭도 같은 종목: NAS100·US100·USTEC·NQ / XAUUSD·GOLD / USOIL·WTI·XTI / BTCUSD·BTCUSDT)")
 symbolAlias  = input.string("", "심볼 별칭 (MT5=트뷰)", tooltip="이름이 다를 때. 예: GOLD=XAUUSD,USTEC=NAS100")
 filterSymbol = input.string("", "Symbol Filter (수동 지정, 자동보다 우선)")
 tradeDataInput = input.text_area(defval="", title="추가 거래 데이터 (선택, 예전 방식)",
@@ -104,20 +104,40 @@ f_periodKey(closeMs) =>
     else
         str.format_time(closeMs, "yyyy-MM-dd", aggTz)
 
+// 심볼 이름 정리: 대문자 + 브로커 꼬리표 떼기 (NAS100+ → NAS100, XAUUSD.r → XAUUSD, BTCUSD-m → BTCUSD)
+f_clean(string s) =>
+    u = str.upper(s)
+    for c in array.from("+", ".", "-", "_", "#", "!", ":")
+        p = str.pos(u, c)
+        if not na(p) and p > 0
+            u := str.substring(u, 0, p)
+    u
+
+// 같은 종목의 흔한 이름들을 하나로 (MT5 와 트뷰 이름이 달라도 맞게)
+f_family(string s) =>
+    u = f_clean(s)
+    str.contains(u, "NAS100") or str.contains(u, "US100") or str.contains(u, "USTEC") or str.contains(u, "NDX") or str.startswith(u, "NQ") or str.contains(u, "USTECH") ? "NASDAQ" :
+     str.contains(u, "XAU") or str.contains(u, "GOLD") or str.startswith(u, "GC") ? "GOLD" :
+     str.contains(u, "USOIL") or str.contains(u, "WTI") or str.contains(u, "XTI") or str.startswith(u, "CL") or str.contains(u, "CRUDE") ? "OIL" :
+     str.contains(u, "BTC") or str.contains(u, "XBT") ? "BTC" :
+     str.contains(u, "US30") or str.contains(u, "DJ30") or str.contains(u, "DJI") or str.startswith(u, "YM") ? "DOW" :
+     str.contains(u, "SPX") or str.contains(u, "US500") or str.contains(u, "SP500") or str.startswith(u, "ES") ? "SP500" : u
+
 f_symMatch(string sym) =>
     string s      = str.upper(sym)
     string mapped = s
     if str.length(symbolAlias) > 0
         for pair in str.split(str.upper(str.replace_all(symbolAlias, " ", "")), ",")
             kv = str.split(pair, "=")
-            if array.size(kv) == 2 and array.get(kv, 0) == s
+            if array.size(kv) == 2 and (array.get(kv, 0) == s or array.get(kv, 0) == f_clean(s))
                 mapped := array.get(kv, 1)
     bool ok = true
     if filterSymbol != ""
-        ok := s == str.upper(filterSymbol) or mapped == str.upper(filterSymbol)
+        ok := s == str.upper(filterSymbol) or mapped == str.upper(filterSymbol) or f_clean(s) == f_clean(filterSymbol)
     else if autoSymbol
-        tk = str.upper(syminfo.ticker)
-        ok := str.length(mapped) > 0 and (mapped == tk or str.startswith(mapped, tk) or str.startswith(tk, mapped))
+        tk = f_clean(syminfo.ticker)
+        m  = f_clean(mapped)
+        ok := str.length(m) > 0 and (m == tk or str.startswith(m, tk) or str.startswith(tk, m) or f_family(m) == f_family(tk))
     ok
 
 // 거래 한 건 또는 묶음 하나. 묶음이면 openPrice·closePrice 는 랏 가중 평균, members 는 묶인 개별 거래 번호
