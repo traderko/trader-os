@@ -2126,16 +2126,18 @@ async function pineCodeParts(merged = false) {
     return { rows, base, len: rows.reduce((n, r) => n + r.length + 1, 0),
       syms: syms.map((sy, i) => `${String(sy).replace(/[|:,]/g, '')}:${dig[i]}`).join('|') };
   };
-  // 나누기: 오래된 것부터 한도의 90% 까지 담고, 1분 안에 같이 청산된 거래(같은 묶음이 될 것) 사이에서는 자르지 않음
+  // 나누기: 최근 것부터 한도의 90% 까지 크게 담고, 남은 오래된 거래가 마지막(가장 작은) 덩어리
+  //   1분 안에 같이 청산된 거래(같은 묶음이 될 것) 사이에서는 자르지 않음. 복사 1 = 가장 최근
   const est = encode(closed).rows.map((r) => r.length + 1);
   const groups = []; let cur = [], size = 0;
-  closed.forEach((t, i) => {
-    const gap = cur.length ? dt(t.close_time) - dt(cur[cur.length - 1].close_time) : Infinity;
-    if (cur.length && size + est[i] > BUDGET * 0.9 && gap > 60000) { groups.push(cur); cur = []; size = 0; }
+  for (let i = closed.length - 1; i >= 0; i--) {
+    const t = closed[i];
+    const gap = cur.length ? dt(cur[cur.length - 1].close_time) - dt(t.close_time) : Infinity;
+    if (cur.length && size + est[i] > BUDGET * 0.9 && gap > 60000) { groups.push(cur.reverse()); cur = []; size = 0; }
     if (!cur.length) size = 20;                           // 덩어리 첫 줄은 절대값이라 조금 더 김
     cur.push(t); size += est[i];
-  });
-  if (cur.length) groups.push(cur);
+  }
+  if (cur.length) groups.push(cur.reverse());             // 각 덩어리 안은 다시 시간 순으로
 
   const q = (x) => x.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
   const now = new Date(), stamp = `${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
@@ -2203,7 +2205,7 @@ async function pineCodeCopy(merged) {
       return toast(`TV 코드(${kind})를 복사했습니다 · ${parts[0].symLabel} ${parts[0].cntTxt}`);
     }
     // 한도를 넘음 → 기간 순으로 나눈 코드마다 복사 버튼
-    $('pineParts').innerHTML = `<div class="muted">트레이딩뷰 코드 한도 때문에 <b>${parts.length}개</b>로 나눴습니다. 하나씩 복사해서 각각 다른 스크립트로 저장하거나, 같은 스크립트에 바꿔 붙여넣어 기간별로 보세요.</div>`
+    $('pineParts').innerHTML = `<div class="muted">트레이딩뷰 코드 한도 때문에 <b>${parts.length}개</b>로 나눴습니다 (복사 1 = 가장 최근, 마지막이 가장 오래되고 적음). 하나씩 복사해서 각각 다른 스크립트로 저장하거나, 같은 스크립트에 바꿔 붙여넣어 기간별로 보세요.</div>`
       + parts.map((p, i) => `<button class="btn small" data-part="${i}">복사 ${p.part} <small class="muted">${esc(p.span)} · ${esc(p.cntTxt)}</small></button>`).join('');
     $('pineParts').hidden = false;
     $('pineParts').querySelectorAll('[data-part]').forEach((b) => b.onclick = async () => {
