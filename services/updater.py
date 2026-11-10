@@ -169,6 +169,41 @@ async def check(notify: bool = True) -> dict:
     return summary()
 
 
+DEFAULT_REPO = "traderko/trader-os"       # 배포 zip 이 아닌 개발 폴더에서도 다운로드 수를 볼 수 있게
+_dl_cache: dict = {"at": 0.0, "data": None}
+
+
+async def downloads(force: bool = False) -> dict:
+    """GitHub 릴리스별 다운로드 횟수 (배포 zip 자산의 download_count 합). 10분 캐시 - GitHub API 는 비로그인 시간당 60번 제한
+    {"repo", "releases": [{version, name, published_at, url, downloads, assets:[{name, downloads}]}], "total", "at"}"""
+    if not force and _dl_cache["data"] and time.time() - _dl_cache["at"] < 600:
+        return _dl_cache["data"]
+    info = release_info()
+    repo = info["repo"] if info else DEFAULT_REPO
+    rels: list[dict] = []
+    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as c:
+        for page in (1, 2, 3):
+            r = await c.get(f"{GITHUB_API}/repos/{repo}/releases", params={"per_page": 100, "page": page},
+                            headers={"Accept": "application/vnd.github+json", "User-Agent": "TraderOS-updater"})
+            r.raise_for_status()
+            rows = r.json()
+            for rel in rows:
+                if rel.get("draft"):
+                    continue
+                assets = [{"name": a.get("name"), "downloads": a.get("download_count") or 0} for a in rel.get("assets") or []]
+                rels.append({"version": (rel.get("tag_name") or "").lstrip("vV"), "name": rel.get("name") or rel.get("tag_name"),
+                             "published_at": rel.get("published_at"), "url": rel.get("html_url"),
+                             "prerelease": bool(rel.get("prerelease")),
+                             "downloads": sum(a["downloads"] for a in assets), "assets": assets})
+            if len(rows) < 100:
+                break
+    rels.sort(key=lambda x: _ver(x["version"]), reverse=True)
+    data = {"repo": repo, "releases": rels, "total": sum(x["downloads"] for x in rels),
+            "current": info["version"] if info else None, "at": time.time()}
+    _dl_cache.update(at=time.time(), data=data)
+    return data
+
+
 async def _between(repo: str, current: str, latest: dict) -> list[dict]:
     """current < 버전 <= latest 인 릴리스들 (오래된 것부터) [{version, name, notes, published_at, url}]"""
     out: list[dict] = []

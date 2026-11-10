@@ -882,6 +882,16 @@ async def update_status(check: bool = False):
     return updater.summary()
 
 
+@router.get("/api/update/downloads")
+async def update_downloads(refresh: bool = False):
+    """GitHub 릴리스별 다운로드 횟수 (업데이트 탭)"""
+    from services import updater
+    try:
+        return await updater.downloads(force=refresh)
+    except Exception as e:
+        raise HTTPException(502, f"GitHub 에서 다운로드 수를 못 가져왔습니다: {e}")
+
+
 @router.post("/api/update/apply")
 async def update_apply():
     from services import updater

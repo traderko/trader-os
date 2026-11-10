@@ -195,6 +195,9 @@
   }
   #toast.show { opacity: 1; transform: translateX(-50%); }
   #toast.err { background: var(--bad); color: #fff; }
+  .tbl { border-collapse: collapse; font-size: 13px; }
+  .tbl th, .tbl td { padding: 6px 8px; border-bottom: 1px solid var(--line, #e5e7eb); }
+  .tbl th { font-weight: 600; color: var(--muted); position: sticky; top: 0; background: var(--panel); }
 </style>
 </head>
 <body>
@@ -1628,6 +1631,23 @@ function renderUpdate(u) {
 async function loadUpdate(check) {
   try { renderUpdate(await api('update' + (check ? '?check=true' : ''))); }
   catch (e) { $('updBody').innerHTML = `<div class="warnbar">${esc(e.message)}</div>`; }
+  loadDownloads(check);
+}
+// 버전별 다운로드 횟수 (GitHub 릴리스 자산의 download_count, 서버에서 10분 캐시)
+async function loadDownloads(refresh) {
+  let box = $('updDownloads');
+  if (!box) { box = document.createElement('div'); box.id = 'updDownloads'; box.style.marginTop = '18px'; $('updBody').after(box); }
+  box.innerHTML = '<p class="hint">다운로드 수를 불러오는 중…</p>';
+  try {
+    const d = await api('update/downloads' + (refresh ? '?refresh=true' : ''));
+    const rows = d.releases.map((r) => `<tr${r.version === d.current ? ' style="font-weight:600"' : ''}>
+        <td><a href="${esc(r.url || '#')}" target="_blank" rel="noopener">${esc(r.version)}</a>${r.version === d.current ? ' <small class="muted">(지금)</small>' : ''}${r.prerelease ? ' <small class="muted">(미리보기)</small>' : ''}</td>
+        <td class="muted">${r.published_at ? esc(new Date(r.published_at).toLocaleDateString()) : '-'}</td>
+        <td style="text-align:right" title="${esc(r.assets.map((a) => `${a.name}: ${a.downloads}`).join('\n'))}">${r.downloads.toLocaleString()}</td></tr>`).join('');
+    box.innerHTML = `<h3>버전별 다운로드 <small style="font-weight:400;color:var(--muted)">(${esc(d.repo)} · 전체 ${d.total.toLocaleString()}회 · ${esc(new Date(d.at * 1000).toLocaleTimeString())} 기준)</small></h3>
+      ${d.releases.length ? `<div style="max-height:420px;overflow:auto"><table class="tbl" style="width:100%"><thead><tr><th style="text-align:left">버전</th><th style="text-align:left">올린 날</th><th style="text-align:right">다운로드</th></tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="hint">릴리스 파일(zip)을 받은 횟수입니다. 자동 업데이트로 받은 것도 들어갑니다. 숫자에 마우스를 올리면 파일별로 보입니다.</p>` : '<p class="hint">릴리스가 없습니다.</p>'}`;
+  } catch (e) { box.innerHTML = `<div class="warnbar">${esc(e.message)}</div>`; }
 }
 $('updBody').addEventListener('click', async (e) => {
   if (e.target.id === 'updCheck') { e.target.disabled = true; await loadUpdate(true); }
