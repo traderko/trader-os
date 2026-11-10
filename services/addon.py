@@ -92,13 +92,25 @@ def on_open(account_id: int, account_number: str, symbol: str, side: str, magic)
     _timers[key] = asyncio.create_task(_after_quiet(account_id, account_number, symbol, _side(side)))
 
 
+_close_timers: dict[int, asyncio.Task] = {}   # 계좌 → 청산 뒤 정리 예약 (여러 건이 한꺼번에 청산돼도 한 번만)
+_sweep_locks: dict[int, asyncio.Lock] = {}    # 계좌별로 정리가 겹쳐 돌지 않게
+
+
 def on_close(account_id: int) -> None:
-    """청산 체결 - 첫 진입이 다 없어졌으면 리밋을 바로 정리 (주기 확인을 기다리지 않게)"""
-    _spawn(_later_sweep(account_id))
+    """청산 체결 - 첫 진입이 다 없어졌으면 리밋을 바로 정리 (주기 확인을 기다리지 않게).
+    76건을 한꺼번에 청산하면 체결도 76번 들어옴 → 마지막 청산 뒤 3초 조용해지면 한 번만 정리
+    (예전엔 체결마다 정리가 따로 돌아서 같은 리밋 취소 알림이 수십 번 오고, MT5·텔레그램이 밀렸음)"""
+    old = _close_timers.get(account_id)
+    if old and not old.done():
+        old.cancel()
+    _close_timers[account_id] = asyncio.create_task(_later_sweep(account_id))
 
 
 async def _later_sweep(account_id: int) -> None:
-    await asyncio.sleep(2)
+    try:
+        await asyncio.sleep(3)
+    except asyncio.CancelledError:
+        return                                # 그 사이 또 청산됨 - 새 예약이 이어받음
     try:
         await _sweep(account_id)
     except Exception as e:
@@ -401,12 +413,21 @@ async def button(live, client, token, chat_id: str, data: str, message_id) -> st
 
 # ── 주기 확인: 첫 진입이 없어지면 취소 · SL 따라가기 ───────────────────
 async def _sweep(aid: int) -> None:
+    lock = _sweep_locks.setdefault(aid, asyncio.Lock())
+    if lock.locked():
+        return                                # 이미 정리 중 - 그쪽이 같은 일을 함
+    async with lock:
+        await _sweep_once(aid)
+
+
+async def _sweep_once(aid: int) -> None:
     from services.worker_client import worker_get, worker_post
     addons = await worker_get(aid, "/grid/addons")
     if not addons:
         return
     positions = await worker_get(aid, "/positions-all")
     follow = cfg().get("addon_sl_follow", True)
+    done: list[str] = []                      # 실제로 취소된 것만 모아 알림 한 번
     for o in addons:
         base = [p for p in positions if p["symbol"] == o["symbol"] and _side(p["type"]) == o["side"] and _manual(p)]
         d = o.get("digits")
@@ -427,10 +448,14 @@ async def _sweep(aid: int) -> None:
                     print(f"[addon] #{o['ticket']} SL 따라가기 실패: {getattr(e, 'detail', e)}")
         if reason:
             try:
-                await worker_post(aid, "/grid/addon-cancel", {"ticket": o["ticket"]})
-                _send("🗑 추가 리밋 취소", f"{what}\n{reason} 취소했습니다.")
+                r = await worker_post(aid, "/grid/addon-cancel", {"ticket": o["ticket"]})
+                if (r or {}).get("cancelled"):
+                    done.append(f"• {what} - {reason}")
             except Exception as e:
                 print(f"[addon] #{o['ticket']} 취소 실패: {getattr(e, 'detail', e)}")
+    if done:
+        _send("🗑 추가 리밋 취소" + (f" {len(done)}개" if len(done) > 1 else ""),
+              "\n".join(done[:30]) + (f"\n… 외 {len(done) - 30}개" if len(done) > 30 else "") + "\n취소했습니다.")
 
 
 async def loop() -> None:
