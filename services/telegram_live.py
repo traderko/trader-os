@@ -505,6 +505,28 @@ class TelegramLive:
     async def pos_button(self, client, token, chat_id: str, data: str) -> str:
         """pos:<sl|tp|be>:<o|a>:<계좌id>:<티켓> 버튼. 콜백 답(짧은 글) 을 돌려줌
         pos:set:<sl|tp>:<o|a>:<계좌id>:<티켓>:<가격> - 금액으로 계산한 가격 확인 후 [✅ 이 가격으로] 버튼"""
+        if data.startswith("pos:same:"):           # 진입 알림 [📋 같은 SL/TP 걸기] - 먼저 들어간 포지션의 SL/TP 를 새 포지션에도
+            try:
+                _, _, aid, ticket = data.split(":")
+                aid, ticket = int(aid), int(ticket)
+            except ValueError:
+                return "잘못된 버튼"
+            me, targets = await self._targets(aid, ticket, "a")
+            if me is None:
+                await self._send(client, token, chat_id, "이 포지션은 이미 청산됐거나 MT5에 연결되지 않았습니다.")
+                return "포지션 없음"
+            from services.sltp import ref_levels
+            rsl, rtp, nsl, ntp = ref_levels(targets, ticket)
+            if not (nsl or ntp):
+                return "이미 같은 SL/TP 입니다" if (rsl or rtp) else "먼저 들어간 포지션에 SL/TP 가 없습니다"
+
+            async def run():
+                if nsl:
+                    await self._apply_level(client, token, chat_id, aid, "sl", rsl, nsl, me)
+                if ntp:
+                    await self._apply_level(client, token, chat_id, aid, "tp", rtp, ntp, me)
+            self._bg(run())
+            return "같은 SL/TP 거는 중"
         if data.startswith("pos:set:"):
             try:
                 _, _, field, scope, aid, ticket, price = data.split(":")

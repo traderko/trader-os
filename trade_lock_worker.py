@@ -228,6 +228,16 @@ def _cancel_pending_sync(mt5) -> tuple[int, list[str]]:
     return done, failed
 
 
+async def _sltp_watch_loop(mt5):
+    """2초마다 열린 포지션의 SL/TP 를 기억 - 청산될 때 거래 기록에 남김 (api/worker/worker_account_router.py close-info)"""
+    while True:
+        try:
+            await asyncio.to_thread(worker_account_router.sltp_snapshot, mt5)
+        except Exception as e:
+            print(f"[worker] SL/TP 기억 실패: {e}")
+        await asyncio.sleep(2)
+
+
 async def _loss_limit_loop(mt5, account_row):
     from services import loss_limit as LL
     from services import trade_lock_service as lock_svc
@@ -422,11 +432,13 @@ async def lifespan(app: FastAPI):
 
     watch_task = asyncio.create_task(_lock_watch_loop(mt5, account_row.account_number))
     loss_task = asyncio.create_task(_loss_limit_loop(mt5, account_row))
+    sltp_task = asyncio.create_task(_sltp_watch_loop(mt5))
 
     yield
 
     watch_task.cancel()
     loss_task.cancel()
+    sltp_task.cancel()
 
     await asyncio.to_thread(mt5.shutdown)
 

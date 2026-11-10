@@ -21,6 +21,62 @@ def _require_connection(request: Request):
     return state
 
 
+# ── 포지션 SL/TP 기억 (청산 때 거래 기록에 남기려고) ────────────────────
+# MT5 는 청산된 포지션의 마지막 SL/TP 를 따로 알려주지 않아서, 워커가 2초마다 열린 포지션의 SL/TP 를 기억해 둠
+SLTP_SEEN: dict[int, tuple[float, float, float]] = {}    # 포지션 티켓 → (sl, tp, 마지막으로 본 시각)
+
+
+def sltp_snapshot(mt5) -> None:
+    import time as _t
+    now = _t.time()
+    for p in mt5.positions_get() or []:
+        SLTP_SEEN[p.ticket] = (float(p.sl or 0), float(p.tp or 0), now)
+    for k in [k for k, v in SLTP_SEEN.items() if now - v[2] > 7 * 86400]:   # 일주일 넘게 안 보인 건 정리
+        SLTP_SEEN.pop(k, None)
+
+
+# MT5 체결 이유 (DEAL_REASON_*) → 청산 이유
+_REASON = {0: "manual", 1: "manual", 2: "manual", 3: "auto", 4: "sl", 5: "tp", 6: "stopout"}
+
+
+@router.get("/close-info")
+async def close_info(request: Request, position: int):
+    """청산된 포지션의 마지막 SL/TP 와 청산 이유 {sl, tp, reason, seen}
+    reason: sl(SL에 걸림) · tp(TP에 걸림) · manual(직접 청산) · auto(EA·서버가 청산) · stopout(강제 청산) · None(모름)"""
+    state = _require_connection(request)
+    mt5 = state.mt5
+
+    def run():
+        sl, tp, _ = SLTP_SEEN.get(position, (0.0, 0.0, 0))
+        seen = position in SLTP_SEEN
+        reason = None
+        try:
+            deals = mt5.history_deals_get(position=position) or []
+            outs = [d for d in deals if d.entry in (mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_OUT_BY, mt5.DEAL_ENTRY_INOUT)]
+            if outs:
+                last = max(outs, key=lambda d: d.time_msc)
+                reason = _REASON.get(int(last.reason))
+                # 서버가 한 번도 못 본 포지션: SL/TP 에 걸린 청산이면 체결 설명 "[sl 27950.00]" 에서 가격을 읽음
+                import re as _re
+                m = _re.search(r"\[(sl|tp)\s*([0-9.]+)\]", str(last.comment or ""), _re.I)
+                if m:
+                    v = float(m.group(2))
+                    if m.group(1).lower() == "sl" and not sl:
+                        sl = v
+                    elif m.group(1).lower() == "tp" and not tp:
+                        tp = v
+                    reason = reason or m.group(1).lower()
+            if not seen:                                  # 진입할 때 같이 건 SL/TP 는 주문 기록에 남아 있음
+                for o in mt5.history_orders_get(position=position) or []:
+                    sl = sl or float(o.sl or 0)
+                    tp = tp or float(o.tp or 0)
+        except Exception as e:
+            print(f"[worker] close-info #{position} 실패: {e}")
+        return {"sl": sl or None, "tp": tp or None, "reason": reason, "seen": seen}
+
+    return await asyncio.to_thread(run)
+
+
 @router.get("/positions")
 async def get_positions(request: Request, symbol: str):
     state = _require_connection(request)

@@ -553,6 +553,8 @@
 .wdrule .calc b { color: var(--fg, inherit); font-weight: 600; }
 .pnote { grid-column: 1 / -1; font-size: 12px; color: var(--muted, #888); line-height: 1.5; }
 .lock small.daily { display: block; margin-top: 3px; }
+  .trade .sltp { color: var(--muted); }
+  .trade .sltp .why { font-size: 11px; padding: 0 4px; border-radius: 4px; background: var(--chip, rgba(127,127,127,.12)); }
 </style>
 </head>
 <body>
@@ -1735,6 +1737,16 @@ $('jDate').onchange = () => { if ($('jDate').value) jumpTo($('jDate').value); };
 $('jToday').onclick = () => { const t = tdDate(new Date()); jumpTo(`${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`); };
 
 let grpCount = new Map();   // 묶음 번호 → 이 달 거래 중 건수 (📦 표시)
+// 청산 직전 SL/TP·청산 이유 (서버가 청산 때 기록 - 예전 거래는 없음)
+const CLOSE_REASON = { sl: '🛑SL', tp: '🎯TP', manual: '✋직접', auto: '🤖자동', stopout: '💥강제', lock: '🔒잠금', loss_limit: '🧯한도' };
+const CLOSE_REASON_LONG = { sl: 'SL에 걸려 청산', tp: 'TP에 걸려 청산', manual: '직접 청산', auto: 'EA·서버가 청산', stopout: '증거금 부족 강제청산', lock: '잠금 중 진입이라 강제청산', loss_limit: '일일 손실 한도로 청산' };
+function sltpLine(t) {
+  const bits = [];
+  if (t.sl) bits.push(`SL ${fmt(t.sl)}`);
+  if (t.tp) bits.push(`TP ${fmt(t.tp)}`);
+  const r = t.close_reason ? `<span class="why" title="${esc(CLOSE_REASON_LONG[t.close_reason] || t.close_reason)}">${esc(CLOSE_REASON[t.close_reason] || t.close_reason)}</span>` : '';
+  return bits.length || r ? ` · <span class="sltp">${bits.join(' · ')}${bits.length && r ? ' ' : ''}${r}</span>` : '';
+}
 function renderTrades() {
   grpCount = new Map(); for (const t of trades) if (t.group_id) grpCount.set(t.group_id, (grpCount.get(t.group_id) || 0) + 1);
   const list = trades.filter(tShow)
@@ -1770,7 +1782,7 @@ function renderTrades() {
         <div class="t1">${tSel && canSel ? `<input type="checkbox" class="ck" ${isSel ? 'checked' : ''} tabindex="-1" aria-label="선택">` : ''}<span class="side ${t.position === 'BUY' ? 'buy' : 'sell'}" style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:${t.position === 'BUY' ? 'var(--accent-weak)' : 'var(--bad-weak)'};color:${t.position === 'BUY' ? 'var(--up)' : 'var(--down)'}">${esc(t.position)}</span>
           <span>${esc(t.symbol)}</span><span class="num muted" style="font-weight:400">${fmt(t.volume)} lot</span>${kindOfMagic(t.magic) ? `<span class="gbadge" data-gm="${t.magic}" style="cursor:pointer" title="구간매매 ${GRID_KR[kindOfMagic(t.magic)]} #${t.magic % 100000} - 눌러서 묶음 상세">🧱${GRID_SHORT[kindOfMagic(t.magic)]}</span>` : ''}${t.group_id ? `<span class="grp" data-grp="${t.group_id}" title="묶음 - 눌러서 근거를 한꺼번에">📦${grpCount.get(t.group_id) || ''}</span>` : ch && ch.length > 1 ? `<span class="chain" title="이어서 들어간 거래 묶음">🔗${ch.length}</span>` : ''}${n.time_frame ? `<span class="chip">${TF[n.time_frame] || ''}</span>` : ''}</div>
         <div class="pl">${c ? `<strong class="num ${cls(t.profit)}">${signed(t.profit)}</strong><small class="num">수수료 ${fmt(t.commission)}</small>` : '<strong class="muted" style="font-size:13px">보유 중</strong>'}</div>
-        <div class="t2 num">${dayKey(o) !== k ? dayKey(o).slice(5) + ' ' : ''}${hmOf(o)}${c ? ' → ' + (dayKey(c) !== dayKey(o) ? dayKey(c).slice(5) + ' ' : '') + hmOf(c) : ''} · ${fmt(t.price_open)}${c ? ' → ' + fmt(t.price_close) : ''}</div>
+        <div class="t2 num">${dayKey(o) !== k ? dayKey(o).slice(5) + ' ' : ''}${hmOf(o)}${c ? ' → ' + (dayKey(c) !== dayKey(o) ? dayKey(c).slice(5) + ' ' : '') + hmOf(c) : ''} · ${fmt(t.price_open)}${c ? ' → ' + fmt(t.price_close) : ''}${sltpLine(t)}</div>
         ${tags || snip || (t.images || []).length ? `<div class="t3">${tags}${(t.images || []).length ? `<span>📷 ${t.images.length}</span>` : ''}${snip ? `<span class="snip">${esc(snip)}</span>` : ''}</div>` : ''}
       </div>`;
     }
@@ -1920,14 +1932,19 @@ function pineMerge(list) {
       const v = Number(t.volume) || 0;
       g._po += t.price_open * v; g._pc += t.price_close * v; g.volume += v; g.profit += Number(t.profit) || 0;
       g._o = Math.min(g._o, t._o); g._c = Math.max(g._c, t._c); g._last = t._c; g.n++;
+      if ((t.sl || 0) !== (g.sl || 0)) g.sl = null;
+      if ((t.tp || 0) !== (g.tp || 0)) g.tp = null;
+      if (t.close_reason) g._why[t.close_reason] = (g._why[t.close_reason] || 0) + 1;
     } else {
       const v = Number(t.volume) || 0;
       const ng = { symbol: t.symbol, position: t.position, volume: v, profit: Number(t.profit) || 0,
-                   _po: t.price_open * v, _pc: t.price_close * v, _o: t._o, _c: t._c, _last: t._c, n: 1 };
+                   _po: t.price_open * v, _pc: t.price_close * v, _o: t._o, _c: t._c, _last: t._c, n: 1,
+                   sl: t.sl || null, tp: t.tp || null, _why: t.close_reason ? { [t.close_reason]: 1 } : {} };
       open.set(k, ng); out.push(ng);
     }
   }
   return out.map((g) => ({ symbol: g.symbol, position: g.position, volume: g.volume, profit: g.profit, n: g.n,
+    sl: g.sl, tp: g.tp, close_reason: Object.entries(g._why).sort((a, b) => b[1] - a[1])[0]?.[0] || null,
     price_open: g.volume ? g._po / g.volume : 0, price_close: g.volume ? g._pc / g.volume : 0,
     open_time: new Date(g._o).toISOString(), close_time: new Date(g._c).toISOString() }));
 }
@@ -2120,8 +2137,13 @@ async function pineCodeParts(merged = false) {
       const tk = Math.round(Number(t.price_open) * m), tc = Math.round(Number(t.price_close) * m);
       const r = [o - prevO, sec(t.close_time) - o, tk - last[si], tc - tk,
         String(t.position || '').toLowerCase().startsWith('b') ? 'b' : 's',
-        Math.round(Number(t.volume) * 100), Math.round(Number(t.profit) * 100), si].concat(merged ? [t.n || 1] : []).join(',');
-      prevO = o; last[si] = tk; return r;
+        Math.round(Number(t.volume) * 100), Math.round(Number(t.profit) * 100), si];
+      // 덧붙임 (없으면 빈칸, 끝의 빈칸은 뺌): SL-진입(틱), TP-진입(틱), 청산 이유 한 글자, 묶인 건수
+      const ext = [t.sl ? Math.round(Number(t.sl) * m) - tk : '', t.tp ? Math.round(Number(t.tp) * m) - tk : '',
+        { sl: 's', tp: 't', manual: 'm', auto: 'a', stopout: 'o', lock: 'l', loss_limit: 'x' }[t.close_reason] || '', merged ? (t.n || 1) : ''];
+      while (ext.length && ext[ext.length - 1] === '') ext.pop();
+      const r2 = r.concat(ext).join(',');
+      prevO = o; last[si] = tk; return r2;
     });
     return { rows, base, len: rows.reduce((n, r) => n + r.length + 1, 0),
       syms: syms.map((sy, i) => `${String(sy).replace(/[|:,]/g, '')}:${dig[i]}`).join('|') };

@@ -84,3 +84,19 @@ def _is_timeout(e: Exception) -> bool:
 def _reason(e: Exception) -> str:
     d = getattr(e, "detail", None)
     return str(d or e or type(e).__name__)[:200]
+
+
+def ref_levels(same_side: list[dict], ticket: int) -> tuple[float, float, list[dict], list[dict]]:
+    """새로 들어간 포지션(ticket)에 맞출 '기존' SL/TP 와, 맞춰야 할 포지션들.
+    same_side: 같은 종목·같은 방향 포지션 전부 (worker /positions-all 의 dict)
+    기준 = ticket 보다 먼저 들어간 포지션들에 가장 많이 걸린 SL/TP (0 은 빼고). 없으면 0
+    돌려줌: (기준 SL, 기준 TP, SL 을 바꿔야 할 포지션들, TP 를 바꿔야 할 포지션들)"""
+    from collections import Counter
+    older = [p for p in same_side if p.get("ticket", 0) < ticket] or []
+    def mode(key):
+        c = Counter(round(float(p.get(key) or 0), 10) for p in older if p.get(key))
+        return c.most_common(1)[0][0] if c else 0.0
+    sl, tp = mode("sl"), mode("tp")
+    need_sl = [p for p in same_side if sl and abs(float(p.get("sl") or 0) - sl) > 1e-9]
+    need_tp = [p for p in same_side if tp and abs(float(p.get("tp") or 0) - tp) > 1e-9]
+    return sl, tp, need_sl, need_tp

@@ -36,6 +36,7 @@ def _trade_json(t: Trade) -> dict:
     acc = t.account
     return {
         "id": t.id, "ticket": t.ticket, "symbol": t.symbol, "position": t.position, "magic": t.magic, "group_id": t.group_id,
+        "sl": getattr(t, "sl", None), "tp": getattr(t, "tp", None), "close_reason": getattr(t, "close_reason", None),
         "volume": t.volume, "price_open": t.price_open, "price_close": t.price_close,
         "profit": t.profit, "commission": t.commission,
         "open_time": _iso(t.open_time), "close_time": _iso(t.close_time),
@@ -231,6 +232,12 @@ async def create_trade(
             addon.on_close(account.id)            # 첫 진입을 다 청산했으면 걸어 둔 리밋 정리
         except Exception as e:
             print(f"[addon] {e}")
+        # 청산 직전 SL/TP·청산 이유를 거래 기록에 (워커가 기억해 둔 값) - 청산 알림이 이걸 기다렸다가 씀
+        import asyncio
+        ct = asyncio.create_task(_save_close_info(account.id, trade.id, data.ticket, getattr(data, "magic", 0)))
+        _close_tasks[trade.id] = ct
+        _bg.add(ct)
+        ct.add_done_callback(_bg.discard)
 
     payload = {
         'trade_id': trade.id
@@ -260,6 +267,55 @@ async def create_trade(
 
 
 _bg: set = set()
+_close_tasks: dict = {}             # 거래 id → 청산 정보 저장 중인 작업 (알림이 기다림)
+
+# 청산 이유 → 알림·웹에 쓰는 말
+CLOSE_REASON_KR = {"sl": "🛑 SL에 걸림", "tp": "🎯 TP에 걸림", "manual": "✋ 직접 청산", "auto": "🤖 자동 청산",
+                   "stopout": "💥 증거금 강제청산", "lock": "🔒 잠금 강제청산", "loss_limit": "🧯 일일 손실 한도 청산"}
+
+
+async def _save_close_info(account_id: int, trade_id: int, ticket: int, magic: int) -> None:
+    """워커에게 이 포지션의 마지막 SL/TP 와 청산 이유를 물어서 거래 기록에 남김"""
+    import asyncio
+    from db.session import AsyncSessionLocal
+    from services.worker_client import worker_get
+    info = {}
+    try:
+        info = await asyncio.wait_for(worker_get(account_id, "/close-info", {"position": ticket}), 6)
+    except Exception as e:
+        print(f"[trade] #{ticket} 청산 정보 못 받음: {getattr(e, 'detail', e)}")
+    reason = info.get("reason")
+    if magic == LOCK_CLOSE_MAGIC:
+        reason = "lock"
+    elif magic == LOSS_LIMIT_MAGIC:
+        reason = "loss_limit"
+    try:
+        async with AsyncSessionLocal() as db:
+            t = await db.get(Trade, trade_id)
+            if t is not None:
+                if info.get("sl"):
+                    t.sl = info["sl"]
+                if info.get("tp"):
+                    t.tp = info["tp"]
+                if reason:
+                    t.close_reason = reason
+                await db.commit()
+    except Exception as e:
+        print(f"[trade] #{ticket} 청산 정보 저장 실패: {e}")
+    finally:
+        _close_tasks.pop(trade_id, None)
+
+
+def _close_line(t) -> str:
+    """청산 알림 한 줄: 🎯 TP에 걸림 · SL 27,950.00 · TP 27,800.00"""
+    if t is None:
+        return ""
+    parts = []
+    if t.close_reason:
+        parts.append(CLOSE_REASON_KR.get(t.close_reason, t.close_reason))
+    if t.sl or t.tp:
+        parts.append(f"SL {_price(t.sl) if t.sl else '없음'} · TP {_price(t.tp) if t.tp else '없음'}")
+    return " · ".join(parts)
 
 
 _batches: dict[tuple, dict] = {}    # (계좌, 종목, 진입/청산, 방향) → 묶는 중인 체결들
@@ -288,6 +344,14 @@ async def _notify_trade(account_id: int, account_number: str, trade_id: int, dat
         while _t.time() - b["last"] < wait and _t.time() - start < wait * 3:
             await asyncio.sleep(0.3)
         items = _batches.pop(key)["items"]
+    if data.entry_type == "CLOSE":            # 청산 직전 SL/TP·청산 이유가 저장될 때까지 (길어야 몇 초)
+        for tid, _, _ in items:
+            t = _close_tasks.get(tid)
+            if t is not None:
+                try:
+                    await asyncio.wait_for(asyncio.shield(t), 7)
+                except Exception:
+                    pass
     try:
         async with AsyncSessionLocal() as db:
             if len(items) == 1:
@@ -354,8 +418,20 @@ async def _group_message(db: AsyncSession, account_id: int, account_number: str,
             a, b = _hold(min(holds)), _hold(max(holds))
             hold = f" · 보유 {a}" if a == b else f" · 보유 {a}~{b}"
         lines.append(f"평균 {_price(ao)} → {_price(ac)} ({move:+,.2f}pt){hold}")
+    # 청산 이유 (여러 가지면 개수) · 모두 같은 SL/TP 면 그 값
+    from collections import Counter
+    rs = Counter(tr.close_reason for tr, _, _ in trades if tr is not None and tr.close_reason)
+    if rs:
+        parts = [CLOSE_REASON_KR.get(k, k) + (f" {v}건" if len(rs) > 1 or v != n else "") for k, v in rs.most_common()]
+        sls = {tr.sl for tr, _, _ in trades if tr is not None}
+        tps = {tr.tp for tr, _, _ in trades if tr is not None}
+        if len(sls) == 1 and len(tps) == 1 and (next(iter(sls)) or next(iter(tps))):
+            s1, t1 = next(iter(sls)), next(iter(tps))
+            parts.append(f"SL {_price(s1) if s1 else '없음'} · TP {_price(t1) if t1 else '없음'}")
+        lines.append(" · ".join(parts))
     lines.append(f"손익 {profit:+,.2f} · 수수료 {fee:+,.2f} · {when} · 계좌 {account_number}")
-    return title, "\n".join(lines + [l for l in keep if not l.startswith(("청산가", "평균"))
+    reason_heads = tuple(CLOSE_REASON_KR.values()) + ("SL ",)
+    return title, "\n".join(lines + [l for l in keep if not l.startswith(("청산가", "평균") + reason_heads)
                                        and "→" not in l]), buttons
 
 
@@ -521,6 +597,15 @@ async def _trade_message(db: AsyncSession, account_id: int, account_number: str,
                     {"text": "🎯 TP", "callback_data": f"pos:tp:o:{key}"},
                     {"text": "⚖️ 본전 SL", "callback_data": f"pos:be:o:{key}"}]]
         same = [p for p in positions if p.get("type") == (me or {}).get("type", 0 if data.position == "BUY" else 1)]
+        # 먼저 들어간 같은 방향 포지션에 SL/TP 가 있는데 새로 들어간 쪽이 다르면 [같은 SL/TP 걸기]
+        try:
+            from services.sltp import ref_levels
+            rsl, rtp, nsl, ntp = ref_levels(same, data.ticket)
+            if nsl or ntp:
+                what = " · ".join(x for x in ((f"SL {_price(rsl)}" if nsl else ""), (f"TP {_price(rtp)}" if ntp else "")) if x)
+                buttons.insert(0, [{"text": f"📋 같은 {what} 걸기", "callback_data": f"pos:same:{key}"}])
+        except Exception as e:
+            print(f"[trade] 같은 SL/TP 버튼 실패: {e}")
         if len(same) > 1:
             buttons.append([{"text": f"🛑 SL 전체 {len(same)}개", "callback_data": f"pos:sl:a:{key}"},
                             {"text": f"🎯 TP 전체", "callback_data": f"pos:tp:a:{key}"},
@@ -543,6 +628,9 @@ async def _trade_message(db: AsyncSession, account_id: int, account_number: str,
         lines.append(f"{_price(trade.price_open)} → {_price(data.price)} ({move:+,.2f}pt){hold}")
     else:
         lines.append(f"청산가 {_price(data.price)}")
+    cl = _close_line(trade)
+    if cl:
+        lines.append(cl)
     lines.append(f"손익 {data.profit:+,.2f} · 수수료 {fee:+,.2f} · {when} · {acc_line}")
 
     # 오늘(거래일 06:00부터) 누적

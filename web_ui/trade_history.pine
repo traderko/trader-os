@@ -43,6 +43,7 @@ timeFormat    = input.string("MM-dd HH:mm", "시간 표시 형식", group="Displ
 labelTz       = input.string("Asia/Seoul", "라벨 시간대", group="Display")
 showLines     = input.bool(true,  "Show Entry-Exit Lines",  group="Display")
 showEntry     = input.bool(true,  "Show Entry Markers",     group="Display", tooltip="끄면 거래당 라벨이 1개라 한 화면에 더 많이 그림")
+showSLTP      = input.bool(true,  "SL/TP 점선 표시",        group="Display", tooltip="청산 직전에 걸려 있던 SL(빨강)·TP(초록)를 진입~청산 구간에 점선으로. 기록이 있는 거래만 (11월 10일 업데이트 이후)")
 showStats     = input.bool(false, "Show Stats Table",       group="Display")
 statsScope    = input.string("화면", "통계·집계 기준", options=["화면", "전체"], group="Display")
 labelSizeOpt  = input.string("tiny", "Label Size", options=["tiny", "small", "normal", "large"], group="Display")
@@ -153,6 +154,9 @@ type TradeRecord
     int    cnt = 1
     int    lastClose = 0
     array<int> members
+    float  sl = 0.0          // 청산 직전 SL (없으면 0)
+    float  tp = 0.0          // 청산 직전 TP (없으면 0)
+    string why = ""          // 청산 이유 한 글자: s=SL t=TP m=직접 a=자동 o=증거금 강제 l=잠금 x=손실 한도
 
 f_parseRows(string src, int baseMs, string defaultSym, bool isOffset, array<TradeRecord> out) =>
     for row in str.split(src, "\n")
@@ -174,6 +178,19 @@ f_parseRows(string src, int baseMs, string defaultSym, bool isOffset, array<Trad
 // 1) 파싱 + 묶기: 처음 한 번 (차트를 옮기거나 설정을 바꾸면 지표가 처음부터 다시 계산되므로 그때마다 다시)
 //    전역 코드가 너무 길면 파인이 거부해서(CE10295) 전부 함수 안에 둠
 // ============================================================
+// 덧붙인 SL/TP (진입가 기준 틱 차이, 빈칸이면 없음) → 가격
+f_ext(array<string> f, int i, float ticks, float sc) =>
+    float v = 0.0
+    if array.size(f) > i
+        d = str.tonumber(array.get(f, i))
+        if not na(d)
+            v := (ticks + d) / sc
+    v
+
+f_whyKr(string w) =>
+    w == "s" ? "SL에 걸림" : w == "t" ? "TP에 걸림" : w == "m" ? "직접 청산" : w == "a" ? "자동 청산" :
+     w == "o" ? "증거금 강제청산" : w == "l" ? "잠금 강제청산" : w == "x" ? "일일 손실 한도" : ""
+
 // 압축 데이터 한 덩어리 읽기 (st: [앞 줄 진입 ms], lastTicks: 종목별 앞 줄 진입가 틱)
 f_parseCompact(string src, array<string> syms, array<float> scales, array<int> st, array<float> lastTicks, array<TradeRecord> out) =>
     for row in str.split(src, "\n")
@@ -190,7 +207,8 @@ f_parseCompact(string src, array<string> syms, array<float> scales, array<int> s
             if f_symMatch(sy)
                 array.push(out, TradeRecord.new(openMs, ticks / sc, closeMs, (ticks + str.tonumber(array.get(f, 3))) / sc,
                      array.get(f, 4) == "b" ? "buy" : "sell", str.tonumber(array.get(f, 5)) / 100, str.tonumber(array.get(f, 6)) / 100,
-                     sy, array.size(f) >= 9 ? int(str.tonumber(array.get(f, 8))) : 1, closeMs, array.new<int>()))
+                     sy, array.size(f) >= 12 ? int(str.tonumber(array.get(f, 11))) : 1, closeMs, array.new<int>(),
+                     f_ext(f, 8, ticks, sc), f_ext(f, 9, ticks, sc), array.size(f) >= 11 ? array.get(f, 10) : ""))
     true
 
 f_load(array<TradeRecord> raw, array<TradeRecord> groups) =>
@@ -233,9 +251,15 @@ f_load(array<TradeRecord> raw, array<TradeRecord> groups) =>
                 g.closeTime  := math.max(g.closeTime, r.closeTime)
                 g.lastClose  := r.closeTime
                 g.cnt        := g.cnt + 1
+                if g.sl != r.sl                       // 묶음 안 SL/TP 가 서로 다르면 표시 안 함
+                    g.sl := 0.0
+                if g.tp != r.tp
+                    g.tp := 0.0
+                if g.why != r.why
+                    g.why := ""
                 array.push(g.members, i)
             else
-                ng = TradeRecord.new(r.openTime, r.openPrice, r.closeTime, r.closePrice, r.dir, r.lot, r.profit, r.sym, 1, r.closeTime, array.from(i))
+                ng = TradeRecord.new(r.openTime, r.openPrice, r.closeTime, r.closePrice, r.dir, r.lot, r.profit, r.sym, 1, r.closeTime, array.from(i), r.sl, r.tp, r.why)
                 array.push(groups, ng)
                 map.put(lastOf, k, array.size(groups) - 1)
     true
@@ -298,7 +322,7 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
             // 이 거래(묶음)를 그리는 데 드는 선·라벨 수
             picks    = showPicks and useGroups ? array.size(t.members) : 0
             needLab  = 1 + (picks > 0 ? picks : (showEntry ? 1 : 0))
-            needLine = showLines ? 1 : 0
+            needLine = (showLines ? 1 : 0) + (showSLTP ? (t.sl > 0 ? 1 : 0) + (t.tp > 0 ? 1 : 0) : 0)
             if visible and not full
                 if usedLabels + needLab > MAX_LABELS or usedLines + needLine > MAX_LINES
                     full := true
@@ -315,12 +339,20 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
                          "Open:   " + openTimeStr  + "  @" + str.tostring(t.openPrice, format.mintick) + "\n" +
                          "Close:  " + closeTimeStr + "  @" + str.tostring(t.closePrice, format.mintick) + "\n" +
                          "Lot:    " + str.tostring(t.lot) + "\n" +
-                         "Profit: " + str.tostring(t.profit, "#.##")
+                         "Profit: " + str.tostring(t.profit, "#.##") +
+                         (t.sl > 0 or t.tp > 0 ? "\nSL " + (t.sl > 0 ? str.tostring(t.sl, format.mintick) : "없음") + " · TP " + (t.tp > 0 ? str.tostring(t.tp, format.mintick) : "없음") : "") +
+                         (t.why != "" ? "\n" + f_whyKr(t.why) : "")
                     snappedOpen  = f_snapToBar(t.openTime)
                     snappedClose = f_snapToBar(t.closeTime)
                     if showLines
                         line.new(x1=snappedOpen, y1=t.openPrice, x2=snappedClose, y2=t.closePrice,
                              xloc=xloc.bar_time, color=resultCol, width=lineWidth, style=f_lineStyle())
+                    if showSLTP and t.sl > 0          // 청산 직전 SL/TP - 진입부터 청산까지 점선
+                        line.new(x1=snappedOpen, y1=t.sl, x2=snappedClose, y2=t.sl, xloc=xloc.bar_time,
+                             color=color.new(lossColor, 30), width=1, style=line.style_dotted)
+                    if showSLTP and t.tp > 0
+                        line.new(x1=snappedOpen, y1=t.tp, x2=snappedClose, y2=t.tp, xloc=xloc.bar_time,
+                             color=color.new(winColor, 30), width=1, style=line.style_dotted)
                     if picks > 0
                         // 묶음 + 개별 진입점: 실제로 들어간 자리마다 진입 표시
                         for mi in t.members
