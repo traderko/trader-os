@@ -221,7 +221,7 @@ class TelegramLive:
         self.force = asyncio.Event()
         self.seen: dict[str, int] = {}   # 봇별로 이미 처리한 마지막 update_id
         self.locked: list[tuple[int, str]] = []   # 문구로 풀 수 있는 잠금 계좌 (id, 계좌번호) - 버튼용
-        self.pos_groups: list[tuple] = []         # (계좌id, 계좌번호, 종목, 방향 0/1, 대표 티켓, 개수) - SL/TP 버튼용
+        self.pos_groups: list[tuple] = []         # (계좌id, 계좌번호, 종목, 방향 0/1, 대표 티켓, 개수, SL/TP 제각각) - SL/TP 버튼용
         self.pending: dict[str, dict] = {}        # 대화방별 '문구 입력 기다리는 중'
 
     # ── 상태 파일 ──
@@ -295,8 +295,11 @@ class TelegramLive:
             seen: dict[tuple, list] = {}
             for p in positions:
                 seen.setdefault((p["symbol"], p["type"]), []).append(p)
+            from services.sltp import ref_levels
             for (sym, typ), ps in sorted(seen.items()):
-                groups.append((a.id, a.account_number, sym, typ, ps[0]["ticket"], len(ps)))
+                # SL/TP 가 포지션마다 다르거나 빠진 게 있으면 [📋 맞추기] (가장 많이 걸린 SL/TP 로 전부)
+                _, _, nsl, ntp = ref_levels(ps, 10 ** 18) if len(ps) > 1 else (0, 0, [], [])
+                groups.append((a.id, a.account_number, sym, typ, ps[0]["ticket"], len(ps), bool(nsl or ntp)))
             return lines
 
         self.locked = [(a.id, a.account_number) for a in accounts
@@ -362,12 +365,15 @@ class TelegramLive:
     def _markup(self) -> dict:
         rows = [[{"text": f"🔓 {num} 잠금 풀기", "callback_data": f"unlock:{aid}"}] for aid, num in self.locked]
         many_acc = len({g[0] for g in self.pos_groups}) > 1
-        for aid, num, sym, typ, ticket, n in self.pos_groups[:6]:
+        for aid, num, sym, typ, ticket, n, mixed in self.pos_groups[:6]:
             key = f"a:{aid}:{ticket}"                 # 같은 종목·방향 전체에 적용
             who = (f"{str(num)[-4:]} " if many_acc else "") + f"{sym} {'BUY' if typ == 0 else 'SELL'}" + (f" {n}개" if n > 1 else "")
-            rows.append([{"text": f"🛑 SL · {who}"[:40], "callback_data": f"pos:sl:{key}"},
-                         {"text": "🎯 TP", "callback_data": f"pos:tp:{key}"},
-                         {"text": "⚖️ 본전", "callback_data": f"pos:be:{key}"}])
+            row = [{"text": f"🛑 SL · {who}"[:40], "callback_data": f"pos:sl:{key}"},
+                   {"text": "🎯 TP", "callback_data": f"pos:tp:{key}"},
+                   {"text": "⚖️ 본전", "callback_data": f"pos:be:{key}"}]
+            if mixed:                                  # SL/TP 가 제각각 - 가장 많이 걸린 값으로 전부 맞추기
+                row.append({"text": "📋 맞추기", "callback_data": f"pos:sameall:{aid}:{ticket}"})
+            rows.append(row)
         last = [{"text": "🔄 새로고침", "callback_data": "live:refresh"}]
         if telegram_cfg().get("live_grid_button", False):       # 관리 화면에서 켤 수 있음 (기본 숨김)
             last.append({"text": "🧱 구간매매", "callback_data": "gw:new"})
@@ -505,9 +511,11 @@ class TelegramLive:
     async def pos_button(self, client, token, chat_id: str, data: str) -> str:
         """pos:<sl|tp|be>:<o|a>:<계좌id>:<티켓> 버튼. 콜백 답(짧은 글) 을 돌려줌
         pos:set:<sl|tp>:<o|a>:<계좌id>:<티켓>:<가격> - 금액으로 계산한 가격 확인 후 [✅ 이 가격으로] 버튼"""
-        if data.startswith("pos:same:"):           # 진입 알림 [📋 같은 SL/TP 걸기] - 먼저 들어간 포지션의 SL/TP 를 새 포지션에도
+        if data.startswith("pos:same:") or data.startswith("pos:sameall:"):
+            # pos:same     진입 알림 [📋 같은 SL/TP 걸기] - 먼저 들어간 포지션의 SL/TP 를 새 포지션에도
+            # pos:sameall  실시간 메시지 [📋 맞추기] - 같은 종목·방향 포지션 전부를 가장 많이 걸린 SL/TP 로
             try:
-                _, _, aid, ticket = data.split(":")
+                _, kind, aid, ticket = data.split(":")
                 aid, ticket = int(aid), int(ticket)
             except ValueError:
                 return "잘못된 버튼"
@@ -516,7 +524,7 @@ class TelegramLive:
                 await self._send(client, token, chat_id, "이 포지션은 이미 청산됐거나 MT5에 연결되지 않았습니다.")
                 return "포지션 없음"
             from services.sltp import ref_levels
-            rsl, rtp, nsl, ntp = ref_levels(targets, ticket)
+            rsl, rtp, nsl, ntp = ref_levels(targets, 10 ** 18 if kind == "sameall" else ticket)
             if not (nsl or ntp):
                 return "이미 같은 SL/TP 입니다" if (rsl or rtp) else "먼저 들어간 포지션에 SL/TP 가 없습니다"
 
