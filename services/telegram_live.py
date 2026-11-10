@@ -1096,13 +1096,17 @@ class TelegramLive:
                 elif mine and (text.startswith("/지표") or text.startswith("/events")):
                     from services import telegram_events
                     await telegram_events.cmd_events(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                elif mine and (text.startswith("/문구") or text.startswith("/phrases")):
+                    from services import telegram_phrases
+                    await telegram_phrases.cmd_phrases(self, client, token, cid)
                 elif mine and text.startswith("/pos"):
                     await self.show_positions(client, token, cid)
                 elif mine and text.startswith("/cancel"):
                     p = self.pending.pop(cid, None)
                     if p:
                         await self._send(client, token, cid, {"pos": "SL/TP 설정을 그만뒀습니다.", "grid": "직접 입력을 그만뒀습니다. 설정 메시지의 버튼은 그대로 쓸 수 있습니다.",
-                                          "tag": "입력을 그만뒀습니다. 근거 메시지의 버튼은 그대로 쓸 수 있습니다."}
+                                          "tag": "입력을 그만뒀습니다. 근거 메시지의 버튼은 그대로 쓸 수 있습니다.",
+                                          "phr": "문구 입력을 그만뒀습니다."}
                                          .get(p.get("type"), "잠금 풀기를 그만뒀습니다."))
                 elif mine and raw and not raw.startswith("/") and cid in self.pending:
                     if self.pending[cid].get("type") == "pos":
@@ -1113,6 +1117,9 @@ class TelegramLive:
                     elif self.pending[cid].get("type") == "tag":
                         from services import telegram_tags
                         await telegram_tags.text_input(self, client, token, cid, raw)
+                    elif self.pending[cid].get("type") == "phr":
+                        from services import telegram_phrases
+                        await telegram_phrases.text_input(self, client, token, cid, raw)
                     else:
                         await self.try_unlock(client, token, cid, raw, int(msg.get("date") or time.time()))
                 elif text.startswith("/start") or text.startswith("/id"):
@@ -1169,6 +1176,16 @@ class TelegramLive:
                                                               (cb.get("message") or {}).get("message_id"))
                     except Exception as e:
                         answer = f"실패: {e}"[:190]
+                elif data.startswith("ph:"):          # /문구 확인 문구 관리 (services/telegram_phrases.py)
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        from services import telegram_phrases
+                        try:
+                            answer = await telegram_phrases.button(self, client, token, cid, data,
+                                                                   (cb.get("message") or {}).get("message_id"))
+                        except Exception as e:
+                            answer = f"실패: {e}"[:190]
                 elif data.startswith("mt5:"):         # MT5 재시작 (services/telegram_mt5.py)
                     if cid != str(telegram_cfg()["chat_id"] or ""):
                         answer = "등록된 대화에서만 쓸 수 있습니다"
@@ -1241,6 +1258,7 @@ class TelegramLive:
                             {"command": "ktr", "description": "KTR 표 (장 × 시간봉)"},
                             {"command": "reasons", "description": "근거 없는 거래 모아 보기 (/근거 3일)"},
                             {"command": "events", "description": "이번 주 지표 발표·지표일 잠금 (/지표)"},
+                            {"command": "phrases", "description": "잠금 풀기 확인 문구 보기·추가·수정 (/문구)"},
                             {"command": "sim", "description": "청산 시뮬레이션 (알림 미리보기)"},
                             {"command": "update", "description": "새 버전 확인·업데이트"},
                             {"command": "cancel", "description": "잠금 풀기 그만두기"},
