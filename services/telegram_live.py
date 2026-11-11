@@ -1129,6 +1129,12 @@ class TelegramLive:
                 elif mine and (text.startswith("/문구") or text.startswith("/phrases")):
                     from services import telegram_phrases
                     await telegram_phrases.cmd_phrases(self, client, token, cid)
+                elif mine and (text.startswith("/손익") or text.startswith("/pnl")):
+                    from services import telegram_report
+                    await telegram_report.cmd(self, client, token, cid, "p", raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                elif mine and (text.startswith("/통계") or text.startswith("/stats")):
+                    from services import telegram_report
+                    await telegram_report.cmd(self, client, token, cid, "s", raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                 elif mine and text.startswith("/pos"):
                     await self.show_positions(client, token, cid)
                 elif mine and text.startswith("/cancel"):
@@ -1216,6 +1222,16 @@ class TelegramLive:
                                                                    (cb.get("message") or {}).get("message_id"))
                         except Exception as e:
                             answer = f"실패: {e}"[:190]
+                elif data.startswith("rp:"):          # /손익 · /통계 기간 버튼 (services/telegram_report.py)
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        from services import telegram_report
+                        try:
+                            answer = await telegram_report.button(self, client, token, cid, data,
+                                                                  (cb.get("message") or {}).get("message_id"))
+                        except Exception as e:
+                            answer = f"실패: {e}"[:190]
                 elif data.startswith("mt5:"):         # MT5 재시작 (services/telegram_mt5.py)
                     if cid != str(telegram_cfg()["chat_id"] or ""):
                         answer = "등록된 대화에서만 쓸 수 있습니다"
@@ -1281,6 +1297,8 @@ class TelegramLive:
                         print(f"[telegram-live] 봇 {status['bot']} 연결됨 - 봇에게 /start 를 보내면 chat id를 알려줍니다")
                         await self._call(client, token, "setMyCommands", commands=[
                             {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
+                            {"command": "pnl", "description": "손익 - 오늘·주·월 (/손익 어제)"},
+                            {"command": "stats", "description": "매매 통계 - 승률·PF·종목·장별 (/통계)"},
                             {"command": "pos", "description": "포지션 SL/TP 설정"},
                             {"command": "calc", "description": "SL·TP 예상 손익 계산"},
                             {"command": "grid", "description": "구간매매 - 버튼으로 하나씩 설정 (또는 한 줄로)"},
