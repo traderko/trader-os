@@ -220,7 +220,8 @@ async def _counter_positions(group: str, direction: str) -> str:
             continue
         for p in rows:
             g = symbols.group_of(p.get("symbol", ""))
-            if g and g["key"] == group and p.get("type") == want:
+            side = 0 if str(p.get("type")).lower() in ("0", "buy") or str(p.get("type")).lower().startswith("b") else 1
+            if g and g.get("key") == group and side == want:   # type 이 0/1 이든 "BUY"/"SELL" 이든
                 n += 1
                 lots += p.get("volume") or 0
                 pnl += (p.get("profit") or 0) + (p.get("swap") or 0)
@@ -257,9 +258,40 @@ def _all_line(m: dict, d: str) -> str:
     return " · ".join(out) + " KTR"
 
 
+# 지금 살아 있는 원웨이(조짐 이상) - 텔레그램 실시간 현황 메시지 맨 위에 계속 보여 줌 (알림이 다른 알림에 묻혀도 보이게)
+ACTIVE: dict[str, dict] = {}
+
+
+def live_lines(positions: list[dict] | None = None) -> list[str]:
+    """실시간 현황에 넣을 줄. positions: 모든 계좌의 /positions-all (역방향 보유 표시용)"""
+    out = []
+    for group, a in list(ACTIVE.items()):
+        if time.time() - a["at"] > 5 * 60:                    # 5분 넘게 갱신이 없으면 (워커 끊김 등) 안 보임
+            continue
+        for d in ("up", "down"):
+            hs = a["dirs"].get(d)
+            if not hs:
+                continue
+            grade = "원웨이" if any(k >= t_main for _, k, t_main in hs) else "조짐"
+            arrow, word = ("🚀", "상승") if d == "up" else ("🔻", "하락")
+            line = (f"{arrow} <b>{word} {grade}</b> {html.escape(_label(group))} · "
+                    + " · ".join(f"{TF_KR[tf]} {k:.1f}" for tf, k, _ in hs) + f" KTR ({a['session']})")
+            if positions:
+                want = 1 if d == "up" else 0
+                ps = [p for p in positions if (symbols.group_of(p.get("symbol", "")) or {}).get("key") == group
+                      and (0 if str(p.get("type")).lower() in ("0", "buy") or str(p.get("type")).lower().startswith("b") else 1) == want]
+                if ps:
+                    pnl = sum((p.get("profit") or 0) + (p.get("swap") or 0) for p in ps)
+                    line += (f"\n   ⚠️ <b>역방향 {'매도' if want else '매수'} {len(ps)}개 "
+                             f"{sum(p.get('volume') or 0 for p in ps):g}랏</b> ({pnl:+,.2f})")
+            out.append(line)
+    return out
+
+
 async def check_once(now: datetime | None = None) -> None:
     c = cfg()
     if not c["enabled"]:
+        ACTIVE.clear()
         return
     now = now or datetime.now(KST)
     ids = await _account_ids()
@@ -274,7 +306,21 @@ async def check_once(now: datetime | None = None) -> None:
             except Exception:
                 continue
         if not m or time.time() - m["last_t"] > 30 * 60:      # 장이 쉬는 중 (주말 등)
+            ACTIVE.pop(group, None)
             continue
+        dirs = {"up": [], "down": []}                         # 실시간 현황용: 켠 시간봉 중 첫 단계 이상인 다리
+        for tf, x in m["tfs"].items():
+            t = c["tfs"][tf]
+            if not t["on"]:
+                continue
+            for d, leg in x["legs"].items():
+                k = leg["len"] / x["ktr"]
+                if t["levels"] and k >= min(t["levels"]):
+                    dirs[d].append((tf, k, t["main"]))
+        if dirs["up"] or dirs["down"]:
+            ACTIVE[group] = {"at": time.time(), "session": m["session"], "dirs": dirs}
+        else:
+            ACTIVE.pop(group, None)
         skey = f"{group}|{m['opened'].isoformat()}"
         rec = st.setdefault(skey, {"at": time.time(), "legs": {}})
         hits = {"up": [], "down": []}                         # 이번에 단계를 넘은 시간봉
@@ -413,7 +459,8 @@ def _day_sessions(day) -> list[tuple[str, datetime, datetime]]:
     return out
 
 
-async def day_report(day, groups: list[str] | None = None) -> str:
+async def day_report(day, groups: list[str] | None = None, brief: bool = False) -> str:
+    """brief=True: 끝난 장의 판정 줄만 (지금 /원웨이 화면 아래 '오늘 지난 장'용)"""
     c = cfg()
     groups = groups or c["groups"]
     WEEK = "월화수목금토일"
@@ -426,9 +473,15 @@ async def day_report(day, groups: list[str] | None = None) -> str:
     if sess[0][1] > now:
         return "\n".join(L + ["", "아직 오지 않은 날입니다."])
     ids = await _account_ids()
+    if brief:
+        L = []
+        sess = [x for x in sess if x[2] <= now]          # 끝난 장만
+        if not sess:
+            return ""
     for group in groups:
-        L.append("")
-        L.append(f"<b>{html.escape(_label(group))}</b>")
+        if not brief:
+            L.append("")
+            L.append(f"<b>{html.escape(_label(group))}</b>")
         aid, err = None, ""
         # KTR: 시간봉마다 봉을 한 번 받아서 세 장 모두 계산
         ktr = {sid: {} for sid, _, _ in sess}
@@ -451,12 +504,14 @@ async def day_report(day, groups: list[str] | None = None) -> str:
             if not got and not aid:
                 break
         if not aid:
-            L.append(html.escape(err or "MT5 연결 안 됨"))
+            if not brief:
+                L.append(html.escape(err or "MT5 연결 안 됨"))
             continue
         try:
             path = await asyncio.wait_for(grid._candles(aid, group, "mt5", PATH_TF, sess[0][1], min(now, sess[-1][2])), 30)
         except Exception as e:
-            L.append(html.escape(str(getattr(e, "detail", e))[:150]))
+            if not brief:
+                L.append(html.escape(str(getattr(e, "detail", e))[:150]))
             continue
         for sid, o, e in sess:
             cs = [x for x in path if int(o.timestamp()) <= x["t"] < int(e.timestamp())]
@@ -495,7 +550,8 @@ async def day_report(day, groups: list[str] | None = None) -> str:
                     t0 = datetime.fromtimestamp(b["t0"], KST)
                     t1 = datetime.fromtimestamp(b["t1"], KST)
                     L.append(f"   {'↗' if d == 'up' else '↘'} {t0:%H:%M}~{t1:%H:%M} {_p(b['start'])} → {_p(b['end'])}")
-            L += rows
+            if not brief:
+                L += rows
     return "\n".join(L)[:4000]
 
 
@@ -555,6 +611,16 @@ async def status_text() -> str:
                     k = leg["len"] / x["ktr"]
                     parts.append(f"{'🔥' if k >= t['main'] else ('↗' if d == 'up' else '↘')}{k:.1f}")
             L.append(f"   {TF_KR[tf]} KTR {_p(x['ktr'])}: " + "  ".join(parts))
+        # 오늘 이미 끝난 장도 원웨이였는지 (지금 장만 보면 아침 아시아장 원웨이를 놓쳐 보임)
+        try:
+            from datetime import date
+            from services.loss_limit import trading_day
+            done = await asyncio.wait_for(day_report(date.fromisoformat(trading_day(datetime.now(KST))), [group], brief=True), 40)
+        except Exception:
+            done = ""
+        if done:
+            L.append("   <i>오늘 지난 장</i>")
+            L += ["   " + x for x in done.splitlines()]
     L += ["", "<i>위 버튼: 시간봉별 알림 켜기/끄기\n지난 날: /원웨이 11/5 (또는 어제 · /원웨이 11/5 gold)\n바꾸기: /원웨이 1h 단계 3 4 · /원웨이 1h 원웨이 3 · /원웨이 5m 되돌림 2 · /원웨이 종목 gold nasdaq</i>"]
     return "\n".join(L)[:4000]
 

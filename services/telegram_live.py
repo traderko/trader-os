@@ -291,6 +291,7 @@ class TelegramLive:
             except Exception:
                 pass
             lines += _positions_block(positions)
+            allpos.extend(positions)
             # 종목·방향 묶음마다 SL/TP 버튼 (/pos 안 쓰고 바로) - 대표 티켓 + 'a'(같은 종목·방향 전체)
             seen: dict[tuple, list] = {}
             for p in positions:
@@ -305,9 +306,17 @@ class TelegramLive:
         self.locked = [(a.id, a.account_number) for a in accounts
                        if (locks.get(a.id) or {}).get("locked") and locks[a.id].get("reason") != "manual"]
         groups: list[tuple] = []
+        allpos: list[dict] = []
         blocks = await asyncio.gather(*(one(a) for a in accounts)) if accounts else []
         self.pos_groups = groups
         body = "\n\n".join("\n".join(b) for b in blocks) or "잠금을 켠 계좌가 없습니다."
+        try:                                   # 원웨이 진행 중이면 맨 위에 (알림이 다른 알림에 묻혀도 여기서 보이게)
+            from services import oneway
+            ow = oneway.live_lines(allpos)
+            if ow:
+                body = "\n".join(ow) + "\n\n" + body
+        except Exception:
+            pass
         return f"📌 <b>TraderOS 실시간</b> · {datetime.now().strftime('%H:%M:%S')}\n\n{body}"
 
     # ── 고정 메시지 갱신 ──
