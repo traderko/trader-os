@@ -1129,6 +1129,9 @@ class TelegramLive:
                 elif mine and (text.startswith("/문구") or text.startswith("/phrases")):
                     from services import telegram_phrases
                     await telegram_phrases.cmd_phrases(self, client, token, cid)
+                elif mine and (text.startswith("/원웨이") or text.startswith("/oneway")):
+                    from services import oneway
+                    await oneway.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                 elif mine and (text.startswith("/손익") or text.startswith("/pnl")):
                     from services import telegram_report
                     await telegram_report.cmd(self, client, token, cid, "p", raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
@@ -1222,6 +1225,16 @@ class TelegramLive:
                                                                    (cb.get("message") or {}).get("message_id"))
                         except Exception as e:
                             answer = f"실패: {e}"[:190]
+                elif data.startswith("ow:"):          # /원웨이 시간봉·켜기 버튼 (services/oneway.py)
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        from services import oneway
+                        try:
+                            answer = await oneway.button(self, client, token, cid, data,
+                                                         (cb.get("message") or {}).get("message_id"))
+                        except Exception as e:
+                            answer = f"실패: {e}"[:190]
                 elif data.startswith("rp:"):          # /손익 · /통계 기간 버튼 (services/telegram_report.py)
                     if cid != str(telegram_cfg()["chat_id"] or ""):
                         answer = "등록된 대화에서만 쓸 수 있습니다"
@@ -1275,10 +1288,13 @@ class TelegramLive:
         print("[telegram-live] 시작")
         async with httpx.AsyncClient() as client:
             live_task = asyncio.create_task(self._live_loop(client))
+            from services import oneway                 # 원웨이 장 알림 (services/oneway.py)
+            oneway_task = asyncio.create_task(oneway.loop())
             try:
                 await self._poll_loop(client)
             finally:
                 live_task.cancel()
+                oneway_task.cancel()
 
     async def _poll_loop(self, client: httpx.AsyncClient) -> None:
         while True:
@@ -1297,6 +1313,7 @@ class TelegramLive:
                         print(f"[telegram-live] 봇 {status['bot']} 연결됨 - 봇에게 /start 를 보내면 chat id를 알려줍니다")
                         await self._call(client, token, "setMyCommands", commands=[
                             {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
+                            {"command": "oneway", "description": "원웨이 장 - 지금 몇 KTR 갔는지·알림 설정 (/원웨이)"},
                             {"command": "pnl", "description": "손익 - 오늘·주·월 (/손익 어제)"},
                             {"command": "stats", "description": "매매 통계 - 승률·PF·종목·장별 (/통계)"},
                             {"command": "pos", "description": "포지션 SL/TP 설정"},
