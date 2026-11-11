@@ -3,8 +3,8 @@
 # 텔레그램 "실시간 현황" - 봇 대화방 맨 위에 고정한 메시지 하나를 몇 초마다 고쳐 쓴다.
 # (안드로이드 앱의 고정 알림 대신. 고쳐 쓸 때는 알림이 울리지 않음)
 #
-#   📌 TraderOS 실시간 · 20:31
-#   12345678  🔓 거래 가능 · 52분 뒤 재확인
+#   TraderOS 실시간 · 20:31
+#   12345678  거래 가능 · 52분 뒤 재확인
 #   평가금 10,385.60 · 손익 +385.00 · 증거금 12.9%
 #   🧈 XAUUSD+  BUY 0.40 @4,466.27  +383.80
 #      SL시 -200.20 (3/3) · TP시 +245.00 (1/3)
@@ -155,13 +155,13 @@ def _lock_line(s: dict | None) -> str:
     d = s.get("daily_loss") or {}
     daily = f" · 오늘 {-d.get('pct', 0):+.1f}%" if d.get("enabled") else ""   # 일일 손실 한도를 켠 경우
     if reason == "weekend" and not s.get("locked"):
-        return f"🌙 주말 · 잠금 쉼 ({_hm(s.get('remaining_sec', 0))} 뒤 다시){daily}"
+        return f"주말 · 잠금 쉼 ({_hm(s.get('remaining_sec', 0))} 뒤 다시){daily}"
     if s.get("locked"):
         if reason == "manual":
             what = "손실 한도 잠금" if s.get("manual_kind") == "loss_limit" else "수동 잠금"
-            return f"🔒 {what} · {_hm(s.get('remaining_sec', 0))} 뒤 해제{daily}"
-        return f"🔒 잠김 · {html.escape(why)}{daily}"
-    return f"🔓 거래 가능 · {_hm(s.get('remaining_sec', 0))} 뒤 재확인{daily}"
+            return f"<b>{what}</b> · {_hm(s.get('remaining_sec', 0))} 뒤 해제{daily}"
+        return f"<b>잠김</b> · {html.escape(why)}{daily}"
+    return f"거래 가능 · {_hm(s.get('remaining_sec', 0))} 뒤 재확인{daily}"
 
 
 def _positions_block(positions: list[dict]) -> list[str]:
@@ -186,8 +186,11 @@ def _positions_block(positions: list[dict]) -> list[str]:
                 if cur and avg:                  # 평단에서 지금가까지 이익 방향(+)/손실 방향(-) 포인트
                     dg = side[0].get("digits") if isinstance(side[0].get("digits"), int) else 2
                     pts = f" ({((cur - avg) if t == 0 else (avg - cur)):+,.{min(dg, 2)}f}pt)"
-                sides.append(f"{label} {vol:g}lot 📍{_f(avg)}{pts}")
-        out.append(f"{icon} <b>{html.escape(sym)}</b>  {' · '.join(sides)}  <b>{_money(profit)}</b>")
+                sides.append(f"{label} {vol:g}lot @ {_f(avg)}{pts}")
+        if out:
+            out.append("")                       # 종목 사이 한 줄 띄움
+        out.append(f"<b>{html.escape(sym)}</b>  <b>{_money(profit)}</b>")
+        out += [f"   {x}" for x in sides]
         # 구간매매로 넣은 포지션은 따로 (직접 거래와 구분)
         from services.grid import kind_of, MODE_KR
         grids: dict[int, list] = {}
@@ -198,9 +201,9 @@ def _positions_block(positions: list[dict]) -> list[str]:
             mine = [p for p in ps if not kind_of(p.get("magic"))]
             for mg, gp in grids.items():
                 gpl = sum(p["profit"] + (p.get("swap") or 0) for p in gp)
-                out.append(f"    🧱 {MODE_KR[kind_of(mg)]} {len(gp)}개 {_f(sum(p['volume'] for p in gp))}lot  {_money(gpl)}")
+                out.append(f"   구간매매 {MODE_KR[kind_of(mg)]} {len(gp)}개 {_f(sum(p['volume'] for p in gp))}lot  {_money(gpl)}")
             if mine:
-                out.append(f"    ✋ 직접 {len(mine)}개 {_f(sum(p['volume'] for p in mine))}lot  {_money(sum(p['profit'] + (p.get('swap') or 0) for p in mine))}")
+                out.append(f"   직접 {len(mine)}개 {_f(sum(p['volume'] for p in mine))}lot  {_money(sum(p['profit'] + (p.get('swap') or 0) for p in mine))}")
         if pv is not None:
             proj = []
             for key, label in (("sl", "SL시"), ("tp", "TP시")):
@@ -209,7 +212,7 @@ def _positions_block(positions: list[dict]) -> list[str]:
                     total = sum(((p[key] - p["price_open"]) if p["type"] == 0 else (p["price_open"] - p[key])) * p["volume"] * pv for p in w)
                     proj.append(f"{label} {_s(total)} ({len(w)}/{len(ps)})")
             if proj:
-                out.append("    " + " · ".join(proj))
+                out.append("   " + " · ".join(proj))
     return out
 
 
@@ -286,10 +289,15 @@ class TelegramLive:
             lines.append(f"평가금 {_f(eq)} · 손익 <b>{_s(info.get('profit') or 0)}</b> · 증거금 {util:.1f}%")
             try:                               # 강제청산까지 몇 포인트 (차트에서 바로 보게)
                 from services.risk import liquidation, liq_line
-                for x in liquidation(info, positions)[:3]:
-                    lines.append(f"🧯 {html.escape(liq_line(x))}")
+                liq = liquidation(info, positions)[:3]
+                if liq:
+                    lines += ["", "<b>강제청산까지</b>"]
+                    for x in liq:
+                        t = liq_line(x).replace(" 가면 강제청산 (", " → ").replace("🔻", "▼").replace("🔺", "▲")
+                        lines.append("   " + html.escape(t[:-1] if t.endswith(")") else t))
             except Exception:
                 pass
+            lines.append("")
             lines += _positions_block(positions)
             allpos.extend(positions)
             # 종목·방향 묶음마다 SL/TP 버튼 (/pos 안 쓰고 바로) - 대표 티켓 + 'a'(같은 종목·방향 전체)
@@ -309,15 +317,16 @@ class TelegramLive:
         allpos: list[dict] = []
         blocks = await asyncio.gather(*(one(a) for a in accounts)) if accounts else []
         self.pos_groups = groups
-        body = "\n\n".join("\n".join(b) for b in blocks) or "잠금을 켠 계좌가 없습니다."
+        SEP = "\n━━━━━━━━━━━━━━\n"
+        body = SEP.join("\n".join(b) for b in blocks) or "잠금을 켠 계좌가 없습니다."
         try:                                   # 원웨이 진행 중이면 맨 위에 (알림이 다른 알림에 묻혀도 여기서 보이게)
             from services import oneway
             ow = oneway.live_lines(allpos)
             if ow:
-                body = "\n".join(ow) + "\n\n" + body
+                body = "<b>원웨이 진행 중</b>\n" + "\n".join(ow) + "\n" + SEP + body
         except Exception:
             pass
-        return f"📌 <b>TraderOS 실시간</b> · {datetime.now().strftime('%H:%M:%S')}\n\n{body}"
+        return f"<b>TraderOS 실시간</b> · {datetime.now().strftime('%H:%M:%S')}\n\n{body}"
 
     # ── 고정 메시지 갱신 ──
     async def update(self, client: httpx.AsyncClient, token: str, chat_id: str, force: bool = False,
@@ -439,7 +448,7 @@ class TelegramLive:
             await self._send(client, token, chat_id, "이 잠금에 쓸 문구가 없습니다. 관리 화면 확인 문구 탭에서 먼저 추가하세요.")
             return
         phrase = random.choice(rows)
-        why = _lock_line(st).replace("🔒 잠김 · ", "")
+        why = _lock_line(st).replace("<b>잠김</b> · ", "")
         r = await self._send(
             client, token, chat_id,
             f"🔒 <b>{num}</b> · {why} 잠금\n\n"

@@ -273,16 +273,17 @@ def live_lines(positions: list[dict] | None = None) -> list[str]:
             if not hs:
                 continue
             grade = "원웨이" if any(k >= t_main for _, k, t_main in hs) else "조짐"
-            arrow, word = ("🚀", "상승") if d == "up" else ("🔻", "하락")
-            line = (f"{arrow} <b>{word} {grade}</b> {html.escape(_label(group))} · "
-                    + " · ".join(f"{TF_KR[tf]} {k:.1f}" for tf, k, _ in hs) + f" KTR ({a['session']})")
+            arrow, word = ("▲", "상승") if d == "up" else ("▼", "하락")
+            name = (symbols.group_by_key(group) or {}).get("label", group)   # 실시간 현황은 이모지 없이
+            line = (f"{arrow} {html.escape(name)} <b>{word} {grade}</b> · "
+                    + " · ".join(f"{TF_KR[tf]} {k:.1f}" for tf, k, _ in hs) + f" KTR · {a['session']}")
             if positions:
                 want = 1 if d == "up" else 0
                 ps = [p for p in positions if (symbols.group_of(p.get("symbol", "")) or {}).get("key") == group
                       and (0 if str(p.get("type")).lower() in ("0", "buy") or str(p.get("type")).lower().startswith("b") else 1) == want]
                 if ps:
                     pnl = sum((p.get("profit") or 0) + (p.get("swap") or 0) for p in ps)
-                    line += (f"\n   ⚠️ <b>역방향 {'매도' if want else '매수'} {len(ps)}개 "
+                    line += (f"\n      <b>※ 역방향 {'매도' if want else '매수'} {len(ps)}개 "
                              f"{sum(p.get('volume') or 0 for p in ps):g}랏</b> ({pnl:+,.2f})")
             out.append(line)
     return out
