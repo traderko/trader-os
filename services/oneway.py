@@ -272,11 +272,17 @@ def live_lines(positions: list[dict] | None = None) -> list[str]:
             hs = a["dirs"].get(d)
             if not hs:
                 continue
-            grade = "원웨이" if any(k >= t_main for _, k, t_main in hs) else "조짐"
+            grade = "원웨이" if any(h[2] <= h[1] for h in hs) else "조짐"
             arrow, word = ("▲", "상승") if d == "up" else ("▼", "하락")
             name = (symbols.group_by_key(group) or {}).get("label", group)   # 실시간 현황은 이모지 없이 (경고 ⚠️ 만)
             line = (f"{arrow} {html.escape(name)} <b>{word} {grade}</b> · "
-                    + " · ".join(f"{TF_KR[tf]} {k:.1f}" for tf, k, _ in hs) + f" KTR · {a['session']}")
+                    + " · ".join(f"{TF_KR[h[0]]} {h[1]:.1f}" for h in hs) + f" KTR · {a['session']}")
+            # 시작점 → 끝 · 멈춤선 (가장 큰 시간봉 기준 - 되돌림 허용이 넓어 멈춤선이 가장 멀고 의미가 큼)
+            big = max(hs, key=lambda h: TFS.index(h[0]))
+            leg = big[3]
+            t0 = datetime.fromtimestamp(leg["t0"], KST)
+            line += (f"\n   {_p(leg['start'])} ({t0:%H:%M}) → {_p(leg['end'])} · "
+                     f"{_p(leg['stop'])} {'아래면' if d == 'up' else '위면'} 멈춤")
             if positions:
                 want = 1 if d == "up" else 0
                 ps = [p for p in positions if (symbols.group_of(p.get("symbol", "")) or {}).get("key") == group
@@ -317,7 +323,8 @@ async def check_once(now: datetime | None = None) -> None:
             for d, leg in x["legs"].items():
                 k = leg["len"] / x["ktr"]
                 if t["levels"] and k >= min(t["levels"]):
-                    dirs[d].append((tf, k, t["main"]))
+                    stop = leg["end"] - t["retrace"] * x["ktr"] if d == "up" else leg["end"] + t["retrace"] * x["ktr"]
+                    dirs[d].append((tf, k, t["main"], dict(leg, stop=stop)))
         if dirs["up"] or dirs["down"]:
             ACTIVE[group] = {"at": time.time(), "session": m["session"], "dirs": dirs}
         else:
@@ -353,6 +360,8 @@ async def check_once(now: datetime | None = None) -> None:
             leg, ktr = top[3], top[4]
             body = (f"{m['session']} · {TF_KR[top[0]]} KTR {_p(ktr)}\n"
                     f"{_p(leg['start'])} → {_p(leg['end'])} ({leg['len']:,.2f} 움직임 · 되돌림 {leg['pull'] / ktr:.1f} / 허용 {top[2]['retrace']:g} KTR)\n"
+                    f"{_p(leg['end'] - top[2]['retrace'] * ktr if d == 'up' else leg['end'] + top[2]['retrace'] * ktr)} "
+                    f"{'아래로' if d == 'up' else '위로'} 오면 멈춤\n"
                     f"전체: {_all_line(m, d)}")
             warn = await _counter_positions(group, d)
             if warn:
