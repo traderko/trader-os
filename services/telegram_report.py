@@ -183,7 +183,9 @@ async def _withdraw_today(acc_list: list[Account]) -> list[str]:
                 r = await get_withdraw_rule(int(a.account_number), db)
         except Exception:
             continue
-        line = f"💸 출금 가능 <b>{_m(r['withdrawable'])}</b> (오늘 순수익 {_s(r['net_profit'])}의 {r['pct']:g}%"
+        line = (f"💸 출금 가능 <b>{_m(r['withdrawable'])}</b> ("
+                + (f"{datetime.fromisoformat(r['reset']['time']).astimezone(KST):%H:%M} 재입금 뒤 순수익" if r.get("reset") else "오늘 순수익")
+                + f" {_s(r['net_profit'])}의 {r['pct']:g}%")
         if r.get("withdrawal_total"):
             line += f" - 출금 {_m(r['withdrawal_total'])}"
         line += ")"

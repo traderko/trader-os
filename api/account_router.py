@@ -223,6 +223,7 @@ async def get_monthly_report(
 async def get_withdraw_rule(account_number: int, db: AsyncSession = Depends(get_db)):
     """일일 출금 규칙: 오늘(거래일, 한국 시간 06:00 시작) 순수익의 pct% 까지 뺄 수 있고, 오늘 이미 뺀 출금은 차감.
     오늘 순수익 = 지금 잔고 - 거래일 시작 잔고 - 오늘 입금 + 오늘 출금 (청산된 손익·수수료·스왑, 열린 포지션 평가손익은 빠짐).
+    오늘 스톱아웃 청산 뒤 재입금했으면 그 재입금 직전 잔고를 시작 잔고로 보고 그때부터 셈 (청산 손실은 빼고 봄).
     손실인 날은 0. 다음 거래일 06:00에 리셋"""
     from services.settings_service import get_settings
     from services.loss_limit import day_start, next_day_start, trading_day
@@ -239,14 +240,31 @@ async def get_withdraw_rule(account_number: int, db: AsyncSession = Depends(get_
         b1 = await worker_get(account.id, "/balance-at", {"before_time": end.isoformat()})
         # 출금 실패(출금 -X 뒤 같은 금액 +X 되돌림)는 '이미 출금'에서 뺌. 어제 출금 → 오늘 되돌림도 있어 7일 앞부터 받아 짝지음
         flows = await worker_get(account.id, "/balances", {"start_time": (start - timedelta(days=7)).isoformat(), "end_time": end.isoformat()})
-        today = lambda f: (lambda t: t is not None and start <= t < end)(_parse_time(f.get("time")))
-        _, wds, canceled = _drop_failed_withdrawals(flows["deposits"], flows["withdrawals"])
+        deps, wds, canceled = _drop_failed_withdrawals(flows["deposits"], flows["withdrawals"])
+
+        # 청산(스톱아웃) 뒤 재입금: 그 재입금부터 새로 셈 - 청산 손실을 다 메우지 못해도 재입금 뒤 수익은 출금 규칙에 넣음.
+        # 재입금으로 보는 입금 = 오늘 입금 중, 그 전에 오늘 스톱아웃 청산이 있었거나 입금 직전 잔고가 거래일 시작 잔고의 10% 아래
+        calc_from, reset = start, None
+        so_rows = (await db.execute(select(Trade.close_time).where(
+            Trade.account_id == account.id, Trade.close_reason == "stopout",
+            Trade.close_time >= start, Trade.close_time < end))).scalars().all()
+        so_times = [t if t.tzinfo else t.replace(tzinfo=KST) for t in so_rows if t]
+        for d in sorted((d for d in deps if (lambda t: t is not None and start <= t < end)(_parse_time(d.get("time")))),
+                        key=lambda d: _parse_time(d.get("time"))):
+            dt_ = _parse_time(d.get("time"))
+            before = (await worker_get(account.id, "/balance-at", {"before_time": (dt_ - timedelta(seconds=1)).isoformat()}))["balance"]
+            if any(t <= dt_ for t in so_times) or before < max(0.1 * b0["balance"], 1.0):
+                calc_from = dt_
+                reset = {"time": dt_.isoformat(), "amount": d["amount"], "balance_before": before}
+
+        today = lambda f: (lambda t: t is not None and calc_from <= t < end)(_parse_time(f.get("time")))
         data = {
-            "day": day, "start_balance": b0["balance"], "balance": b1["balance"],
+            "day": day, "start_balance": reset["balance_before"] if reset else b0["balance"], "balance": b1["balance"],
+            "reset": reset,
             # 순수익 계산용 - 잔고 변화에서 그날 입출금을 전부(실패 포함) 빼야 거래 손익만 남음
             "deposit_total": sum(d["amount"] for d in flows["deposits"] if today(d)),
             "raw_withdrawal_total": sum(abs(w["amount"]) for w in flows["withdrawals"] if today(w)),
-            # 규칙에서 차감할 '오늘 실제로 나간 출금'
+            # 규칙에서 차감할 '오늘 실제로 나간 출금' (재입금이 있었으면 그 뒤 출금만)
             "withdrawal_total": sum(abs(w["amount"]) for w in wds if today(w)),
             "canceled_total": sum(c["amount"] for c in canceled if today(c["withdrawal"]) or today(c["refund"])),
         }
@@ -284,6 +302,7 @@ async def get_withdraw_rule(account_number: int, db: AsyncSession = Depends(get_
         "net_profit": r2(net), "allowed": r2(allowed), "withdrawable": r2(withdrawable),
         "canceled_total": r2(data.get("canceled_total") or 0),      # 오늘 걸친 출금 실패 (계산에서 뺌)
         "over": r2(max(0.0, wd - allowed)),          # 오늘 규칙보다 더 뺀 금액
+        "reset": data.get("reset"),                  # 청산 뒤 재입금이 있었으면 {time, amount, balance_before} - 그때부터 셈
     }
 
 

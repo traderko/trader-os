@@ -2635,13 +2635,16 @@ function renderWithdrawRule(w) {
   if (!w || !w.available) { el.hidden = true; return; }
   const p = `${+w.pct.toFixed(2)}%`;
   const reset = w.reset_at ? (() => { const d = dt(w.reset_at); return `${d.getMonth() + 1}/${d.getDate()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; })() : '';
+  const rs = w.reset ? (() => { const d = dt(w.reset.time); return `${pad2(d.getHours())}:${pad2(d.getMinutes())}`; })() : '';
+  const lbl = w.reset ? '재입금 뒤 순수익' : '오늘 순수익';
   const calc = w.net_profit > 0
-    ? `오늘 순수익 <b class="num">${fmt(w.net_profit)}</b> × ${p} = <b class="num">${fmt(w.allowed)}</b>${w.withdrawal_total ? ` − 오늘 출금 <b class="num">${fmt(w.withdrawal_total)}</b>` : ''}`
-    : `오늘 순수익 <b class="num ${cls(w.net_profit)}">${signed(w.net_profit)}</b> - 수익이 없는 날은 출금 가능 0`;
+    ? `${lbl} <b class="num">${fmt(w.net_profit)}</b> × ${p} = <b class="num">${fmt(w.allowed)}</b>${w.withdrawal_total ? ` − 오늘 출금 <b class="num">${fmt(w.withdrawal_total)}</b>` : ''}`
+    : `${lbl} <b class="num ${cls(w.net_profit)}">${signed(w.net_profit)}</b> - 수익이 없는 날은 출금 가능 0`;
   el.innerHTML = `
     <div class="top"><small>💵 오늘 출금 가능 (${p} 규칙)</small><strong class="num ${w.withdrawable > 0 ? 'up' : ''}">${fmt(w.withdrawable)}</strong></div>
     <div class="calc">${calc}<br>
-      ${w.balance != null ? `오늘 순수익 = 잔고 ${fmt(w.balance)} − 거래일 시작 잔고 ${fmt(w.start_balance)}${w.deposit_total ? ` − 입금 ${fmt(w.deposit_total)}` : ''}${(w.raw_withdrawal_total ?? w.withdrawal_total) ? ` + 출금 ${fmt(w.raw_withdrawal_total ?? w.withdrawal_total)}` : ''} · ` : ''}청산된 손익 기준 (열린 포지션 평가손익은 빠짐) · ${reset} 리셋
+      ${w.reset ? `청산 뒤 ${rs} 재입금 ${fmt(w.reset.amount)}부터 새로 계산 (그 전 손실·출금은 빼고 봄)<br>` : ''}
+      ${w.balance != null ? `${lbl} = 잔고 ${fmt(w.balance)} − ${w.reset ? '재입금 직전 잔고' : '거래일 시작 잔고'} ${fmt(w.start_balance)}${w.deposit_total ? ` − 입금 ${fmt(w.deposit_total)}` : ''}${(w.raw_withdrawal_total ?? w.withdrawal_total) ? ` + 출금 ${fmt(w.raw_withdrawal_total ?? w.withdrawal_total)}` : ''} · ` : ''}청산된 손익 기준 (열린 포지션 평가손익은 빠짐) · ${reset} 리셋
       ${w.canceled_total > 0 ? `<br>출금 실패로 되돌아온 금액 ${fmt(w.canceled_total)} - '오늘 출금'에서 제외` : ''}
       ${w.over > 0 ? `<br><span class="down">오늘 규칙보다 ${fmt(w.over)} 더 출금했습니다.</span>` : ''}
       ${w.source === 'cache' ? `<br>MT5가 꺼져 있어 ${esc(String(w.cached_at || '').slice(11, 16))} 기준입니다.` : ''}
