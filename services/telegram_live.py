@@ -5,7 +5,8 @@
 #
 #   TraderOS 실시간 · 20:31
 #   12345678  거래 가능 · 52분 뒤 재확인
-#   평가금 10,385.60 · 손익 +385.00 · 증거금 12.9%
+#   평가금 10,385.60 · 손익 +385.00
+#   증거금 12.9%  ▰▱▱▱▱▱▱▱▱▱  여유 · 강제청산 200%
 #   🧈 XAUUSD+  BUY 0.40 @4,466.27  +383.80
 #      SL시 -200.20 (3/3) · TP시 +245.00 (1/3)
 #
@@ -141,6 +142,18 @@ def _hm(sec: int) -> str:
     sec = max(0, int(sec))
     h, m = divmod(sec // 60, 60)
     return f"{h}시간 {m}분" if h else f"{m}분"
+
+
+def _margin_line(util: float, info: dict) -> str:
+    """증거금 사용률(사용 증거금 ÷ 평가금) 강조 줄 - 굵은 % · 막대 · 단계 · 강제청산 되는 사용률
+    단계: 30% 아래 여유 · 50% 아래 보통 · 70% 아래 주의 · 그 위 ⚠️ 위험"""
+    so = float(info.get("margin_so_so") or 0) or 50.0
+    so_util = 100 * 100 / so if int(info.get("margin_so_mode") or 0) == 0 and so > 0 else None   # 마진레벨 so% = 사용률 100/so×100%
+    n = max(0, min(10, round(util / 10)))
+    bar = "▰" * n + "▱" * (10 - n)
+    grade = "여유" if util < 30 else "보통" if util < 50 else "<b>주의</b>" if util < 70 else "⚠️ <b>위험</b>"
+    tail = f" · 강제청산 {so_util:.0f}%" if so_util and util > 0 else ""
+    return f"증거금 <b>{util:.1f}%</b>  {bar}  {grade}{tail}"
 
 
 def _lock_line(s: dict | None) -> str:
@@ -286,7 +299,8 @@ class TelegramLive:
                 return lines
             eq, margin = info.get("equity") or 0, info.get("margin") or 0
             util = (margin / eq * 100) if eq > 0 else 0
-            lines.append(f"평가금 {_f(eq)} · 손익 <b>{_s(info.get('profit') or 0)}</b> · 증거금 {util:.1f}%")
+            lines.append(f"평가금 {_f(eq)} · 손익 <b>{_s(info.get('profit') or 0)}</b>")
+            lines.append(_margin_line(util, info))
             try:                               # 강제청산까지 몇 포인트 (차트에서 바로 보게)
                 from services.risk import liquidation, liq_line
                 liq = liquidation(info, positions)[:3]
