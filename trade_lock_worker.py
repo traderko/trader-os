@@ -64,7 +64,11 @@ def _count_consecutive_losses_sync(mt5) -> int:
     if deals is None:
         return 0
     
-    closed = [d for d in deals if d.entry in (1, 2)]
+    # 잠금 강제청산(EA, magic 990099)·일일 손실 한도 청산(990098)은 직접 한 매매가 아니라서 빼고 셈.
+    # 빼지 않으면 잠금 중에 들어간 포지션을 EA가 이익으로 청산했을 때 연속 손절이 끊긴 것으로 보고
+    # 잠금이 저절로 풀려 버림 (풀려고 하면 '잠긴 계좌가 없습니다')
+    forced = (990099, 990098)
+    closed = [d for d in deals if d.entry in (1, 2) and int(getattr(d, "magic", 0) or 0) not in forced]
     closed.sort(key=lambda d: d.time)
     consec = 0
 
@@ -117,7 +121,15 @@ async def _lock_watch_loop(mt5, account_number: str):
 
                     await db.commit()
 
-                    print(f"[{datetime.now()}] account={_account_id} consec_loss_active={should_be_active}")
+                    print(f"[{datetime.now()}] account={_account_id} consec_loss_active={should_be_active} (consec={consec})")
+                    if not should_be_active:
+                        # 문구로 풀지 않았는데 저절로 풀린 경우 - 왜 풀렸는지 알려 줌 (이익 청산·기간 지남)
+                        _fcm.send(
+                            "거래 잠금 - 연속손절 잠금 풀림",
+                            f"계좌 {account_number}: 최근 연속 손절이 {consec}번으로 줄어 연속손절 잠금이 풀렸습니다. "
+                            f"(이익·본전 청산이 있었거나, 손절이 {lock_cfg()['consec_loss_lookback_hours']}시간 넘게 지남)",
+                            '{"type":"trade_lock_consec_clear","account_number":"%s"}' % account_number,
+                        )
  
                     if should_be_active:
                         _fcm.send(
