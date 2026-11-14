@@ -706,6 +706,7 @@
     <span class="sp"></span>
     <label class="muted" id="pAllWrap" style="font-size:12.5px;display:none" title="모든 계좌의 거래를 합쳐서 봅니다 (입출금·잔고는 선택한 계좌 기준)">
       <input type="checkbox" id="pAll"> 모든 계좌</label>
+    <button class="btn small ghost" id="pShot" title="손익 화면을 PNG 여러 장으로 저장 (폰에서는 공유 창)" style="margin-left:8px">이미지로 저장</button>
   </div>
   <section class="panel wdrule" id="pWd" hidden></section>
   <section class="panel"><div class="pnlsum" id="pSum"><div class="empty">불러오는 중…</div></div></section>
@@ -2892,15 +2893,16 @@ function shotBlocks() {          // sBody 안을 제목(h3) 단위 덩어리로 
   }
   return out;
 }
-async function shotOf(keep, title, sub, bg) {   // keep: 남길 덩어리 번호 Set → PNG Blob
-  const body = $('sBody');
+async function shotOf(keep, title, sub, bg, rootId = 'sBody', prune = null) {   // keep: 남길 덩어리 번호 Set → PNG Blob
+  const body = $(rootId);
   const canvas = await html2canvas(body, {
     backgroundColor: bg, scale: 2, useCORS: true, logging: false,
     windowWidth: document.documentElement.clientWidth,
     onclone: (doc) => {
-      const b = doc.getElementById('sBody');
+      const b = doc.getElementById(rootId);
       b.style.padding = '12px';
       for (const el of [...b.children]) if (!keep.has(Number(el.dataset.shot))) el.remove();
+      if (prune) prune(b);
       b.querySelectorAll('*').forEach((el) => {      // 안에서 스크롤되는 칸은 펼쳐서 다 찍히게
         const cs = doc.defaultView.getComputedStyle(el);
         if (/(auto|scroll|hidden)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 2) { el.style.maxHeight = 'none'; el.style.height = 'auto'; el.style.overflowY = 'visible'; }
@@ -2918,6 +2920,71 @@ async function shotOf(keep, title, sub, bg) {   // keep: 남길 덩어리 번호
   if (!blob) throw new Error('이미지가 너무 커서 만들지 못했습니다');
   return blob;
 }
+function shotStamp() {
+  const now = new Date();
+  return `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+}
+async function shotSave(files, base) {          // 폰: 공유 창 한 번에 전부 · PC: 한 장씩 내려받기
+  if (navigator.canShare && navigator.canShare({ files }) && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+    try { await navigator.share({ files, title: base }); return; } catch (e) { if (e.name === 'AbortError') return; }
+  }
+  for (const f of files) {
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(f); a.download = f.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    await new Promise((r) => setTimeout(r, 350));     // 브라우저가 여러 내려받기를 한꺼번에 막지 않게 조금씩
+  }
+}
+
+// 손익 탭: 출금 규칙 · 요약 · 잔고 · 막대 · 일별(월별) 목록 - 목록은 줄 단위로 나눠 여러 장
+$('pShot').onclick = async () => {
+  const btn = $('pShot'), root = $('tab-pnl');
+  btn.disabled = true; const old = btn.textContent;
+  try {
+    btn.textContent = '불러오는 중…';
+    await loadH2C();
+    const stamp = shotStamp();
+    const label = $('pLabel').textContent.trim();
+    const who = $('pAll').checked ? '모든 계좌' : (acc ? acc.account_number : '');
+    const sub = `${pMode === 'year' ? '연간' : '월간'} · ${stamp}`;
+    const bg = getComputedStyle(document.body).backgroundColor || '#fff';
+    // 덩어리 = 보이는 패널. 목록 패널은 줄마다 나눌 수 있게 표시
+    const units = [];
+    [...root.children].forEach((el, i) => {
+      el.dataset.shot = i;
+      if (!el.matches('section.panel') || el.hidden || !el.getBoundingClientRect().height) return;
+      const rows = el.querySelector('#pRows');
+      if (rows && rows.children.length) {
+        [...rows.children].forEach((r, j) => { r.dataset.row = j; units.push({ i, row: j, h: r.getBoundingClientRect().height }); });
+      } else {
+        const cs = getComputedStyle(el);
+        units.push({ i, h: el.getBoundingClientRect().height + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom) });
+      }
+    });
+    if (!units.length) { alert('저장할 손익이 없습니다.'); return; }
+    const jobs = []; let pack = null;
+    for (const u of units) {
+      if (!pack || pack.h + u.h > SHOT_MAX_H) { pack = { keep: new Set(), rows: new Set(), h: 0 }; jobs.push(pack); }
+      pack.keep.add(u.i); if (u.row != null) pack.rows.add(u.row); pack.h += u.h;
+    }
+    const base = `TraderOS_pnl_${label.replace(/[^0-9A-Za-z]+/g, '-').replace(/^-|-$/g, '') || pMode}_${stamp.slice(0, 10)}_${stamp.slice(11).replace(':', '')}`;
+    const files = [];
+    for (let n = 0; n < jobs.length; n++) {
+      btn.textContent = `만드는 중 ${n + 1}/${jobs.length}`;
+      const jb = jobs[n];
+      const blob = await shotOf(jb.keep, `TraderOS 손익 · ${label} · ${who}${jobs.length > 1 ? ` (${n + 1}/${jobs.length})` : ''}`, sub, bg, 'tab-pnl',
+        (b) => { const r = b.querySelector('#pRows'); if (r) for (const x of [...r.children]) if (!jb.rows.has(Number(x.dataset.row))) x.remove(); });
+      files.push(new File([blob], `${base}_${pad2(n + 1)}.png`, { type: 'image/png' }));
+    }
+    await shotSave(files, base);
+  } catch (e) {
+    alert('이미지 저장 실패: ' + (e.message || e));
+  } finally {
+    btn.disabled = false; btn.textContent = old;
+  }
+};
+
 $('sShot').onclick = async () => {
   const btn = $('sShot');
   if (!$('sBody').querySelector('h3.sec')) { alert('저장할 통계가 없습니다.'); return; }
@@ -2969,17 +3036,7 @@ $('sShot').onclick = async () => {
     }
     if (stMode !== keepMode) { stMode = keepMode; renderStats(); window.scrollTo(0, keepY); }
 
-    // 폰: 공유 창 한 번에 전부 · PC: 한 장씩 내려받기
-    if (navigator.canShare && navigator.canShare({ files }) && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
-      try { await navigator.share({ files, title: base }); return; } catch (e) { if (e.name === 'AbortError') return; }
-    }
-    for (const f of files) {
-      const a = document.createElement('a');
-      a.href = URL.createObjectURL(f); a.download = f.name;
-      document.body.appendChild(a); a.click(); a.remove();
-      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
-      await new Promise((r) => setTimeout(r, 350));     // 브라우저가 여러 내려받기를 한꺼번에 막지 않게 조금씩
-    }
+    await shotSave(files, base);
   } catch (e) {
     alert('이미지 저장 실패: ' + (e.message || e));
   } finally {
