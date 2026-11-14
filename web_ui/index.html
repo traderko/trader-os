@@ -2167,6 +2167,19 @@ async function pineCodeParts(merged = false) {
   const symLabel = pine.sym === 'all' ? '전 종목' : (SYMBOLS.find((g) => g.key === pine.sym)?.label || '기타');
   const period = $('pineRange').textContent.replace(/[()]/g, '').trim().replace(/^전체$/, '전체 기간');
   const fmtT = (v) => { const d = dt(v); return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+  // 몇 월 몇 주차 (거래일 기준 · 월~일 한 주 · 그 주 목요일이 있는 달의 주로 셈 - 달력 '주차'와 같은 방식)
+  const weekOf = (v) => {
+    const d = tdDate(dt(v));
+    const mon = new Date(d.getFullYear(), d.getMonth(), d.getDate() - ((d.getDay() + 6) % 7));
+    const thu = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 3);
+    return { m: thu.getMonth() + 1, w: Math.floor((thu.getDate() - 1) / 7) + 1, y: thu.getFullYear() };
+  };
+  const weekTxt = (a, b) => {
+    const x = weekOf(a), y = weekOf(b);
+    const one = (k) => `${k.m}월 ${k.w}주차`;
+    if (x.m === y.m && x.w === y.w && x.y === y.y) return one(x);
+    return x.m === y.m && x.y === y.y ? `${x.m}월 ${x.w}~${y.w}주차` : `${one(x)}~${one(y)}`;
+  };
   const re = /^\/\/ ▼▼▼ TRADEROS DATA BEGIN[\s\S]*?^\/\/ ▲▲▲ TRADEROS DATA END[^\n]*$/m;
   if (!re.test(pineTpl)) throw new Error('템플릿에서 데이터 자리를 찾지 못했습니다');
   const total = groups.length;
@@ -2188,8 +2201,11 @@ async function pineCodeParts(merged = false) {
     const span = `${fmtT(list[0].open_time)}~${fmtT(list[list.length - 1].close_time)}`;
     const part = total > 1 ? ` ${gi + 1}/${total}` : '';
     const when = total > 1 ? span : period;
-    const title = `TraderOS ${acc.account_number} · ${symLabel} · ${when} (${kind}${part})`;
-    const info = `계좌 ${acc.account_number} · ${symLabel} · ${when} · ${kind}${part} · ${cntTxt} · ${stamp} 생성`;
+    const wk = weekTxt(list[0].open_time, list[list.length - 1].close_time);
+    const title = `TraderOS ${acc.account_number} · ${symLabel} · ${wk} · ${when} (${kind}${part})`;
+    // 설정 창 '데이터 정보' - 한 줄이면 잘려서 여러 줄(text_area)로
+    const info = [`계좌  ${acc.account_number}`, `종목  ${symLabel}`, `주차  ${wk}`,
+      `기간  ${total > 1 ? span.replace('~', ' ~ ') : when}`, `종류  ${kind}${part} · ${cntTxt}`, `생성  ${stamp}`].join('\n');
     const block = [
       '// ▼▼▼ TRADEROS DATA BEGIN — TraderOS가 자동 생성, 직접 수정 금지 ▼▼▼',
       `const int    DATA_BASE_MS   = ${enc.base * 1000}`,
@@ -2208,7 +2224,7 @@ async function pineCodeParts(merged = false) {
         ? 'viewMode     = input.string("묶음 데이터", "보기 방식", options=["묶음 데이터"], tooltip="묶음 데이터로 만든 코드라 묶음만 표시. 개별 거래·진입점도 보려면 웹에서 [TV 코드 (전체)]")\n'
         : (m) => m.replace(/input\.string\("[^"]*"/, 'input.string("개별 거래"'))
       .replace(/^indicator\("TraderOS 거래내역"/m, `indicator("${q(title)}"`)
-      .replace(/^(dataInfo\s*=\s*input\.string\()"-"(.*?)options=\["-"\]/m, (_m, x, y) => `${x}"${q(info)}"${y}options=["${q(info)}"]`);
+      .replace(/^dataInfo\s*=\s*input\.[\w.]+\(.*$/m, () => `dataInfo     = input.text_area("${q(info)}", "데이터", group="데이터 정보")`);
     return { code, n: list.length, cntTxt, span, symLabel, part: gi + 1, total, kind };
   });
 }
