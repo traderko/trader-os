@@ -707,6 +707,7 @@
     <label class="muted" id="pAllWrap" style="font-size:12.5px;display:none" title="모든 계좌의 거래를 합쳐서 봅니다 (입출금·잔고는 선택한 계좌 기준)">
       <input type="checkbox" id="pAll"> 모든 계좌</label>
     <button class="btn small ghost" id="pShot" title="손익 화면을 PNG 여러 장으로 저장 (폰에서는 공유 창)" style="margin-left:8px">이미지로 저장</button>
+    <button class="btn small ghost" id="pWeekShot" title="이번 주(월~금, 주말이면 막 끝난 주) 손익만 PNG 한 장으로" style="margin-left:4px">이번 주만</button>
   </div>
   <section class="panel wdrule" id="pWd" hidden></section>
   <section class="panel"><div class="pnlsum" id="pSum"><div class="empty">불러오는 중…</div></div></section>
@@ -2981,6 +2982,81 @@ $('pShot').onclick = async () => {
   } catch (e) {
     alert('이미지 저장 실패: ' + (e.message || e));
   } finally {
+    btn.disabled = false; btn.textContent = old;
+  }
+};
+
+// 손익 탭 [이번 주만]: 이번 주(거래일 월~금) 손익만 따로 만들어 한 장으로 - 달이 걸쳐 있으면 두 달을 받아 합침
+$('pWeekShot').onclick = async () => {
+  const btn = $('pWeekShot');
+  if (!acc) return;
+  btn.disabled = true; const old = btn.textContent;
+  let box = null;
+  try {
+    btn.textContent = '불러오는 중…';
+    const t = tdDate(new Date());
+    const mon = new Date(t.getFullYear(), t.getMonth(), t.getDate() - ((t.getDay() + 6) % 7));
+    const days = [0, 1, 2, 3, 4].map((i) => new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + i));
+    const keyOf = (d) => `${d.getFullYear()}.${pad2(d.getMonth() + 1)}.${pad2(d.getDate())}`;
+    const keys = new Set(days.map(keyOf));
+    const months = [...new Set(days.map((d) => `${d.getFullYear()}-${d.getMonth() + 1}`))].map((x) => x.split('-').map(Number));
+    const an = encodeURIComponent(acc.account_number);
+    let rows = [];
+    for (const [y, m] of months) {
+      const [report, list] = await Promise.all([api(`/accounts/${an}/monthly-report?year=${y}&month=${m}`), api(`/trades?year=${y}&month=${m}&account_number=${an}`)]);
+      rows = rows.concat(buildPnl(report, list, false).rows.filter((r) => keys.has(r.key)));
+    }
+    rows.sort((a, b) => a.key < b.key ? -1 : 1);
+    await loadH2C();
+    btn.textContent = '만드는 중…';
+    const net = rows.reduce((s, x) => s + x.net, 0), cnt = rows.reduce((s, x) => s + x.count, 0), wins = rows.reduce((s, x) => s + x.wins, 0);
+    const dep = rows.reduce((s, x) => s + x.dep, 0), wd = rows.reduce((s, x) => s + x.wd, 0);
+    const ret = rows.length ? rows.reduce((c, x) => c * (1 + (x.ret || 0)), 1) - 1 : null;
+    const first = rows[0], last = rows[rows.length - 1];
+    const startBal = first ? first.balance - first.net - (first.dep - first.wd) : null;
+    const wk = (() => { const th = new Date(mon.getFullYear(), mon.getMonth(), mon.getDate() + 3); return `${th.getMonth() + 1}월 ${Math.floor((th.getDate() - 1) / 7) + 1}주차`; })();
+    const range = `${mon.getMonth() + 1}/${mon.getDate()}~${days[4].getMonth() + 1}/${days[4].getDate()}`;
+    const winDays = rows.filter((x) => x.net > 0).length, lossDays = rows.filter((x) => x.net < 0).length;
+    box = document.createElement('div');
+    box.id = 'pWeekBox';
+    box.style.cssText = `position:absolute;left:0;top:0;z-index:-1;width:${$('tab-pnl').clientWidth || 380}px`;
+    box.innerHTML = `
+      <section class="panel"><div class="pnlsum">
+        <div class="hero"><small>이번 주 순손익 (수수료 빼고)</small><span class="num ${cls(net)}">${signed(net)}</span>
+          <span class="num ${cls(ret)}" style="font-size:14px;margin-left:8px">${pct(ret)}</span></div>
+        <div><small>거래 · 승률</small><span class="num">${cnt}건${cnt ? ' · ' + Math.round(wins / cnt * 100) + '%' : ''}</span></div>
+        <div><small>이긴 날 · 진 날</small><span class="num">${winDays} · ${lossDays}</span></div>
+        <div><small>시작 잔고</small><span class="num">${startBal == null ? '-' : fmt(startBal)}</span></div>
+        <div><small>입금 · 출금</small><span class="num">${fmt(dep, 0)} · ${fmt(wd, 0)}</span></div>
+        <div><small>마지막 잔고</small><span class="num">${last ? fmt(last.balance) : '-'}</span></div>
+      </div></section>
+      <section class="panel"><div class="chart" id="pWeekBars"></div></section>
+      <section class="panel list" style="padding:0">${days.map((d) => {
+        const x = rows.find((r) => r.key === keyOf(d));
+        const label = `${keyOf(d).slice(5)} (${WEEK[d.getDay()]})`;
+        if (!x) return `<div class="prow"><div class="d num">${label}</div><div class="v"><strong class="num">-</strong></div><div class="s num">거래 없음</div></div>`;
+        return `<div class="prow">
+          <div class="d num">${label}${x.dep ? `<span class="flow in">입금 ${fmt(x.dep, 0)}</span>` : ''}${x.wd ? `<span class="flow out">출금 ${fmt(x.wd, 0)}</span>` : ''}</div>
+          <div class="v"><strong class="num ${cls(x.net)}">${x.count ? signed(x.net) : '-'}</strong><small class="num ${cls(x.ret)}">${pct(x.ret)}</small></div>
+          <div class="s num">${x.count}건 · 승 ${x.wins} · 평가금 ${fmt(x.balance)}</div>
+        </div>`;
+      }).join('')}</section>`;
+    document.body.appendChild(box);
+    drawBars($('pWeekBars'), '일별 순손익', days.map((d) => {
+      const x = rows.find((r) => r.key === keyOf(d));
+      return { label: `${d.getDate()}(${WEEK[d.getDay()]})`, v: x ? x.net : 0, tip: '' };
+    }));
+    [...box.children].forEach((el, i) => { el.dataset.shot = i; });
+    const stamp = shotStamp();
+    const who = acc.account_number;
+    const blob = await shotOf(new Set([...box.children].map((_, i) => i)), `TraderOS 이번 주 손익 · ${wk} (${range}) · ${who}`,
+      `거래일 기준 (07시, 서머타임 아닐 때 08시에 하루가 바뀜) · ${stamp}`, getComputedStyle(document.body).backgroundColor || '#fff', 'pWeekBox');
+    const base = `TraderOS_pnl_week_${keyOf(mon).replace(/\./g, '-')}_${stamp.slice(11).replace(':', '')}`;
+    await shotSave([new File([blob], base + '.png', { type: 'image/png' })], base);
+  } catch (e) {
+    alert('이번 주 손익 이미지 실패: ' + (e.message || e));
+  } finally {
+    if (box) box.remove();
     btn.disabled = false; btn.textContent = old;
   }
 };
