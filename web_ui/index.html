@@ -728,7 +728,7 @@
   <div class="opts">
     <label title="모든 계좌의 거래를 합쳐서 봅니다"><input type="checkbox" id="sAll" checked> 모든 계좌</label>
     <label title="같은 종목·방향으로 2분 안에 나눠 들어간 포지션을 한 트레이드로 봅니다"><input type="checkbox" id="sGroup" checked> 분할 진입 묶기</label>
-    <button class="btn small ghost" id="sShot" title="아래 통계 전체를 PNG 이미지로 저장 (폰에서는 공유 창)" style="margin-left:auto">이미지로 저장</button>
+    <button class="btn small ghost" id="sShot" title="요약~근거별 성과 + 분해 종류마다 PNG 여러 장으로 저장 (폰에서는 공유 창)" style="margin-left:auto">이미지로 저장</button>
   </div>
   <div id="sBody"><div class="empty">불러오는 중…</div></div>
 </section>
@@ -2879,54 +2879,111 @@ function loadH2C() {
     document.head.appendChild(sc);
   });
 }
+// 저장하는 것: 맨 위 요약 ~ 근거별 성과 (청산 분석·트레이드 목록은 빼고) + 분해는 종류(종목·월·요일…)마다 한 장씩
+// 한 장이 너무 길면 편집기가 화질을 떨궈서, 칸(제목 단위)을 모아 한 장에 SHOT_MAX_H 픽셀 정도까지만 담고 나눔
+const SHOT_MAX_H = 1300;
+function shotBlocks() {          // sBody 안을 제목(h3) 단위 덩어리로 나누고 표시 (data-shot=번호)
+  const out = []; let cur = null;
+  for (const el of $('sBody').children) {
+    if (el.matches('h3.sec') || !cur) { cur = { name: el.matches('h3.sec') ? el.textContent.trim() : '요약', els: [], h: 0 }; out.push(cur); }
+    el.dataset.shot = out.length - 1; cur.els.push(el);
+    const cs = getComputedStyle(el);
+    cur.h += el.getBoundingClientRect().height + parseFloat(cs.marginTop) + parseFloat(cs.marginBottom);
+  }
+  return out;
+}
+async function shotOf(keep, title, sub, bg) {   // keep: 남길 덩어리 번호 Set → PNG Blob
+  const body = $('sBody');
+  const canvas = await html2canvas(body, {
+    backgroundColor: bg, scale: 2, useCORS: true, logging: false,
+    windowWidth: document.documentElement.clientWidth,
+    onclone: (doc) => {
+      const b = doc.getElementById('sBody');
+      b.style.padding = '12px';
+      for (const el of [...b.children]) if (!keep.has(Number(el.dataset.shot))) el.remove();
+      b.querySelectorAll('*').forEach((el) => {      // 안에서 스크롤되는 칸은 펼쳐서 다 찍히게
+        const cs = doc.defaultView.getComputedStyle(el);
+        if (/(auto|scroll|hidden)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 2) { el.style.maxHeight = 'none'; el.style.height = 'auto'; el.style.overflowY = 'visible'; }
+      });
+      const h = doc.createElement('div');
+      h.style.cssText = 'font-weight:700;font-size:15px;margin:0 2px 10px';
+      h.textContent = title;
+      const d = doc.createElement('div');
+      d.style.cssText = 'font-weight:400;font-size:12px;opacity:.7;margin-top:2px';
+      d.textContent = sub; h.appendChild(d);
+      b.prepend(h);
+    },
+  });
+  const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+  if (!blob) throw new Error('이미지가 너무 커서 만들지 못했습니다');
+  return blob;
+}
 $('sShot').onclick = async () => {
-  const btn = $('sShot'), body = $('sBody');
-  if (!body.querySelector('.panel, .kgrid, h3')) { alert('저장할 통계가 없습니다.'); return; }
-  btn.disabled = true; const old = btn.textContent; btn.textContent = '만드는 중…';
+  const btn = $('sShot');
+  if (!$('sBody').querySelector('h3.sec')) { alert('저장할 통계가 없습니다.'); return; }
+  btn.disabled = true; const old = btn.textContent;
+  const keepMode = stMode, keepY = window.scrollY;
   try {
+    btn.textContent = '불러오는 중…';
     await loadH2C();
     const now = new Date();
-    const per = (document.querySelector('#sPeriod button.on') || {}).textContent || '';
+    const per = ((document.querySelector('#sPeriod button.on') || {}).textContent || '').trim();
     const range = !$('sRange').hidden && $('sRange').textContent.trim() ? $('sRange').textContent.trim()
       : (!$('sYearBar').hidden && $('sLabel').textContent.trim() ? $('sLabel').textContent.trim() : '');
     const who = $('sAll').checked ? '모든 계좌' : (acc ? acc.account_number : '');
-    const head = [per, range].filter(Boolean).join(' · ');
     const stamp = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+    const sub = `${[per, range].filter(Boolean).join(' · ')}${per || range ? ' · ' : ''}분할 진입 묶기 ${$('sGroup').checked ? '켬' : '끔'} · ${stamp}`;
     const bg = getComputedStyle(document.body).backgroundColor || '#fff';
-    // 폰 사파리는 캔버스가 너무 크면 실패 → 높이에 맞춰 배율을 줄임 (최소 1배)
-    const scale = Math.max(1, Math.min(2, window.devicePixelRatio || 1, 15000 / Math.max(1, body.scrollHeight + 80)));
-    const canvas = await html2canvas(body, {
-      backgroundColor: bg, scale, useCORS: true, logging: false,
-      windowWidth: document.documentElement.clientWidth,
-      onclone: (doc) => {
-        const b = doc.getElementById('sBody');
-        b.style.padding = '12px';
-        // 안에서 스크롤되는 칸은 펼쳐서 다 찍히게
-        b.querySelectorAll('*').forEach((el) => {
-          const cs = doc.defaultView.getComputedStyle(el);
-          if (/(auto|scroll|hidden)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 2) { el.style.maxHeight = 'none'; el.style.height = 'auto'; el.style.overflowY = 'visible'; }
-        });
-        const h = doc.createElement('div');
-        h.style.cssText = 'font-weight:700;font-size:15px;margin:0 2px 10px';
-        h.innerHTML = `TraderOS 통계 · ${who}<div style="font-weight:400;font-size:12px;opacity:.7;margin-top:2px">${head}${head ? ' · ' : ''}분할 진입 묶기 ${$('sGroup').checked ? '켬' : '끔'} · ${stamp} 저장</div>`;
-        b.prepend(h);
-      },
-    });
-    const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
-    if (!blob) throw new Error('이미지가 너무 커서 만들지 못했습니다');
-    const pk = { '이번 주': 'week', '1개월': '1m', '3개월': '3m', '연도': 'year' }[per.trim()] || 'stats';
-    const name = `TraderOS_stats_${pk}_${stamp.slice(0, 10)}_${stamp.slice(11).replace(':', '')}.png`;
-    const file = new File([blob], name, { type: 'image/png' });
-    if (navigator.canShare && navigator.canShare({ files: [file] }) && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
-      try { await navigator.share({ files: [file], title: name }); return; } catch (e) { if (e.name === 'AbortError') return; }
+    const isStop = (n) => /^(청산 분석|트레이드 목록)/.test(n);
+
+    // 1) 요약 ~ 근거별 성과 (분해 빼고) - 덩어리를 모아 장 나누기
+    const jobs = [];                                   // {keep:Set, label, mode?}
+    let blocks = shotBlocks(), pack = null;
+    for (let i = 0; i < blocks.length; i++) {
+      const b = blocks[i];
+      if (isStop(b.name)) break;
+      if (b.name === '분해') continue;
+      if (!pack || pack.h + b.h > SHOT_MAX_H) { pack = { keep: new Set(), h: 0, names: [] }; jobs.push(pack); }
+      pack.keep.add(i); pack.h += b.h; pack.names.push(b.name);
     }
-    const a = document.createElement('a');
-    a.href = URL.createObjectURL(blob); a.download = name;
-    document.body.appendChild(a); a.click(); a.remove();
-    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    // 2) 분해 - 종류마다 한 장
+    for (const [k, l] of BREAKDOWNS) jobs.push({ mode: k, label: l });
+
+    const pk = { '이번 주': 'week', '1개월': '1m', '3개월': '3m', '연도': 'year' }[per] || 'stats';
+    const base = `TraderOS_stats_${pk}_${stamp.slice(0, 10)}_${stamp.slice(11).replace(':', '')}`;
+    const files = [];
+    for (let n = 0; n < jobs.length; n++) {
+      const jb = jobs[n];
+      btn.textContent = `만드는 중 ${n + 1}/${jobs.length}`;
+      let keep = jb.keep, title = `TraderOS 통계 · ${who} (${n + 1}/${jobs.length})`;
+      if (jb.mode) {
+        if (stMode !== jb.mode) { stMode = jb.mode; renderStats(); }
+        blocks = shotBlocks();
+        const bi = blocks.findIndex((b) => b.name === '분해');
+        if (bi < 0) continue;
+        keep = new Set([bi]); title = `TraderOS 통계 · 분해: ${jb.label} · ${who} (${n + 1}/${jobs.length})`;
+      }
+      const blob = await shotOf(keep, title, sub, bg);
+      const tag = jb.mode ? `bd-${jb.mode}` : `p${n + 1}`;
+      files.push(new File([blob], `${base}_${pad2(n + 1)}_${tag}.png`, { type: 'image/png' }));
+    }
+    if (stMode !== keepMode) { stMode = keepMode; renderStats(); window.scrollTo(0, keepY); }
+
+    // 폰: 공유 창 한 번에 전부 · PC: 한 장씩 내려받기
+    if (navigator.canShare && navigator.canShare({ files }) && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+      try { await navigator.share({ files, title: base }); return; } catch (e) { if (e.name === 'AbortError') return; }
+    }
+    for (const f of files) {
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(f); a.download = f.name;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+      await new Promise((r) => setTimeout(r, 350));     // 브라우저가 여러 내려받기를 한꺼번에 막지 않게 조금씩
+    }
   } catch (e) {
     alert('이미지 저장 실패: ' + (e.message || e));
   } finally {
+    if (stMode !== keepMode) { stMode = keepMode; renderStats(); window.scrollTo(0, keepY); }
     btn.disabled = false; btn.textContent = old;
   }
 };
