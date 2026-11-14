@@ -728,6 +728,7 @@
   <div class="opts">
     <label title="모든 계좌의 거래를 합쳐서 봅니다"><input type="checkbox" id="sAll" checked> 모든 계좌</label>
     <label title="같은 종목·방향으로 2분 안에 나눠 들어간 포지션을 한 트레이드로 봅니다"><input type="checkbox" id="sGroup" checked> 분할 진입 묶기</label>
+    <button class="btn small ghost" id="sShot" title="아래 통계 전체를 PNG 이미지로 저장 (폰에서는 공유 창)" style="margin-left:auto">이미지로 저장</button>
   </div>
   <div id="sBody"><div class="empty">불러오는 중…</div></div>
 </section>
@@ -2866,6 +2867,69 @@ $('sPeriod').onclick = (e) => {
 $('sPrev').onclick = () => { stYear--; loadStats(); };
 $('sNext').onclick = () => { stYear++; loadStats(); };
 $('sAll').onchange = () => loadStats();
+
+// ── 통계 화면을 이미지(PNG)로 저장 ── html2canvas (web_ui/vendor, MIT) 를 처음 누를 때만 불러옴
+let h2cLoading = null;
+function loadH2C() {
+  if (window.html2canvas) return Promise.resolve();
+  return h2cLoading ||= new Promise((ok, bad) => {
+    const sc = document.createElement('script');
+    sc.src = 'vendor/html2canvas.min.js';
+    sc.onload = ok; sc.onerror = () => { h2cLoading = null; bad(new Error('이미지 도구를 불러오지 못했습니다')); };
+    document.head.appendChild(sc);
+  });
+}
+$('sShot').onclick = async () => {
+  const btn = $('sShot'), body = $('sBody');
+  if (!body.querySelector('.panel, .kgrid, h3')) { alert('저장할 통계가 없습니다.'); return; }
+  btn.disabled = true; const old = btn.textContent; btn.textContent = '만드는 중…';
+  try {
+    await loadH2C();
+    const now = new Date();
+    const per = (document.querySelector('#sPeriod button.on') || {}).textContent || '';
+    const range = !$('sRange').hidden && $('sRange').textContent.trim() ? $('sRange').textContent.trim()
+      : (!$('sYearBar').hidden && $('sLabel').textContent.trim() ? $('sLabel').textContent.trim() : '');
+    const who = $('sAll').checked ? '모든 계좌' : (acc ? acc.account_number : '');
+    const head = [per, range].filter(Boolean).join(' · ');
+    const stamp = `${now.getFullYear()}-${pad2(now.getMonth() + 1)}-${pad2(now.getDate())} ${pad2(now.getHours())}:${pad2(now.getMinutes())}`;
+    const bg = getComputedStyle(document.body).backgroundColor || '#fff';
+    // 폰 사파리는 캔버스가 너무 크면 실패 → 높이에 맞춰 배율을 줄임 (최소 1배)
+    const scale = Math.max(1, Math.min(2, window.devicePixelRatio || 1, 15000 / Math.max(1, body.scrollHeight + 80)));
+    const canvas = await html2canvas(body, {
+      backgroundColor: bg, scale, useCORS: true, logging: false,
+      windowWidth: document.documentElement.clientWidth,
+      onclone: (doc) => {
+        const b = doc.getElementById('sBody');
+        b.style.padding = '12px';
+        // 안에서 스크롤되는 칸은 펼쳐서 다 찍히게
+        b.querySelectorAll('*').forEach((el) => {
+          const cs = doc.defaultView.getComputedStyle(el);
+          if (/(auto|scroll|hidden)/.test(cs.overflowY) && el.scrollHeight > el.clientHeight + 2) { el.style.maxHeight = 'none'; el.style.height = 'auto'; el.style.overflowY = 'visible'; }
+        });
+        const h = doc.createElement('div');
+        h.style.cssText = 'font-weight:700;font-size:15px;margin:0 2px 10px';
+        h.innerHTML = `TraderOS 통계 · ${who}<div style="font-weight:400;font-size:12px;opacity:.7;margin-top:2px">${head}${head ? ' · ' : ''}분할 진입 묶기 ${$('sGroup').checked ? '켬' : '끔'} · ${stamp} 저장</div>`;
+        b.prepend(h);
+      },
+    });
+    const blob = await new Promise((r) => canvas.toBlob(r, 'image/png'));
+    if (!blob) throw new Error('이미지가 너무 커서 만들지 못했습니다');
+    const pk = { '이번 주': 'week', '1개월': '1m', '3개월': '3m', '연도': 'year' }[per.trim()] || 'stats';
+    const name = `TraderOS_stats_${pk}_${stamp.slice(0, 10)}_${stamp.slice(11).replace(':', '')}.png`;
+    const file = new File([blob], name, { type: 'image/png' });
+    if (navigator.canShare && navigator.canShare({ files: [file] }) && /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)) {
+      try { await navigator.share({ files: [file], title: name }); return; } catch (e) { if (e.name === 'AbortError') return; }
+    }
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob); a.download = name;
+    document.body.appendChild(a); a.click(); a.remove();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+  } catch (e) {
+    alert('이미지 저장 실패: ' + (e.message || e));
+  } finally {
+    btn.disabled = false; btn.textContent = old;
+  }
+};
 $('sGroup').onchange = () => { stShow = 50; stTagPick = null; renderStats(); };
 
 async function loadStats() {
