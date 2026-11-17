@@ -1262,6 +1262,9 @@ class TelegramLive:
                 elif mine and (text.startswith("/문구") or text.startswith("/phrases")):
                     from services import telegram_phrases
                     await telegram_phrases.cmd_phrases(self, client, token, cid)
+                elif mine and (text.startswith("/출금") or text.startswith("/withdraw")):
+                    from services import withdraw_notice
+                    await withdraw_notice.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                 elif mine and (text.startswith("/표시") or text.startswith("/show")):
                     await self.show_button(client, token, cid, "lv:menu", None)
                 elif mine and (text.startswith("/원웨이") or text.startswith("/oneway")):
@@ -1433,11 +1436,14 @@ class TelegramLive:
             live_task = asyncio.create_task(self._live_loop(client))
             from services import oneway                 # 원웨이 장 알림 (services/oneway.py)
             oneway_task = asyncio.create_task(oneway.loop())
+            from services import withdraw_notice         # 출금 알림 (services/withdraw_notice.py)
+            wd_task = asyncio.create_task(withdraw_notice.loop(self, client))
             try:
                 await self._poll_loop(client)
             finally:
                 live_task.cancel()
                 oneway_task.cancel()
+                wd_task.cancel()
 
     async def _poll_loop(self, client: httpx.AsyncClient) -> None:
         while True:
@@ -1456,6 +1462,7 @@ class TelegramLive:
                         print(f"[telegram-live] 봇 {status['bot']} 연결됨 - 봇에게 /start 를 보내면 chat id를 알려줍니다")
                         await self._call(client, token, "setMyCommands", commands=[
                             {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
+                            {"command": "withdraw", "description": "출금 가능액 + 출금 페이지 (/출금 · /출금 알림 30)"},
                             {"command": "show", "description": "실시간 현황에 보일 것 켜고 끄기 (/표시)"},
                             {"command": "oneway", "description": "원웨이 장 - 지금 몇 KTR 갔는지·알림 설정 (/원웨이)"},
                             {"command": "pnl", "description": "손익 - 오늘·주·월 (/손익 어제)"},
