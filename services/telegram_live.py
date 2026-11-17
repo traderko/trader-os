@@ -177,7 +177,22 @@ def _lock_line(s: dict | None) -> str:
     return f"거래 가능 · {_hm(s.get('remaining_sec', 0))} 뒤 재확인{daily}"
 
 
-def _positions_block(positions: list[dict]) -> list[str]:
+# 실시간 현황에 넣을 것 - 켜고 끄기 (/표시 또는 현황 아래 [⚙️ 표시] 버튼). 잠금 줄은 항상 보임
+LIVE_PARTS = [
+    ("oneway", "원웨이"), ("ea", "EA 경고"), ("equity", "평가금·손익"), ("margin", "증거금"),
+    ("withdraw", "출금 가능"), ("liq", "강제청산까지"), ("positions", "포지션"),
+    ("split", "구간매매·직접 나눠 보기"), ("sltp", "SL·TP시 예상 손익"), ("buttons", "SL·TP 버튼"),
+]
+
+
+def live_show() -> dict:
+    from services.settings_service import get_settings
+    saved = get_settings().get("live_show") or {}
+    return {k: bool(saved.get(k, True)) for k, _ in LIVE_PARTS}
+
+
+def _positions_block(positions: list[dict], show: dict | None = None) -> list[str]:
+    show = show or {}
     if not positions:
         return ["포지션 없음"]
     by_sym: dict[str, list[dict]] = {}
@@ -210,14 +225,14 @@ def _positions_block(positions: list[dict]) -> list[str]:
         for p in ps:
             if kind_of(p.get("magic")):
                 grids.setdefault(p["magic"], []).append(p)
-        if grids:
+        if grids and show.get("split", True):
             mine = [p for p in ps if not kind_of(p.get("magic"))]
             for mg, gp in grids.items():
                 gpl = sum(p["profit"] + (p.get("swap") or 0) for p in gp)
                 out.append(f"   구간매매 {MODE_KR[kind_of(mg)]} {len(gp)}개 {_f(sum(p['volume'] for p in gp))}lot  {_money(gpl)}")
             if mine:
                 out.append(f"   직접 {len(mine)}개 {_f(sum(p['volume'] for p in mine))}lot  {_money(sum(p['profit'] + (p.get('swap') or 0) for p in mine))}")
-        if pv is not None:
+        if pv is not None and show.get("sltp", True):
             proj = []
             for key, label in (("sl", "SL시"), ("tp", "TP시")):
                 w = [p for p in ps if p.get(key)]
@@ -309,9 +324,13 @@ class TelegramLive:
                 except Exception:
                     locks[a.id] = None
 
+        show = live_show()
+
         async def one(a: Account) -> list[str]:
             lines = [f"<b>{html.escape(a.account_number)}</b>  {_lock_line(locks.get(a.id))}"]
             try:                               # EA 가 예전 버전이면 한 줄 (서버를 다시 켜면 새로 컴파일·설치)
+                if not show["ea"]:
+                    raise LookupError("숨김")
                 from services import ea_status
                 vi = ea_status.version_info(a.id)
                 if vi.get("dup"):
@@ -331,12 +350,16 @@ class TelegramLive:
                 return lines
             eq, margin = info.get("equity") or 0, info.get("margin") or 0
             util = (margin / eq * 100) if eq > 0 else 0
-            lines.append(f"평가금 {_f(eq)} · 손익 <b>{_s(info.get('profit') or 0)}</b>")
-            lines.append(_margin_line(util, info))
-            wd = await self._withdraw_line(a)
+            if show["equity"]:
+                lines.append(f"평가금 {_f(eq)} · 손익 <b>{_s(info.get('profit') or 0)}</b>")
+            if show["margin"]:
+                lines.append(_margin_line(util, info))
+            wd = await self._withdraw_line(a) if show["withdraw"] else ""
             if wd:
                 lines.append(wd)
             try:                               # 강제청산까지 몇 포인트 (차트에서 바로 보게)
+                if not show["liq"]:
+                    raise LookupError("숨김")
                 from services.risk import liquidation, liq_line
                 liq = liquidation(info, positions)[:3]
                 if liq:
@@ -346,8 +369,9 @@ class TelegramLive:
                         lines.append("   " + html.escape(t[:-1] if t.endswith(")") else t))
             except Exception:
                 pass
-            lines.append("")
-            lines += _positions_block(positions)
+            if show["positions"]:
+                lines.append("")
+                lines += _positions_block(positions, show)
             allpos.extend(positions)
             # 종목·방향 묶음마다 SL/TP 버튼 (/pos 안 쓰고 바로) - 대표 티켓 + 'a'(같은 종목·방향 전체)
             seen: dict[tuple, list] = {}
@@ -365,12 +389,12 @@ class TelegramLive:
         groups: list[tuple] = []
         allpos: list[dict] = []
         blocks = await asyncio.gather(*(one(a) for a in accounts)) if accounts else []
-        self.pos_groups = groups
+        self.pos_groups = groups if show["buttons"] else []
         SEP = "\n━━━━━━━━━━━━━━\n"
         body = SEP.join("\n".join(b) for b in blocks) or "잠금을 켠 계좌가 없습니다."
         try:                                   # 원웨이 진행 중이면 맨 위에 (알림이 다른 알림에 묻혀도 여기서 보이게)
             from services import oneway
-            ow = oneway.live_lines(allpos)
+            ow = oneway.live_lines(allpos) if show["oneway"] else []
             if ow:
                 body = "<b>원웨이 진행 중</b>\n" + "\n".join(ow) + "\n" + SEP + body
         except Exception:
@@ -445,8 +469,50 @@ class TelegramLive:
         if telegram_cfg().get("live_grid_button", False):       # 관리 화면에서 켤 수 있음 (기본 숨김)
             last.append({"text": "🧱 구간매매", "callback_data": "gw:new"})
         last.append({"text": "🔁 MT5", "callback_data": "mt5:ask"})
+        last.append({"text": "⚙️ 표시", "callback_data": "lv:menu"})
         rows.append(last)
         return {"inline_keyboard": rows}
+
+    # ── 실시간 현황 표시 항목 켜고 끄기 (/표시) ──
+    def _show_menu(self) -> tuple[str, dict]:
+        sh = live_show()
+        kb, row = [], []
+        for k, label in LIVE_PARTS:
+            row.append({"text": ("✅ " if sh[k] else "▫️ ") + label, "callback_data": f"lv:t:{k}"})
+            if len(row) == 2:
+                kb.append(row)
+                row = []
+        if row:
+            kb.append(row)
+        kb.append([{"text": "모두 켜기", "callback_data": "lv:all:1"}, {"text": "모두 끄기", "callback_data": "lv:all:0"}])
+        return ("⚙️ <b>실시간 현황에 보일 것</b>\n누르면 켜고 끕니다. 현황에 바로 반영됩니다. (잠금 줄은 항상 보임)"), {"inline_keyboard": kb}
+
+    async def show_button(self, client, token, cid: str, data: str, message_id) -> str:
+        from services.settings_service import get_settings, update_settings
+        if data == "lv:menu":
+            text, kb = self._show_menu()
+            await self._send(client, token, cid, text, reply_markup=kb)
+            return ""
+        cur = dict(get_settings().get("live_show") or {})
+        if data.startswith("lv:t:"):
+            k = data[5:]
+            if k not in dict(LIVE_PARTS):
+                return "잘못된 버튼"
+            cur[k] = not live_show()[k]
+            ans = f"{dict(LIVE_PARTS)[k]} {'켬' if cur[k] else '끔'}"
+        elif data.startswith("lv:all:"):
+            on = data.endswith(":1")
+            cur = {k: on for k, _ in LIVE_PARTS}
+            ans = "모두 켬" if on else "모두 끔"
+        else:
+            return ""
+        update_settings({"live_show": cur})
+        text, kb = self._show_menu()
+        if message_id:
+            await self._call(client, token, "editMessageText", chat_id=cid, message_id=message_id,
+                             text=text, parse_mode="HTML", reply_markup=kb)
+        self.force.set()
+        return ans
 
     async def _send(self, client, token, chat_id, text: str, **extra) -> dict:
         r = await self._call(client, token, "sendMessage", chat_id=chat_id, text=text, parse_mode="HTML",
@@ -1196,6 +1262,8 @@ class TelegramLive:
                 elif mine and (text.startswith("/문구") or text.startswith("/phrases")):
                     from services import telegram_phrases
                     await telegram_phrases.cmd_phrases(self, client, token, cid)
+                elif mine and (text.startswith("/표시") or text.startswith("/show")):
+                    await self.show_button(client, token, cid, "lv:menu", None)
                 elif mine and (text.startswith("/원웨이") or text.startswith("/oneway")):
                     from services import oneway
                     await oneway.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
@@ -1245,6 +1313,14 @@ class TelegramLive:
                 if data == "live:refresh":
                     self.force.set()
                     answer = "갱신합니다"
+                elif data.startswith("lv:"):           # 실시간 현황 표시 항목
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        try:
+                            answer = await self.show_button(client, token, cid, data, (cb.get("message") or {}).get("message_id"))
+                        except Exception as e:
+                            answer = f"실패: {e}"[:190]
                 elif data.startswith("unlock:"):
                     if cid != str(telegram_cfg()["chat_id"] or ""):
                         answer = "등록된 대화에서만 잠금을 풀 수 있습니다"
@@ -1380,6 +1456,7 @@ class TelegramLive:
                         print(f"[telegram-live] 봇 {status['bot']} 연결됨 - 봇에게 /start 를 보내면 chat id를 알려줍니다")
                         await self._call(client, token, "setMyCommands", commands=[
                             {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
+                            {"command": "show", "description": "실시간 현황에 보일 것 켜고 끄기 (/표시)"},
                             {"command": "oneway", "description": "원웨이 장 - 지금 몇 KTR 갔는지·알림 설정 (/원웨이)"},
                             {"command": "pnl", "description": "손익 - 오늘·주·월 (/손익 어제)"},
                             {"command": "stats", "description": "매매 통계 - 승률·PF·종목·장별 (/통계)"},
