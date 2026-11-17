@@ -239,6 +239,38 @@ class TelegramLive:
         self.locked: list[tuple[int, str]] = []   # 문구로 풀 수 있는 잠금 계좌 (id, 계좌번호) - 버튼용
         self.pos_groups: list[tuple] = []         # (계좌id, 계좌번호, 종목, 방향 0/1, 대표 티켓, 개수, SL/TP 제각각) - SL/TP 버튼용
         self.pending: dict[str, dict] = {}        # 대화방별 '문구 입력 기다리는 중'
+        self.wd_cache: dict[int, tuple[float, str]] = {}   # 계좌별 출금 가능 줄 (1분마다 새로 계산)
+
+    async def _withdraw_line(self, a) -> str:
+        """오늘 출금 가능 (웹 손익 탭 출금 카드와 같은 계산) - 잔고 기록을 여러 번 읽어서 1분에 한 번만,
+        그것도 뒤에서 따로 구함 (실시간 현황이 그걸 기다리느라 늦어지지 않게). 지금은 직전 값을 보여 줌"""
+        now = time.time()
+        hit = self.wd_cache.get(a.id)
+        if not hit or now - hit[0] >= 60:
+            self.wd_cache[a.id] = (now, hit[1] if hit else "")      # 1분 동안 다시 시작하지 않게 먼저 표시
+            asyncio.create_task(self._withdraw_refresh(a))
+        return self.wd_cache[a.id][1]
+
+    async def _withdraw_refresh(self, a) -> None:
+        text = (self.wd_cache.get(a.id) or (0, ""))[1]
+        try:
+            from api.account_router import get_withdraw_rule
+            async with AsyncSessionLocal() as db:
+                r = await asyncio.wait_for(get_withdraw_rule(int(a.account_number), db), 10)
+            if r.get("available", True):
+                base = "재입금 뒤 순수익" if r.get("reset") else "오늘 순수익"
+                text = (f"출금 가능 <b>{_f(r['withdrawable'])}</b> · {base} {_s(r['net_profit'])}의 {r['pct']:g}%"
+                        + (f" − 출금 {_f(r['withdrawal_total'])}" if r.get("withdrawal_total") else ""))
+                if r.get("over"):
+                    text += f"\n⚠️ 오늘 규칙보다 <b>{_f(r['over'])}</b> 더 출금"
+            else:
+                text = ""
+        except Exception:
+            pass                                  # MT5 끊김 등 - 직전 값 유지 (없으면 줄 안 보임)
+        old = self.wd_cache.get(a.id)
+        self.wd_cache[a.id] = (old[0] if old else time.time(), text)
+        if not old or old[1] != text:
+            self.force.set()                      # 값이 바뀌었으면 실시간 현황 바로 다시 그림
 
     # ── 상태 파일 ──
     def _load(self) -> dict:
@@ -301,6 +333,9 @@ class TelegramLive:
             util = (margin / eq * 100) if eq > 0 else 0
             lines.append(f"평가금 {_f(eq)} · 손익 <b>{_s(info.get('profit') or 0)}</b>")
             lines.append(_margin_line(util, info))
+            wd = await self._withdraw_line(a)
+            if wd:
+                lines.append(wd)
             try:                               # 강제청산까지 몇 포인트 (차트에서 바로 보게)
                 from services.risk import liquidation, liq_line
                 liq = liquidation(info, positions)[:3]
