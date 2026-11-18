@@ -414,7 +414,7 @@ def text(d: dict) -> str:
         for x in bks:
             age = int(time.time() - x["at"]) if x.get("at") else None
             when = "" if age is None else (f"{age // 60}분 전" if age < 3600 else f"{age // 3600}시간 전" if age < 86400 else f"{age // 86400}일 전")
-            tag = "직접 입력" if x["source"] == "manual" else "자동"
+            tag = {"manual": "직접 입력", "notify": "폰 알림"}.get(x["source"], "자동")
             L.append(f"   {html.escape(x['name'])}  {x['amount']:,.0f}원  <i>({tag}{' · ' + when if when else ''})</i>"
                      + (f"\n   ⚠️ {html.escape(x['error'])}" if not x["ok"] else ""))
     krw = d.get("krw_rate")
@@ -508,6 +508,8 @@ async def loop(live, client) -> None:
             c = cfg()
             if c["binance"] or c["list"]:
                 await check_once(send)
+            from services import banks                 # 직접 입력한 은행 잔액이 14일 넘게 그대로면 한 번 알림
+            await banks.stale_reminders(send)
         except Exception as e:
             print(f"[wallets] 확인 실패: {e}")
         await asyncio.sleep(NOTIFY_SEC)

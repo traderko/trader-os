@@ -37,7 +37,7 @@ _TAILSCALE_NETS = [ipaddress.ip_network("100.64.0.0/10"), ipaddress.ip_network("
 _LAN_NETS = [ipaddress.ip_network(n) for n in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "fe80::/10", "fc00::/7")]
 
 # 로그인 없이 열리는 경로 (public 방식) - 로그인 화면을 그리는 데 필요한 것만
-PUBLIC_PATHS = ("/auth/",)
+PUBLIC_PATHS = ("/auth/", "/hook/")   # /hook/ 은 폰 알림 받기 - 쿠키 대신 token 으로 막음 (api/hook_router.py)
 PUBLIC_PREFIXES_STATIC = ("/app",)   # 웹 화면 파일(HTML) - 데이터는 API에서 막힘
 
 

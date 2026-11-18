@@ -2,6 +2,7 @@
 
   직접 입력 : settings "banks.manual" = [{name, amount(원), at(입력 시각)}]
               관리 화면 '지갑' 탭 · 텔레그램 /잔고 은행 토스 1234000
+              금액이 STALE_DAYS(14일) 넘게 그대로면 텔레그램으로 '업데이트할까요?' 한 번 (그 뒤 14일마다)
   CODEF     : codef.io 데모 키 (Client ID · Secret · 공개키) 를 관리 화면에서 넣음 → 암호화해서 settings "banks.codef_enc"
               은행 연결은 인터넷뱅킹 아이디·비밀번호로 한 번 → CODEF 가 주는 연결 아이디(connectedId)만 암호화해 저장
               (은행 비밀번호는 CODEF 공개키로 암호화해서 CODEF 로만 보내고, 이 서버에는 남기지 않음)
@@ -21,12 +22,15 @@ import httpx
 CODEF_OAUTH = "https://oauth.codef.io/oauth/token"
 CODEF_API = "https://development.codef.io"          # 데모 (정식은 api.codef.io - 사업자 승인 필요)
 REFRESH_SEC = 3600
+STALE_DAYS = 14
 MIN_GAP_SEC = 600
-BANKS = {  # CODEF 기관 코드 (지원 여부는 CODEF 문서 '은행 개인 보유계좌' 에서 확인)
-    "0004": "국민", "0088": "신한", "0020": "우리", "0081": "하나", "0011": "농협", "0003": "기업",
-    "0089": "케이뱅크", "0090": "카카오뱅크", "0071": "우체국", "0045": "새마을금고", "0048": "신협",
-    "0023": "SC제일", "0027": "씨티", "0031": "iM뱅크(대구)", "0032": "부산", "0034": "광주", "0035": "제주",
-    "0037": "전북", "0039": "경남", "0007": "수협", "0002": "산업",
+# CODEF 기관 코드 - '은행 개인' 중 아이디 로그인으로 보유계좌 조회가 되는 곳만 (CODEF 은행 API 명세 2026.11.10 기준)
+#   빠진 곳: 산업·수협·부산·광주·제주·신협 (아이디 로그인 미제공), K뱅크 (2023 개인뱅킹 웹 종료), 카카오뱅크·토스뱅크 (대상 아님)
+#            우리은행 (로그인에 출금계좌 번호·비밀번호 필수 + 문자 인증), 씨티 (문자 인증)
+#   국민·대구는 생년월일을 요구할 때가 있음 (선택 입력)
+BANKS = {
+    "0004": "국민", "0088": "신한", "0081": "하나", "0011": "농협", "0003": "기업", "0023": "SC제일",
+    "0031": "iM뱅크(대구)", "0037": "전북", "0039": "경남", "0045": "새마을금고", "0071": "우체국",
 }
 
 
@@ -59,8 +63,9 @@ def cfg() -> dict:
     raw = _raw()
     keys = _dec(raw.get("codef_enc")) or {}
     return {
-        "manual": [{"name": m.get("name", ""), "amount": float(m.get("amount") or 0), "at": int(m.get("at") or 0)}
-                   for m in raw.get("manual") or []],
+        "manual": [{"name": m.get("name", ""), "amount": float(m.get("amount") or 0), "at": int(m.get("at") or 0),
+                    "via": m.get("via") or ""} for m in raw.get("manual") or []],
+        "hook_token": hook_token(),
         "codef": bool(keys.get("client_id")),
         "codef_id": (keys.get("client_id", "")[:6] + "…") if keys.get("client_id") else "",
         "orgs": [{"organization": o, "name": BANKS.get(o, o)} for o in raw.get("orgs") or []],
@@ -80,15 +85,28 @@ def set_manual(items: list[dict]) -> None:
         except (TypeError, ValueError):
             raise ValueError(f"{name}: 금액이 숫자가 아닙니다")
         prev = old.get(name)
-        at = prev["at"] if prev and float(prev.get("amount") or 0) == amt else int(time.time())   # 금액이 바뀐 것만 시각 갱신
-        out.append({"name": name, "amount": amt, "at": at})
+        same = prev and float(prev.get("amount") or 0) == amt
+        at = prev["at"] if same and not m.get("touch") else int(time.time())   # 금액이 바뀐 것만 시각 갱신 (알림은 늘 갱신)
+        out.append({"name": name, "amount": amt, "at": at, "via": m.get("via") if "via" in m else (prev or {}).get("via", "")})
     cur["manual"] = out
     _put(cur)
 
 
-def set_manual_one(name: str, amount: float) -> None:
-    items = [m for m in cfg()["manual"] if m["name"] != name] + [{"name": name, "amount": amount}]
+def set_manual_one(name: str, amount: float, via: str = "") -> None:
+    items = [m for m in cfg()["manual"] if m["name"] != name] + [{"name": name, "amount": amount, "via": via, "touch": bool(via)}]
     set_manual(items)
+
+
+def hook_token() -> str:
+    """폰 알림 받기(/hook/bank) 비밀 값 - 처음 부를 때 만들어 저장"""
+    cur = _raw()
+    t = cur.get("hook_token")
+    if not t:
+        import secrets
+        t = secrets.token_urlsafe(24)
+        cur["hook_token"] = t
+        _put(cur)
+    return t
 
 
 def set_codef_keys(client_id: str, client_secret: str, public_key: str) -> None:
@@ -103,7 +121,7 @@ def set_codef_keys(client_id: str, client_secret: str, public_key: str) -> None:
 
 def clear_codef() -> None:
     cur = _raw()
-    for k in ("codef_enc", "connected_enc", "orgs"):
+    for k in ("codef_enc", "connected_enc", "orgs", "birth_enc"):
         cur.pop(k, None)
     _put(cur)
     _token.clear()
@@ -155,7 +173,7 @@ def _rsa(password: str) -> str:
     return base64.b64encode(pub.encrypt(password.encode(), padding.PKCS1v15())).decode()
 
 
-async def connect_bank(organization: str, login_id: str, password: str) -> None:
+async def connect_bank(organization: str, login_id: str, password: str, birth: str = "") -> None:
     """은행 하나 연결 (인터넷뱅킹 아이디·비밀번호). 비밀번호는 여기서 암호화해 CODEF 로만 보내고 저장하지 않음"""
     if organization not in BANKS:
         raise ValueError("은행을 고르세요")
@@ -163,6 +181,11 @@ async def connect_bank(organization: str, login_id: str, password: str) -> None:
         raise ValueError("인터넷뱅킹 아이디와 비밀번호를 넣어 주세요")
     acc = {"countryCode": "KR", "businessType": "BK", "clientType": "P", "organization": organization,
            "loginType": "1", "id": login_id, "password": _rsa(password)}
+    birth = "".join(ch for ch in (birth or "") if ch.isdigit())
+    if birth:
+        if len(birth) != 8:
+            raise ValueError("생년월일은 YYYYMMDD 8자리로 넣어 주세요")
+        acc["birthDate"] = birth
     cur = _raw()
     connected = (_dec(cur.get("connected_enc")) or {}).get("id")
     async with httpx.AsyncClient() as client:
@@ -176,6 +199,10 @@ async def connect_bank(organization: str, login_id: str, password: str) -> None:
     cur = _raw()
     cur["connected_enc"] = _enc({"id": connected})
     cur["orgs"] = sorted(set((cur.get("orgs") or []) + [organization]))
+    if birth:
+        b = _dec(cur.get("birth_enc")) or {}
+        b[organization] = birth
+        cur["birth_enc"] = _enc(b)                    # 조회 때도 생년월일을 달라는 은행이 있어 (암호화해서) 둠
     _put(cur)
     _save_state(dict(_load_state(), at=0))            # 다음 조회를 바로
 
@@ -235,16 +262,21 @@ async def refresh_codef(force: bool = False) -> dict:
     async with httpx.AsyncClient() as client:
         for o in orgs:
             try:
-                d = await _call(client, "/v1/kr/bank/p/account/account-list", {"connectedId": connected, "organization": o})
+                req = {"connectedId": connected, "organization": o}
+                birth = (_dec(raw.get("birth_enc")) or {}).get(o)
+                if birth:
+                    req["birthDate"] = birth
+                d = await _call(client, "/v1/kr/bank/p/account/account-list", req)
                 accs = [{"account": a.get("resAccountDisplay") or a.get("resAccount", ""), "name": a.get("resAccountName", ""),
-                         "balance": float(a.get("resAccountBalance") or 0)} for a in d.get("resDepositTrust") or []]
+                         "balance": float(a.get("resAccountBalance") or 0)}
+                        for a in d.get("resDepositTrust") or [] if (a.get("resAccountCurrency") or "KRW") == "KRW"]   # 원화 예금·신탁만
                 banks.append({"organization": o, "name": BANKS.get(o, o), "ok": True, "accounts": accs,
                               "amount": sum(a["balance"] for a in accs)})
             except Exception as e:
                 old = next((b for b in st.get("banks") or [] if b.get("organization") == o), None)
                 banks.append(dict(old or {"organization": o, "name": BANKS.get(o, o), "accounts": [], "amount": 0.0},
                                   ok=False, error=str(e)[:200]))
-    st = {"at": int(time.time()), "banks": banks}
+    st = {"at": int(time.time()), "banks": banks, "reminded": st.get("reminded") or {}}
     _save_state(st)
     return st
 
@@ -257,5 +289,28 @@ async def summary(force: bool = False) -> dict:
         out.append({"name": b["name"], "amount": b.get("amount", 0.0), "source": "codef", "at": st.get("at", 0),
                     "ok": b.get("ok", True), "error": b.get("error", ""), "accounts": b.get("accounts") or []})
     for m in cfg()["manual"]:
-        out.append({"name": m["name"], "amount": m["amount"], "source": "manual", "at": m["at"], "ok": True, "error": "", "accounts": []})
+        out.append({"name": m["name"], "amount": m["amount"], "source": "notify" if m.get("via") == "알림" else "manual",
+                    "at": m["at"], "ok": True, "error": "", "accounts": []})
     return {"banks": out, "total_krw": sum(b["amount"] for b in out)}
+
+
+async def stale_reminders(send) -> None:
+    """직접 입력한 은행 잔액이 오래됐으면 알림 (wallets.loop 에서 5분마다 부름)"""
+    st = _load_state()
+    rem = st.get("reminded") or {}
+    now = time.time()
+    changed = False
+    for m in cfg()["manual"]:
+        age = now - (m["at"] or now)
+        if age < STALE_DAYS * 86400:
+            continue
+        if now - rem.get(m["name"], 0) < STALE_DAYS * 86400:
+            continue
+        rem[m["name"]] = now
+        changed = True
+        await send(f"🏦 <b>{m['name']}</b> 잔액을 {int(age // 86400)}일째 그대로 두셨어요 ({m['amount']:,.0f}원).\n"
+                   f"바뀌었으면 <code>/잔고 은행 {m['name']} 금액</code> 으로 알려 주세요. 그대로면 무시하셔도 됩니다.")
+    if changed:
+        st = _load_state()
+        st["reminded"] = rem
+        _save_state(st)

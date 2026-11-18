@@ -1039,7 +1039,8 @@ async def wallets_bank(body: dict):
         if body.get("disconnect"):
             await banks.disconnect_bank(str(body.get("organization") or ""))
         else:
-            await banks.connect_bank(str(body.get("organization") or ""), str(body.get("login_id") or "").strip(), str(body.get("password") or ""))
+            await banks.connect_bank(str(body.get("organization") or ""), str(body.get("login_id") or "").strip(),
+                                     str(body.get("password") or ""), str(body.get("birth") or ""))
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:

@@ -653,7 +653,18 @@
       <h3 style="margin:6px 0">직접 입력 <small class="hint" style="font-weight:400">토스뱅크처럼 자동 조회가 안 되는 곳 · 텔레그램 <code>/잔고 은행 토스 1234000</code> 으로도 바꿀 수 있음</small></h3>
       <div id="bkManual"></div>
       <div class="actions"><button class="btn" id="bkAdd">+ 은행 추가</button><button class="btn primary" id="bkSave">저장</button></div>
-      <h3 style="margin:16px 0 6px">자동 조회 (CODEF) <small class="hint" style="font-weight:400">국민·신한·우리·하나·농협 등 · 데모는 하루 100회라 1시간에 한 번 조회</small></h3>
+      <details style="margin-top:10px"><summary><b>폰 알림으로 자동 갱신 (안드로이드)</b> - 토스 알림(카드 결제 · 입출금 · 캐시백 · 토스페이)으로 위 금액을 바꿈</summary>
+        <p class="hint">MacroDroid 앱에서 매크로를 하나 만드세요.<br>
+          ① 트리거: <b>알림 수신</b> → 앱: <b>토스</b> (텍스트 조건 없이 모든 알림 - 관계없는 알림은 서버가 알아서 넘김)<br>
+          ② 동작: <b>HTTP 요청</b> → 방식 <b>POST</b> · 주소는 아래 · 본문(Content body)은 <code>[notification_title] [notification]</code> · 형식 text/plain<br>
+          주소의 서버 부분은 <b>폰에서 웹 화면을 열 때 쓰는 주소</b>로 바꾸세요 (예: Tailscale 주소). <code>name=</code> 은 위 직접 입력 칸의 이름과 같아야 합니다.<br>
+          결제·출금은 빼고 입금·캐시백·결제 취소는 더하고, <b>'잔액 ○○원'이 찍힌 알림이 오면 그 값으로 다시 맞춥니다</b> (더하기·빼기 오차 정리).
+          처음 한 번은 위 칸에 지금 잔액을 넣어 두세요.</p>
+        <div style="display:flex;gap:6px;align-items:center"><input type="text" id="bkHook" readonly style="flex:1;font-family:monospace;font-size:12px">
+          <button class="btn" id="bkHookCopy">복사</button></div>
+        <p class="hint">이 주소 안의 token 은 비밀번호처럼 다루세요 (아는 사람은 잔액 숫자를 바꿀 수 있음 - 그 밖의 것은 못 함).</p>
+      </details>
+      <h3 style="margin:16px 0 6px">자동 조회 (CODEF) <small class="hint" style="font-weight:400">아이디 로그인이 되는 은행만: 국민·신한·하나·농협·기업·SC·iM(대구)·전북·경남·새마을금고·우체국 · 데모는 하루 100회라 1시간에 한 번 조회</small></h3>
       <div id="bkCodef"></div>
       <div id="bkKeys" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0">
         <input id="bkCid" type="password" autocomplete="off" placeholder="Client ID" style="flex:1 1 160px;min-width:0">
@@ -666,6 +677,7 @@
         <select id="bkOrg" style="width:140px"></select>
         <input id="bkId" type="text" autocomplete="off" placeholder="인터넷뱅킹 아이디" style="flex:1 1 140px;min-width:0">
         <input id="bkPw" type="password" autocomplete="new-password" placeholder="인터넷뱅킹 비밀번호" style="flex:1 1 140px;min-width:0">
+        <input id="bkBirth" type="text" inputmode="numeric" placeholder="생년월일 (선택 · 국민·대구)" style="width:170px">
         <button class="btn primary" id="bkConn" style="white-space:nowrap">은행 연결</button>
       </div>
       <p class="hint">CODEF 키는 codef.io 가입 → 마이페이지 → 키 관리(데모)에서 받습니다. 키와 연결 정보는 암호화해서 저장합니다.
@@ -1727,7 +1739,7 @@ async function loadWallets(refresh) {
     if (c.binance) rows.push(tr('바이낸스', bn));
     for (const w of d.wallets || []) rows.push(tr(`${esc(w.network_name)} · ${esc(w.label)}<br><small class="muted" style="font-family:monospace">${esc(w.address.slice(0, 6) + '…' + w.address.slice(-4))}</small>`, w));
     const ago = (t) => { if (!t) return ''; const a = Date.now() / 1000 - t; return a < 3600 ? `${Math.floor(a / 60)}분 전` : a < 86400 ? `${Math.floor(a / 3600)}시간 전` : `${Math.floor(a / 86400)}일 전`; };
-    for (const x of d.banks || []) rows.push(`<tr><td>은행 · ${esc(x.name)}<br><small class="muted">${x.source === 'manual' ? '직접 입력' : '자동'} · ${ago(x.at)}</small></td>
+    for (const x of d.banks || []) rows.push(`<tr><td>은행 · ${esc(x.name)}<br><small class="muted">${{ manual: '직접 입력', notify: '폰 알림' }[x.source] || '자동'} · ${ago(x.at)}</small></td>
       <td>${Math.round(x.amount).toLocaleString()}원${x.ok ? '' : `<br><small class="muted">⚠️ ${esc(x.error)}</small>`}</td>
       <td style="text-align:right">${d.krw_rate ? money(x.amount / d.krw_rate) : '-'}</td></tr>`);
     for (const m of d.mt5 || []) rows.push(m.ok
@@ -1760,6 +1772,8 @@ $('wlRefresh').onclick = () => loadWallets(true);
 let bkRows = [];
 function bkRender(b) {
   bkRows = (b.manual || []).map((m) => ({ ...m }));
+  const host = /^(127\.|localhost)/.test(location.hostname) ? `http://폰에서-쓰는-주소:${location.port || 8000}` : location.origin;
+  $('bkHook').value = `${host}/hook/bank?token=${b.hook_token || ''}&name=${encodeURIComponent((b.manual || [])[0]?.name || '토스뱅크')}`;
   bkRenderManual();
   $('bkOrg').innerHTML = Object.entries(b.banks || {}).map(([k, n]) => `<option value="${k}">${esc(n)}</option>`).join('');
   $('bkCodef').innerHTML = !b.codef ? '<p class="hint">CODEF 키가 없습니다. 아래에 넣고 [키 저장]을 누르세요.</p>'
@@ -1777,6 +1791,7 @@ function bkRenderManual() {
 }
 $('bkManual').addEventListener('input', (e) => { const i = e.target.dataset.b; if (i != null) bkRows[i][e.target.dataset.k] = e.target.value.trim(); });
 $('bkManual').addEventListener('click', (e) => { const i = e.target.dataset.bdel; if (i != null) { bkRows.splice(Number(i), 1); bkRenderManual(); } });
+$('bkHookCopy').onclick = async () => { try { await navigator.clipboard.writeText($('bkHook').value); toast('복사했습니다.'); } catch { $('bkHook').select(); } };
 $('bkAdd').onclick = () => { bkRows.push({ name: bkRows.length ? '' : '토스뱅크', amount: '' }); bkRenderManual(); };
 $('bkSave').onclick = async () => {
   try {
@@ -1796,7 +1811,7 @@ $('bkKeyClear').onclick = async () => {
   catch (e) { toast(e.message, true); }
 };
 $('bkConn').onclick = async () => {
-  const body = { organization: $('bkOrg').value, login_id: $('bkId').value.trim(), password: $('bkPw').value };
+  const body = { organization: $('bkOrg').value, login_id: $('bkId').value.trim(), password: $('bkPw').value, birth: $('bkBirth').value.trim() };
   if (!body.login_id || !body.password) { toast('인터넷뱅킹 아이디와 비밀번호를 넣으세요.', true); return; }
   $('bkConn').disabled = true; $('bkConn').textContent = '연결 중…';
   try { await api('wallets/bank', { method: 'POST', body: JSON.stringify(body) }); $('bkPw').value = ''; toast('연결했습니다. 잔고를 불러옵니다…'); loadWallets(true); }
