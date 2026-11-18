@@ -1703,11 +1703,19 @@ async function loadWallets(refresh) {
     const rows = [];
     if (c.binance) rows.push(tr('바이낸스', bn));
     for (const w of d.wallets || []) rows.push(tr(`${esc(w.network_name)} · ${esc(w.label)}<br><small class="muted" style="font-family:monospace">${esc(w.address.slice(0, 6) + '…' + w.address.slice(-4))}</small>`, w));
+    for (const m of d.mt5 || []) rows.push(m.ok
+      ? `<tr><td>MT5 · ${esc(m.account_number)}<br><small class="muted">평가금(증거금)</small></td><td>${money(m.equity)} ${esc(m.currency)}</td><td style="text-align:right">${money(m.equity)}</td></tr>`
+      : `<tr><td>MT5 · ${esc(m.account_number)}</td><td colspan="2" class="muted">MT5 연결 안 됨</td></tr>`);
+    const won = (v) => d.krw_rate ? `<br><small>≈ ${Math.round(v * d.krw_rate).toLocaleString()}원</small>` : '';
     const deps = (bn.deposits || []).filter((x) => x.done).slice(0, 5);
     $('wlSum').innerHTML = rows.length ? `<table class="tbl" style="width:100%"><thead><tr><th style="text-align:left">어디</th><th style="text-align:left">코인</th><th style="text-align:right">USDT 환산</th></tr></thead>
         <tbody>${rows.join('')}</tbody>
-        <tfoot><tr><th style="text-align:left">합계</th><th></th><th style="text-align:right">${money(d.total_usdt)} USDT${d.total_krw ? `<br><small>≈ ${Math.round(d.total_krw).toLocaleString()}원</small>` : ''}</th></tr></tfoot></table>
-      ${d.krw_rate ? `<p class="hint">1 USDT = ${Math.round(d.krw_rate).toLocaleString()}원 (업비트) · 코인 시세는 바이낸스</p>` : ''}
+        <tfoot>
+          <tr><th style="text-align:left">지갑 합계</th><th style="text-align:left">${d.wallet_pct != null ? `MT5 평가금의 <b>${d.wallet_pct.toFixed(1)}%</b>` : ''}</th><th style="text-align:right">${money(d.total_usdt)} USDT${won(d.total_usdt)}</th></tr>
+          ${(d.mt5 || []).length ? `<tr><th style="text-align:left">MT5 평가금</th><th></th><th style="text-align:right">${money(d.mt5_total)}${won(d.mt5_total)}</th></tr>
+          <tr><th style="text-align:left">전체 (지갑 + MT5)</th><th></th><th style="text-align:right">${money(d.grand_usdt)}${won(d.grand_usdt)}</th></tr>` : ''}
+        </tfoot></table>
+      ${d.krw_rate ? `<p class="hint">1 USDT = ${Math.round(d.krw_rate).toLocaleString()}원 (업비트) · 코인 시세는 바이낸스 · MT5 계좌 달러는 USDT 와 1:1 로 계산</p>` : ''}
       ${deps.length ? `<h3 style="margin-top:14px">최근 바이낸스 입금</h3>${deps.map((x) => `<div class="muted" style="font-size:13px">${esc(new Date(x.time * 1000).toLocaleString())} · +${Number(x.amount).toLocaleString()} ${esc(x.coin)} (${esc(x.network)})</div>`).join('')}` : ''}`
       : '<p class="hint">바이낸스 키나 개인 지갑을 넣으면 여기에 잔고가 나옵니다.</p>';
     $('wlAt').textContent = d.at ? new Date(d.at * 1000).toLocaleTimeString() + ' 기준' : '';

@@ -319,6 +319,26 @@ async def wallet(client: httpx.AsyncClient, w: dict, prices: dict) -> dict:
 _cache: dict = {}
 
 
+async def _mt5() -> list[dict]:
+    """잠금을 켠 MT5 계좌의 평가금(증거금) - 계좌 통화는 USD 로 보고 USDT 와 1:1 로 더함"""
+    from sqlalchemy import select
+    from db.models.account import Account
+    from db.session import AsyncSessionLocal
+    from services.worker_client import worker_get
+    async with AsyncSessionLocal() as db:
+        accs = (await db.execute(select(Account).where(Account.lock_enabled == True).order_by(Account.id))).scalars().all()
+
+    async def one(a):
+        try:
+            info = await asyncio.wait_for(worker_get(a.id, "/account-info"), 5)
+            return {"account_number": a.account_number, "ok": True, "equity": float(info.get("equity") or 0),
+                    "balance": float(info.get("balance") or 0), "margin": float(info.get("margin") or 0),
+                    "currency": info.get("currency") or "USD"}
+        except Exception:
+            return {"account_number": a.account_number, "ok": False, "equity": 0.0, "currency": ""}
+    return list(await asyncio.gather(*(one(a) for a in accs)))
+
+
 async def summary(refresh: bool = False) -> dict:
     if not refresh and _cache.get("at", 0) > time.time() - CACHE_SEC:
         return _cache["data"]
@@ -328,11 +348,16 @@ async def summary(refresh: bool = False) -> dict:
             prices = await _prices(client)
         except Exception:
             prices = {}
-        bn, krw, *ws = await asyncio.gather(binance(client, prices), _krw_rate(client),
-                                            *(wallet(client, w, prices) for w in c["list"]))
-    total = (bn["total_usdt"] if bn["ok"] else 0) + sum(w["total_usdt"] for w in ws if w["ok"])
-    data = {"binance": bn, "wallets": ws, "total_usdt": total, "krw_rate": krw,
-            "total_krw": total * krw if krw else None, "notify": c["notify"], "at": int(time.time())}
+        bn, krw, mt5, *ws = await asyncio.gather(binance(client, prices), _krw_rate(client), _mt5(),
+                                                 *(wallet(client, w, prices) for w in c["list"]))
+    total = (bn["total_usdt"] if bn["ok"] else 0) + sum(w["total_usdt"] for w in ws if w["ok"])   # 지갑 합계
+    mt5_total = sum(m["equity"] for m in mt5 if m["ok"])                                         # MT5 평가금 합계
+    grand = total + mt5_total
+    data = {"binance": bn, "wallets": ws, "mt5": mt5, "total_usdt": total, "mt5_total": mt5_total,
+            "wallet_pct": total / mt5_total * 100 if mt5_total > 0 else None,      # 지갑이 MT5 평가금의 몇 %
+            "grand_usdt": grand, "krw_rate": krw,
+            "total_krw": total * krw if krw else None, "grand_krw": grand * krw if krw else None,
+            "notify": c["notify"], "at": int(time.time())}
     _cache.update(at=time.time(), data=data)
     return data
 
@@ -365,8 +390,22 @@ def text(d: dict) -> str:
                   for a in w["assets"]] or ["   비어 있음"]
         else:
             L.append(f"<b>{html.escape(w['network_name'])} · {name}</b>  {html.escape(w['error'])}")
-    L += ["", "━━━━━━━━━━━━━━", f"합계 <b>{_n(d['total_usdt'])} USDT</b>"
-          + (f" ≈ <b>{d['total_krw']:,.0f}원</b> (1 USDT = {d['krw_rate']:,.0f}원)" if d.get("total_krw") else "")]
+    mt5 = d.get("mt5") or []
+    if mt5:
+        L.append("")
+        L.append(f"<b>MT5 평가금(증거금)</b>  {_n(d['mt5_total'])}")
+        L += [f"   {html.escape(m['account_number'])}  " + (f"{_n(m['equity'])} {html.escape(m['currency'])}" if m["ok"] else "MT5 연결 안 됨")
+              for m in mt5]
+    krw = d.get("krw_rate")
+    won = lambda v: f" ≈ {v * krw:,.0f}원" if krw else ""
+    L += ["", "━━━━━━━━━━━━━━",
+          f"지갑 합계 <b>{_n(d['total_usdt'])} USDT</b>{won(d['total_usdt'])}"
+          + (f"\n   = MT5 평가금의 <b>{d['wallet_pct']:.1f}%</b>" if d.get("wallet_pct") is not None else "")]
+    if mt5:
+        L.append(f"MT5 평가금 <b>{_n(d['mt5_total'])}</b>{won(d['mt5_total'])}")
+        L.append(f"전체 (지갑 + MT5) <b>{_n(d['grand_usdt'])}</b>{won(d['grand_usdt'])}")
+    if krw:
+        L.append(f"<i>1 USDT = {krw:,.0f}원 · MT5 계좌 달러는 USDT 와 1:1 로 계산</i>")
     deps = [x for x in (bn.get("deposits") or []) if x["done"]][:3]
     if deps:
         L.append("")
