@@ -212,6 +212,7 @@
     <button data-tab="guides">지침</button>
     <button data-tab="telegram">텔레그램</button>
     <button data-tab="access">접속</button>
+    <button data-tab="wallets">지갑</button>
     <button data-tab="logs">로그</button>
     <button data-tab="update" id="updateTab">업데이트</button>
     <button data-tab="webapp" id="webappTab" hidden>📱 앱</button>
@@ -628,6 +629,39 @@
     </div>
   </section>
 
+  <section id="wallets">
+    <div class="panel">
+      <h2>지갑 잔고 <small class="hint" id="wlAt" style="font-weight:400"></small>
+        <button class="btn" id="wlRefresh" style="float:right;padding:3px 10px;font-size:12px">새로고침</button></h2>
+      <div id="wlSum"><div class="empty">불러오는 중…</div></div>
+    </div>
+    <div class="panel">
+      <h2>바이낸스</h2>
+      <div id="wlBn"></div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+        <input id="wlBnKey" type="password" autocomplete="off" placeholder="API Key" style="flex:1;min-width:200px">
+        <input id="wlBnSec" type="password" autocomplete="off" placeholder="Secret Key" style="flex:1;min-width:200px">
+      </div>
+      <div class="actions">
+        <button class="btn" id="wlBnClear">키 지우기</button>
+        <button class="btn primary" id="wlBnSave">키 저장 · 연결 확인</button>
+      </div>
+      <p class="hint">바이낸스 → API 관리에서 키를 만들 때 <b>'읽기(Enable Reading)'만</b> 켜고 거래·출금 권한은 끄고,
+        '신뢰할 수 있는 IP' 에 이 서버 PC 의 공인 IP 만 넣으세요. 그러면 키가 새도 잔고를 보는 것 말고는 아무것도 할 수 없습니다.
+        넣은 키는 계좌 비밀번호와 같은 방식으로 암호화해서 저장하고, 이 화면에는 다시 보여주지 않습니다 (앞뒤 4자만).</p>
+    </div>
+    <div class="panel">
+      <h2>BSC 개인 지갑</h2>
+      <p class="hint">주소만 넣으면 BNB · USDT · USDC 잔고를 공개 노드로 봅니다. 개인키나 비밀번호는 필요 없고, 주소로는 돈을 옮길 수 없습니다.</p>
+      <div id="wlList"></div>
+      <label class="switch" style="margin-top:10px"><input type="checkbox" id="wlNotify"> 입금 알림 (5분마다 확인 · 바이낸스 입금 완료, BSC 지갑 잔고가 늘면 텔레그램)</label>
+      <div class="actions">
+        <button class="btn" id="wlAdd">+ 지갑 추가</button>
+        <button class="btn primary" id="wlSave">저장</button>
+      </div>
+    </div>
+  </section>
+
   <section id="update">
     <div class="panel">
       <h2>업데이트</h2>
@@ -676,6 +710,7 @@ $('tabs').onclick = (e) => {
   if (b.dataset.tab === 'dash') loadEvents();
   if (b.dataset.tab === 'logs') loadLogList();
   if (b.dataset.tab === 'update') loadUpdate(false);
+  if (b.dataset.tab === 'wallets') loadWallets(false);
   if (b.dataset.tab === 'phrases') loadPhrases();
   if (b.dataset.tab === 'guides') loadGuides();
   if (b.dataset.tab === 'acctab') loadAccounts();
@@ -1634,6 +1669,74 @@ async function loadUpdate(check) {
   loadDownloads(check);
 }
 // 버전별 다운로드 횟수 (GitHub 릴리스 자산의 download_count, 서버에서 10분 캐시)
+// ── 지갑 (바이낸스 · BSC) ──
+let wlRows = [];
+const wlAmt = (a) => `${Number(a.amount).toLocaleString('en-US', { maximumFractionDigits: ['USDT', 'USDC', 'FDUSD', 'BUSD'].includes(a.asset) ? 2 : 6 })} ${esc(a.asset)}`;
+function wlRenderList() {
+  $('wlList').innerHTML = wlRows.length ? wlRows.map((w, i) => `<div class="row" style="display:flex;gap:6px;margin:4px 0;align-items:center">
+      <input data-i="${i}" data-k="label" value="${esc(w.label)}" placeholder="이름" style="width:110px">
+      <input data-i="${i}" data-k="address" value="${esc(w.address)}" placeholder="0x… (42자)" style="flex:1;font-family:monospace;font-size:12px">
+      <button class="btn" data-del="${i}" title="이 지갑 빼기">삭제</button></div>`).join('')
+    : '<p class="hint">등록한 지갑이 없습니다. [+ 지갑 추가]를 누르세요.</p>';
+}
+async function loadWallets(refresh) {
+  $('wlSum').innerHTML = '<div class="empty">불러오는 중…</div>';
+  try {
+    const r = await api('wallets' + (refresh ? '?refresh=true' : ''));
+    const c = r.config, d = r.data || {};
+    wlRows = c.bsc.map((w) => ({ ...w }));
+    wlRenderList();
+    $('wlNotify').checked = c.notify;
+    const bn = d.binance || {};
+    const src = c.binance_src === 'env' ? ' (.env 의 키)' : '';
+    $('wlBn').innerHTML = !c.binance ? '<p class="hint">키가 없습니다. 아래에 넣고 [키 저장]을 누르세요.</p>'
+      : bn.ok ? `<p>연결됨 · 키 <code>${esc(c.binance_key)}</code>${src} · ${money(bn.total_usdt)} USDT</p>`
+      : `<p>키 <code>${esc(c.binance_key)}</code>${src}</p><div class="warnbar">${esc(bn.error || '조회 실패')}</div>`;
+    $('wlBnClear').hidden = c.binance_src !== 'admin';
+    if (d.error) { $('wlSum').innerHTML = `<div class="warnbar">${esc(d.error)}</div>`; return; }
+    const tr = (name, w) => w.ok
+      ? `<tr><td>${name}</td><td>${w.assets.map(wlAmt).join('<br>') || '<span class="muted">비어 있음</span>'}</td><td style="text-align:right">${money(w.total_usdt)}</td></tr>`
+      : `<tr><td>${name}</td><td colspan="2" class="muted">${esc(w.error)}</td></tr>`;
+    const rows = [];
+    if (c.binance) rows.push(tr('바이낸스', bn));
+    for (const w of d.bsc || []) rows.push(tr(`BSC · ${esc(w.label)}<br><small class="muted" style="font-family:monospace">${esc(w.address.slice(0, 6) + '…' + w.address.slice(-4))}</small>`, w));
+    const deps = (bn.deposits || []).filter((x) => x.done).slice(0, 5);
+    $('wlSum').innerHTML = rows.length ? `<table class="tbl" style="width:100%"><thead><tr><th style="text-align:left">어디</th><th style="text-align:left">코인</th><th style="text-align:right">USDT 환산</th></tr></thead>
+        <tbody>${rows.join('')}</tbody>
+        <tfoot><tr><th style="text-align:left">합계</th><th></th><th style="text-align:right">${money(d.total_usdt)} USDT${d.total_krw ? `<br><small>≈ ${Math.round(d.total_krw).toLocaleString()}원</small>` : ''}</th></tr></tfoot></table>
+      ${d.krw_rate ? `<p class="hint">1 USDT = ${Math.round(d.krw_rate).toLocaleString()}원 (업비트) · 코인 시세는 바이낸스</p>` : ''}
+      ${deps.length ? `<h3 style="margin-top:14px">최근 바이낸스 입금</h3>${deps.map((x) => `<div class="muted" style="font-size:13px">${esc(new Date(x.time * 1000).toLocaleString())} · +${Number(x.amount).toLocaleString()} ${esc(x.coin)} (${esc(x.network)})</div>`).join('')}` : ''}`
+      : '<p class="hint">바이낸스 키나 BSC 지갑을 넣으면 여기에 잔고가 나옵니다.</p>';
+    $('wlAt').textContent = d.at ? new Date(d.at * 1000).toLocaleTimeString() + ' 기준' : '';
+  } catch (e) { $('wlSum').innerHTML = `<div class="warnbar">${esc(e.message)}</div>`; }
+}
+$('wlList').addEventListener('input', (e) => { const i = e.target.dataset.i; if (i != null) wlRows[i][e.target.dataset.k] = e.target.value.trim(); });
+$('wlList').addEventListener('click', (e) => { const i = e.target.dataset.del; if (i != null) { wlRows.splice(Number(i), 1); wlRenderList(); } });
+$('wlAdd').onclick = () => { wlRows.push({ label: `지갑${wlRows.length + 1}`, address: '' }); wlRenderList(); };
+$('wlRefresh').onclick = () => loadWallets(true);
+$('wlBnSave').onclick = async () => {
+  const k = $('wlBnKey').value.trim(), sec = $('wlBnSec').value.trim();
+  if (!k || !sec) { toast('API Key 와 Secret Key 를 둘 다 넣으세요.', true); return; }
+  try {
+    await api('wallets', { method: 'PUT', body: JSON.stringify({ binance_key: k, binance_secret: sec }) });
+    $('wlBnKey').value = ''; $('wlBnSec').value = '';
+    toast('저장했습니다. 연결을 확인합니다…');
+    loadWallets(true);
+  } catch (e) { toast(e.message, true); }
+};
+$('wlBnClear').onclick = async () => {
+  if (!confirm('저장한 바이낸스 키를 지울까요?')) return;
+  try { await api('wallets', { method: 'PUT', body: JSON.stringify({ binance_clear: true }) }); toast('지웠습니다.'); loadWallets(true); }
+  catch (e) { toast(e.message, true); }
+};
+$('wlSave').onclick = async () => {
+  try {
+    await api('wallets', { method: 'PUT', body: JSON.stringify({ bsc: wlRows.filter((w) => w.address), notify: $('wlNotify').checked }) });
+    toast('저장했습니다.');
+    loadWallets(true);
+  } catch (e) { toast(e.message, true); }
+};
+
 async function loadDownloads(refresh) {
   let box = $('updDownloads');
   if (!box) { box = document.createElement('div'); box.id = 'updDownloads'; box.style.marginTop = '18px'; $('updBody').after(box); }

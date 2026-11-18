@@ -1262,6 +1262,9 @@ class TelegramLive:
                 elif mine and (text.startswith("/문구") or text.startswith("/phrases")):
                     from services import telegram_phrases
                     await telegram_phrases.cmd_phrases(self, client, token, cid)
+                elif mine and (text.startswith("/잔고") or text.startswith("/wallet")):
+                    from services import wallets
+                    await wallets.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                 elif mine and (text.startswith("/출금") or text.startswith("/withdraw")):
                     from services import withdraw_notice
                     await withdraw_notice.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
@@ -1438,12 +1441,15 @@ class TelegramLive:
             oneway_task = asyncio.create_task(oneway.loop())
             from services import withdraw_notice         # 출금 알림 (services/withdraw_notice.py)
             wd_task = asyncio.create_task(withdraw_notice.loop(self, client))
+            from services import wallets                 # 바이낸스 · BSC 지갑 입금 알림 (services/wallets.py)
+            wallet_task = asyncio.create_task(wallets.loop(self, client))
             try:
                 await self._poll_loop(client)
             finally:
                 live_task.cancel()
                 oneway_task.cancel()
                 wd_task.cancel()
+                wallet_task.cancel()
 
     async def _poll_loop(self, client: httpx.AsyncClient) -> None:
         while True:
@@ -1462,6 +1468,7 @@ class TelegramLive:
                         print(f"[telegram-live] 봇 {status['bot']} 연결됨 - 봇에게 /start 를 보내면 chat id를 알려줍니다")
                         await self._call(client, token, "setMyCommands", commands=[
                             {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
+                            {"command": "wallet", "description": "바이낸스 · BSC 지갑 잔고 (/잔고 · /잔고 추가 0x주소 이름)"},
                             {"command": "withdraw", "description": "출금 가능액 + 출금 페이지 (/출금 · /출금 알림 30)"},
                             {"command": "show", "description": "실시간 현황에 보일 것 켜고 끄기 (/표시)"},
                             {"command": "oneway", "description": "원웨이 장 - 지금 몇 KTR 갔는지·알림 설정 (/원웨이)"},

@@ -996,6 +996,32 @@ def _log_dir() -> str:
     return RUNTIME.get("log_dir") or os.path.join(BASE_DIR, "logs")
 
 
+@router.get("/api/wallets")
+async def wallets_get(refresh: bool = False):
+    """바이낸스(읽기 전용 키) · BSC 지갑 잔고 (services/wallets.py)"""
+    from services import wallets
+    c = wallets.cfg()
+    try:
+        data = await wallets.summary(refresh=refresh)
+    except Exception as e:
+        data = {"error": str(e)}
+    return {"config": c, "data": data}
+
+
+@router.put("/api/wallets")
+async def wallets_put(body: dict):
+    from services import wallets
+    try:
+        if body.get("binance_clear"):
+            wallets.save_binance(None, None, clear=True)
+        elif body.get("binance_key") or body.get("binance_secret"):
+            wallets.save_binance(body.get("binance_key"), body.get("binance_secret"))   # 암호화해서 저장 · 응답에 Secret 없음
+        c = wallets.save_cfg(bsc=body.get("bsc"), notify=body.get("notify"))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"config": c}
+
+
 @router.get("/api/logs")
 async def list_logs():
     d = _log_dir()
