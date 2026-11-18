@@ -664,7 +664,7 @@
           <button class="btn" id="bkHookCopy">복사</button></div>
         <p class="hint">이 주소 안의 token 은 비밀번호처럼 다루세요 (아는 사람은 잔액 숫자를 바꿀 수 있음 - 그 밖의 것은 못 함).</p>
       </details>
-      <h3 style="margin:16px 0 6px">자동 조회 (CODEF) <small class="hint" style="font-weight:400">아이디 로그인이 되는 은행만: 국민·신한·하나·농협·기업·SC·iM(대구)·전북·경남·새마을금고·우체국 · 데모는 하루 100회라 1시간에 한 번 조회</small></h3>
+      <h3 style="margin:16px 0 6px">자동 조회 (CODEF) <small class="hint" style="font-weight:400">아이디: 국민·신한·하나·농협·기업·SC·iM(대구)·전북·경남·새마을금고·우체국 · 공동인증서: 위 은행 + 광주·부산·제주·산업·수협·신협 · 데모는 하루 100회라 1시간에 한 번 조회</small></h3>
       <div id="bkCodef"></div>
       <div id="bkKeys" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0">
         <input id="bkCid" type="password" autocomplete="off" placeholder="Client ID" style="flex:1 1 160px;min-width:0">
@@ -674,15 +674,22 @@
         <button class="btn" id="bkKeyClear" style="white-space:nowrap">키 · 연결 모두 지우기</button>
       </div>
       <div id="bkConnect" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0">
+        <select id="bkType" style="width:110px"><option value="id">아이디</option><option value="cert">공동인증서</option></select>
         <select id="bkOrg" style="width:140px"></select>
         <input id="bkId" type="text" autocomplete="off" placeholder="인터넷뱅킹 아이디" style="flex:1 1 140px;min-width:0">
+        <label id="bkCertWrap" class="hint" style="display:none;gap:6px;align-items:center;flex-wrap:wrap">
+          signCert.der <input id="bkDer" type="file" accept=".der">
+          signPri.key <input id="bkKey" type="file" accept=".key"></label>
         <input id="bkPw" type="password" autocomplete="new-password" placeholder="인터넷뱅킹 비밀번호" style="flex:1 1 140px;min-width:0">
         <input id="bkBirth" type="text" inputmode="numeric" placeholder="생년월일 (선택 · 국민·대구)" style="width:170px">
         <button class="btn primary" id="bkConn" style="white-space:nowrap">은행 연결</button>
       </div>
       <p class="hint">CODEF 키는 codef.io 가입 → 마이페이지 → 키 관리(데모)에서 받습니다. 키와 연결 정보는 암호화해서 저장합니다.
         은행 비밀번호는 CODEF 공개키로 암호화해 CODEF 로만 보내고 이 서버에는 남기지 않습니다 (연결 아이디만 저장).
-        다만 은행 로그인을 외부 업체(CODEF)에 맡기는 방식이라는 점은 알고 쓰세요.</p>
+        다만 은행 로그인을 외부 업체(CODEF)에 맡기는 방식이라는 점은 알고 쓰세요.<br>
+        <b>공동인증서</b>: PC 의 <code>C:\Users\(이름)\AppData\LocalLow\NPKI\yessign\USER\(인증서 폴더)</code> 안 <code>signCert.der</code> · <code>signPri.key</code> 두 파일을 고르고 인증서 비밀번호를 넣으세요
+        (은행마다 폴더가 yessign · KICA · SignKorea 등). 금융인증서(클라우드)는 파일이 없어 안 됩니다. 인증서 파일과 비밀번호도 서버에 남기지 않습니다.
+        인증서는 이체 등에도 쓰이는 열쇠라 아이디 방식보다 무게가 큽니다 - 되도록 아이디 방식이 되는 은행은 아이디로 연결하세요.</p>
     </div>
     <div class="panel">
       <h2>개인 지갑</h2>
@@ -1769,16 +1776,27 @@ $('wlAdd').onclick = () => { wlRows.push({ network: 'bsc', label: `지갑${wlRow
 $('wlRefresh').onclick = () => loadWallets(true);
 
 // ── 은행 (직접 입력 · CODEF) ──
-let bkRows = [];
+let bkRows = [], bkBanks = {};
+function bkTypeChange() {
+  const cert = $('bkType').value === 'cert';
+  const list = (cert ? bkBanks.banks_cert : bkBanks.banks_id) || {};
+  const keep = $('bkOrg').value;
+  $('bkOrg').innerHTML = Object.entries(list).map(([k, n]) => `<option value="${k}"${k === keep ? ' selected' : ''}>${esc(n)}</option>`).join('');
+  $('bkId').style.display = cert ? 'none' : '';
+  $('bkCertWrap').style.display = cert ? 'flex' : 'none';
+  $('bkPw').placeholder = cert ? '인증서 비밀번호' : '인터넷뱅킹 비밀번호';
+}
+const bkFile64 = (f) => new Promise((ok, bad) => { const r = new FileReader(); r.onload = () => ok(String(r.result).split(',')[1] || ''); r.onerror = bad; r.readAsDataURL(f); });
 function bkRender(b) {
   bkRows = (b.manual || []).map((m) => ({ ...m }));
   const host = /^(127\.|localhost)/.test(location.hostname) ? `http://폰에서-쓰는-주소:${location.port || 8000}` : location.origin;
   $('bkHook').value = `${host}/hook/bank?token=${b.hook_token || ''}&name=${encodeURIComponent((b.manual || [])[0]?.name || '토스뱅크')}`;
   bkRenderManual();
-  $('bkOrg').innerHTML = Object.entries(b.banks || {}).map(([k, n]) => `<option value="${k}">${esc(n)}</option>`).join('');
+  bkBanks = b;
+  bkTypeChange();
   $('bkCodef').innerHTML = !b.codef ? '<p class="hint">CODEF 키가 없습니다. 아래에 넣고 [키 저장]을 누르세요.</p>'
     : `<p>CODEF 키 <code>${esc(b.codef_id)}</code> · 연결한 은행: ${(b.orgs || []).length ? b.orgs.map((o) =>
-        `<span class="pill" style="margin-right:6px">${esc(o.name)} <a href="#" data-unlink="${o.organization}" title="연결 해제">✕</a></span>`).join('') : '없음'}</p>`;
+        `<span class="pill" style="margin-right:6px">${esc(o.name)} <small class="muted">(${esc(o.login)})</small> <a href="#" data-unlink="${o.organization}" title="연결 해제">✕</a></span>`).join('') : '없음'}</p>`;
   $('bkConnect').style.display = b.codef ? 'flex' : 'none';
   $('bkKeyClear').hidden = !b.codef;
 }
@@ -1810,13 +1828,19 @@ $('bkKeyClear').onclick = async () => {
   try { await api('wallets', { method: 'PUT', body: JSON.stringify({ codef_clear: true }) }); toast('지웠습니다.'); loadWallets(false); }
   catch (e) { toast(e.message, true); }
 };
+$('bkType').onchange = bkTypeChange;
 $('bkConn').onclick = async () => {
+  const cert = $('bkType').value === 'cert';
   const body = { organization: $('bkOrg').value, login_id: $('bkId').value.trim(), password: $('bkPw').value, birth: $('bkBirth').value.trim() };
-  if (!body.login_id || !body.password) { toast('인터넷뱅킹 아이디와 비밀번호를 넣으세요.', true); return; }
+  if (cert) {
+    const d = $('bkDer').files[0], k = $('bkKey').files[0];
+    if (!d || !k || !body.password) { toast('signCert.der · signPri.key 파일과 인증서 비밀번호를 넣으세요.', true); return; }
+    body.cert_der = await bkFile64(d); body.cert_key = await bkFile64(k); body.login_id = '';
+  } else if (!body.login_id || !body.password) { toast('인터넷뱅킹 아이디와 비밀번호를 넣으세요.', true); return; }
   $('bkConn').disabled = true; $('bkConn').textContent = '연결 중…';
   try { await api('wallets/bank', { method: 'POST', body: JSON.stringify(body) }); $('bkPw').value = ''; toast('연결했습니다. 잔고를 불러옵니다…'); loadWallets(true); }
   catch (e) { toast(e.message, true); }
-  finally { $('bkPw').value = ''; $('bkConn').disabled = false; $('bkConn').textContent = '은행 연결'; }
+  finally { $('bkPw').value = ''; $('bkDer').value = ''; $('bkKey').value = ''; $('bkConn').disabled = false; $('bkConn').textContent = '은행 연결'; }
 };
 $('bkCodef').addEventListener('click', async (e) => {
   const o = e.target.dataset.unlink; if (!o) return; e.preventDefault();

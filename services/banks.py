@@ -24,14 +24,18 @@ CODEF_API = "https://development.codef.io"          # 데모 (정식은 api.code
 REFRESH_SEC = 3600
 STALE_DAYS = 14
 MIN_GAP_SEC = 600
-# CODEF 기관 코드 - '은행 개인' 중 아이디 로그인으로 보유계좌 조회가 되는 곳만 (CODEF 은행 API 명세 2026.11.10 기준)
-#   빠진 곳: 산업·수협·부산·광주·제주·신협 (아이디 로그인 미제공), K뱅크 (2023 개인뱅킹 웹 종료), 카카오뱅크·토스뱅크 (대상 아님)
+# CODEF 기관 코드 (CODEF 은행 API 명세 2026.11.10 '기관별 개발현황' 기준, 보유계좌 조회 되는 곳)
+#   BANKS_ID   : 인터넷뱅킹 아이디·비밀번호로 되는 곳
+#   BANKS_CERT : 공동인증서(파일 signCert.der · signPri.key + 인증서 비밀번호)로 되는 곳 - 아이디가 안 되는 은행 포함
+#   빠진 곳: K뱅크 (2023 개인뱅킹 웹 종료), 카카오뱅크·토스뱅크 (대상 아님),
 #            우리은행 (로그인에 출금계좌 번호·비밀번호 필수 + 문자 인증), 씨티 (문자 인증)
-#   국민·대구는 생년월일을 요구할 때가 있음 (선택 입력)
-BANKS = {
+#   국민·대구 등은 생년월일을 요구할 때가 있음 (선택 입력)
+BANKS_ID = {
     "0004": "국민", "0088": "신한", "0081": "하나", "0011": "농협", "0003": "기업", "0023": "SC제일",
     "0031": "iM뱅크(대구)", "0037": "전북", "0039": "경남", "0045": "새마을금고", "0071": "우체국",
 }
+BANKS_CERT = dict(BANKS_ID, **{"0034": "광주", "0032": "부산", "0035": "제주", "0002": "산업", "0007": "수협", "0048": "신협"})
+BANKS = BANKS_CERT
 
 
 # ── 설정 ──
@@ -68,8 +72,9 @@ def cfg() -> dict:
         "hook_token": hook_token(),
         "codef": bool(keys.get("client_id")),
         "codef_id": (keys.get("client_id", "")[:6] + "…") if keys.get("client_id") else "",
-        "orgs": [{"organization": o, "name": BANKS.get(o, o)} for o in raw.get("orgs") or []],
-        "banks": BANKS,
+        "orgs": [{"organization": o, "name": BANKS.get(o, o), "login": "인증서" if (raw.get("org_login") or {}).get(o) == "0" else "아이디"}
+                 for o in raw.get("orgs") or []],
+        "banks": BANKS, "banks_id": BANKS_ID, "banks_cert": BANKS_CERT,
     }
 
 
@@ -121,7 +126,7 @@ def set_codef_keys(client_id: str, client_secret: str, public_key: str) -> None:
 
 def clear_codef() -> None:
     cur = _raw()
-    for k in ("codef_enc", "connected_enc", "orgs", "birth_enc"):
+    for k in ("codef_enc", "connected_enc", "orgs", "birth_enc", "org_login"):
         cur.pop(k, None)
     _put(cur)
     _token.clear()
@@ -173,14 +178,29 @@ def _rsa(password: str) -> str:
     return base64.b64encode(pub.encrypt(password.encode(), padding.PKCS1v15())).decode()
 
 
-async def connect_bank(organization: str, login_id: str, password: str, birth: str = "") -> None:
-    """은행 하나 연결 (인터넷뱅킹 아이디·비밀번호). 비밀번호는 여기서 암호화해 CODEF 로만 보내고 저장하지 않음"""
-    if organization not in BANKS:
-        raise ValueError("은행을 고르세요")
-    if not login_id or not password:
-        raise ValueError("인터넷뱅킹 아이디와 비밀번호를 넣어 주세요")
-    acc = {"countryCode": "KR", "businessType": "BK", "clientType": "P", "organization": organization,
-           "loginType": "1", "id": login_id, "password": _rsa(password)}
+async def connect_bank(organization: str, login_id: str, password: str, birth: str = "",
+                       cert_der: str = "", cert_key: str = "") -> None:
+    """은행 하나 연결. 비밀번호·인증서는 CODEF 로만 보내고 이 서버에는 저장하지 않음 (연결 아이디만 남김)
+    아이디 방식: login_id + password(인터넷뱅킹)  /  인증서 방식: cert_der · cert_key (파일 내용 base64) + password(인증서 비밀번호)"""
+    cert = bool(cert_der or cert_key)
+    if organization not in (BANKS_CERT if cert else BANKS_ID):
+        raise ValueError("이 은행은 " + ("인증서로 연결할 수 없습니다" if cert else "아이디로 안 됩니다 - 인증서 방식으로 연결하세요"))
+    if cert:
+        try:
+            der, key = base64.b64decode(cert_der, validate=True), base64.b64decode(cert_key, validate=True)
+        except Exception:
+            raise ValueError("인증서 파일을 읽지 못했습니다")
+        if not (100 < len(der) < 20000 and 100 < len(key) < 20000):
+            raise ValueError("signCert.der · signPri.key 파일이 맞는지 확인하세요")
+        if not password:
+            raise ValueError("인증서 비밀번호를 넣어 주세요")
+        acc = {"countryCode": "KR", "businessType": "BK", "clientType": "P", "organization": organization,
+               "loginType": "0", "derFile": cert_der, "keyFile": cert_key, "password": _rsa(password)}
+    else:
+        if not login_id or not password:
+            raise ValueError("인터넷뱅킹 아이디와 비밀번호를 넣어 주세요")
+        acc = {"countryCode": "KR", "businessType": "BK", "clientType": "P", "organization": organization,
+               "loginType": "1", "id": login_id, "password": _rsa(password)}
     birth = "".join(ch for ch in (birth or "") if ch.isdigit())
     if birth:
         if len(birth) != 8:
@@ -199,6 +219,7 @@ async def connect_bank(organization: str, login_id: str, password: str, birth: s
     cur = _raw()
     cur["connected_enc"] = _enc({"id": connected})
     cur["orgs"] = sorted(set((cur.get("orgs") or []) + [organization]))
+    cur["org_login"] = dict(cur.get("org_login") or {}, **{organization: acc["loginType"]})
     if birth:
         b = _dec(cur.get("birth_enc")) or {}
         b[organization] = birth
@@ -214,10 +235,12 @@ async def disconnect_bank(organization: str) -> None:
         try:
             async with httpx.AsyncClient() as client:
                 await _call(client, "/v1/account/delete", {"connectedId": connected, "accountList": [
-                    {"countryCode": "KR", "businessType": "BK", "clientType": "P", "organization": organization, "loginType": "1"}]})
+                    {"countryCode": "KR", "businessType": "BK", "clientType": "P", "organization": organization,
+                     "loginType": (cur.get("org_login") or {}).get(organization, "1")}]})
         except Exception:
             pass
     cur["orgs"] = [o for o in cur.get("orgs") or [] if o != organization]
+    cur["org_login"] = {k: v for k, v in (cur.get("org_login") or {}).items() if k != organization}
     _put(cur)
     st = _load_state()
     st["banks"] = [b for b in st.get("banks") or [] if b.get("organization") != organization]
