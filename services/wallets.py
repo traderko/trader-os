@@ -1,13 +1,15 @@
-"""출금한 돈이 간 곳 잔고 보기 - 바이낸스(읽기 전용 API 키) + BSC 개인 지갑(주소만, 여러 개)
+"""출금한 돈이 간 곳 잔고 보기 - 바이낸스(읽기 전용 API 키) + 개인 지갑(주소만, 여러 네트워크 · 여러 개)
 
   바이낸스 : 관리 화면 '지갑' 탭에서 넣은 API 키 (암호화해서 settings "wallets.binance_enc" 에 저장 -
              계좌 비밀번호와 같은 키 services/crypto.py). 없으면 .env 의 BINANCE_API_KEY · BINANCE_API_SECRET
              키는 '읽기'만 켜고 IP 제한 권장 - 출금·거래 권한 X
              현물(Spot) + 펀딩(Funding) 지갑 잔고, 최근 입금 내역
-  BSC 지갑 : 주소만 있으면 공개 노드(JSON-RPC)로 BNB · USDT · USDC 잔고 조회 (키·개인키 필요 없음, 돈을 옮길 수 없음)
-             주소 목록은 settings "wallets.bsc" = [{address, label}] (관리 화면 '지갑' 탭 · 텔레그램 /잔고 추가)
+  개인 지갑 : 주소만 있으면 공개 노드로 잔고 조회 (키·개인키 필요 없음, 주소로는 돈을 옮길 수 없음)
+             네트워크: BSC · Ethereum · TRON · Polygon · Arbitrum · Base · Optimism · Avalanche · Solana · Bitcoin
+             (EVM 은 기본 코인 + USDT · USDC, TRON 은 TRX + USDT · USDC, Solana 는 SOL + USDT · USDC, Bitcoin 은 BTC)
+             목록은 settings "wallets.list" = [{network, address, label}] (예전 "wallets.bsc" 도 읽음)
   환산     : 코인 → USDT 는 바이낸스 공개 시세, USDT → 원화는 업비트 공개 시세 (키 필요 없음)
-  알림     : 5분마다 - 바이낸스 새 입금(완료), BSC 지갑 잔고가 늘면 텔레그램 (settings "wallets.notify")
+  알림     : 5분마다 - 바이낸스 새 입금(완료), 개인 지갑 잔고가 늘면 텔레그램 (settings "wallets.notify")
 """
 from __future__ import annotations
 
@@ -23,13 +25,58 @@ from urllib.parse import urlencode
 import httpx
 
 BINANCE = "https://api.binance.com"
-BSC_RPCS = ["https://bsc-dataseed.bnbchain.org", "https://bsc-dataseed1.binance.org", "https://bsc-rpc.publicnode.com"]
-BSC_TOKENS = [  # (이름, 계약 주소, 소수 자릿수) - BSC 의 USDT·USDC 는 18자리
-    ("USDT", "0x55d398326f99059fF775485246999027B3197955", 18),
-    ("USDC", "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", 18),
-]
+# EVM 네트워크: (이름, 공개 노드들, 기본 코인, 토큰 [(이름, 계약, 소수 자릿수)])
+EVM = {
+    "bsc": ("BSC (BEP20)", ["https://bsc-dataseed.bnbchain.org", "https://bsc-dataseed1.binance.org", "https://bsc-rpc.publicnode.com"], "BNB",
+            [("USDT", "0x55d398326f99059fF775485246999027B3197955", 18), ("USDC", "0x8AC76a51cc950d9822D68b83fE1Ad97B32Cd580d", 18)]),
+    "eth": ("Ethereum (ERC20)", ["https://ethereum-rpc.publicnode.com", "https://eth.llamarpc.com", "https://cloudflare-eth.com"], "ETH",
+            [("USDT", "0xdAC17F958D2ee523a2206206994597C13D831ec7", 6), ("USDC", "0xA0b86991c6218b36c1d19D4a2e9Eb0cE3606eB48", 6)]),
+    "polygon": ("Polygon", ["https://polygon-bor-rpc.publicnode.com", "https://polygon-rpc.com"], "POL",
+                [("USDT", "0xc2132D05D31c914a87C6611C10748AEb04B58e8F", 6), ("USDC", "0x3c499c542cEF5E3811e1192ce70d8cC03d5c3359", 6)]),
+    "arbitrum": ("Arbitrum One", ["https://arb1.arbitrum.io/rpc", "https://arbitrum-one-rpc.publicnode.com"], "ETH",
+                 [("USDT", "0xFd086bC7CD5C481DCC9C85ebE478A1C0b69FCbb9", 6), ("USDC", "0xaf88d065e77c8cC2239327C5EDb3A432268e5831", 6)]),
+    "base": ("Base", ["https://mainnet.base.org", "https://base-rpc.publicnode.com"], "ETH",
+             [("USDC", "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913", 6)]),
+    "optimism": ("Optimism", ["https://mainnet.optimism.io", "https://optimism-rpc.publicnode.com"], "ETH",
+                 [("USDT", "0x94b008aA00579c1307B0EF2c499aD98a8ce58e58", 6), ("USDC", "0x0b2C639c533813f4Aa9D7837CAf62653d097Ff85", 6)]),
+    "avax": ("Avalanche C", ["https://api.avax.network/ext/bc/C/rpc", "https://avalanche-c-chain-rpc.publicnode.com"], "AVAX",
+             [("USDT", "0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7", 6), ("USDC", "0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E", 6)]),
+}
+TRON_API = "https://api.trongrid.io"
+TRON_TOKENS = [("USDT", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", 6), ("USDC", "TEkxiTehnzSmSe2XqrBj4w32RUN966rdz8", 6)]
+SOL_RPCS = ["https://api.mainnet-beta.solana.com", "https://solana-rpc.publicnode.com"]
+SOL_TOKENS = [("USDT", "Es9vMFrzaCERmJfrF4H2FYD4KCoNkY11McCe8BenwNYB"), ("USDC", "EPjFWdd5AufqSSqeM2qJLdkuZRZ4pR4D3pTz7cDhGWv")]
+NETWORKS = {k: v[0] for k, v in EVM.items()} | {"tron": "TRON (TRC20)", "sol": "Solana", "btc": "Bitcoin"}
+ADDR_RES = {
+    "evm": re.compile(r"^0x[0-9a-fA-F]{40}$"),
+    "tron": re.compile(r"^T[1-9A-HJ-NP-Za-km-z]{33}$"),
+    "sol": re.compile(r"^[1-9A-HJ-NP-Za-km-z]{32,44}$"),
+    "btc": re.compile(r"^(bc1[02-9ac-hj-np-z]{11,71}|[13][1-9A-HJ-NP-Za-km-z]{25,34})$"),
+}
+ALIASES = {"bep20": "bsc", "bnb": "bsc", "erc20": "eth", "ethereum": "eth", "trc20": "tron", "trx": "tron",
+           "matic": "polygon", "pol": "polygon", "arb": "arbitrum", "op": "optimism", "avalanche": "avax",
+           "solana": "sol", "bitcoin": "btc"}
+
+
+def net_key(x: str) -> str:
+    x = (x or "").strip().lower()
+    return x if x in NETWORKS else ALIASES.get(x, "")
+
+
+def valid_addr(net: str, addr: str) -> bool:
+    kind = "evm" if net in EVM else net
+    return bool(ADDR_RES.get(kind) and ADDR_RES[kind].match(addr or ""))
+
+
+def guess_net(addr: str) -> str:
+    """주소 모양으로 짐작 (0x… 는 어느 EVM 인지 알 수 없어 BSC 로)"""
+    for k in ("tron", "btc", "sol"):
+        if valid_addr(k, addr):
+            return k
+    return "bsc" if valid_addr("bsc", addr) else ""
+
+
 STABLE = {"USDT", "USDC", "FDUSD", "BUSD", "TUSD", "DAI"}
-ADDR_RE = re.compile(r"^0x[0-9a-fA-F]{40}$")
 CACHE_SEC = 60
 NOTIFY_SEC = 300
 
@@ -69,30 +116,37 @@ def save_binance(key: str | None, secret: str | None, clear: bool = False) -> No
 def cfg() -> dict:
     from services.settings_service import get_settings
     raw = get_settings().get("wallets") or {}
-    bsc = []
-    for w in raw.get("bsc") or []:
-        a = str((w or {}).get("address") or "").strip()
-        if ADDR_RE.match(a):
-            bsc.append({"address": a, "label": str(w.get("label") or "").strip()[:30]})
+    items = raw.get("list")
+    if items is None:                                   # 예전 형식 (BSC 만)
+        items = [dict(w or {}, network="bsc") for w in raw.get("bsc") or []]
+    lst = []
+    for w in items:
+        net, a = net_key((w or {}).get("network")), str((w or {}).get("address") or "").strip()
+        if net and valid_addr(net, a):
+            lst.append({"network": net, "address": a, "label": str(w.get("label") or "").strip()[:30]})
     k, _, src = _binance_keys()
-    return {"bsc": bsc, "notify": bool(raw.get("notify", True)), "binance": bool(k), "binance_src": src,
-            "binance_key": f"{k[:4]}…{k[-4:]}" if k else ""}    # 화면에는 앞뒤 4자만 (Secret 은 절대 안 보냄)
+    return {"list": lst, "notify": bool(raw.get("notify", True)), "binance": bool(k), "binance_src": src,
+            "binance_key": f"{k[:4]}…{k[-4:]}" if k else "",     # 화면에는 앞뒤 4자만 (Secret 은 절대 안 보냄)
+            "networks": NETWORKS}
 
 
-def save_cfg(bsc: list[dict] | None = None, notify: bool | None = None) -> dict:
+def save_cfg(lst: list[dict] | None = None, notify: bool | None = None) -> dict:
     from services.settings_service import get_settings, update_settings
     cur = dict(get_settings().get("wallets") or {})
-    if bsc is not None:
+    if lst is not None:
         clean, seen = [], set()
-        for w in bsc:
-            a = str((w or {}).get("address") or "").strip()
-            if not ADDR_RE.match(a):
-                raise ValueError(f"BSC 주소가 아닙니다: {a[:20]}… (0x 로 시작하는 42자)")
-            if a.lower() in seen:
+        for w in lst:
+            net, a = net_key((w or {}).get("network")) or guess_net(str((w or {}).get("address") or "").strip()), str((w or {}).get("address") or "").strip()
+            if not net:
+                raise ValueError(f"네트워크를 고르세요: {a[:20]}")
+            if not valid_addr(net, a):
+                raise ValueError(f"{NETWORKS[net]} 주소가 아닙니다: {a[:24]}…")
+            if (net, a.lower()) in seen:
                 continue
-            seen.add(a.lower())
-            clean.append({"address": a, "label": str(w.get("label") or "").strip()[:30]})
-        cur["bsc"] = clean
+            seen.add((net, a.lower()))
+            clean.append({"network": net, "address": a, "label": str(w.get("label") or "").strip()[:30]})
+        cur["list"] = clean
+        cur.pop("bsc", None)
     if notify is not None:
         cur["notify"] = bool(notify)
     update_settings({"wallets": cur})
@@ -187,12 +241,12 @@ async def binance(client: httpx.AsyncClient, prices: dict) -> dict:
     return out
 
 
-# ── BSC 지갑 (주소만) ──
-async def _rpc(client: httpx.AsyncClient, calls: list[tuple[str, list]]) -> list:
+# ── 개인 지갑 (주소만) ──
+async def _rpc(client: httpx.AsyncClient, urls: list[str], calls: list[tuple[str, list]]) -> list:
     """JSON-RPC 여러 개를 한 번에 (노드가 안 되면 다음 노드)"""
     body = [{"jsonrpc": "2.0", "id": i, "method": m, "params": p} for i, (m, p) in enumerate(calls)]
     err = None
-    for url in BSC_RPCS:
+    for url in urls:
         try:
             r = await client.post(url, json=body, timeout=10)
             r.raise_for_status()
@@ -202,24 +256,59 @@ async def _rpc(client: httpx.AsyncClient, calls: list[tuple[str, list]]) -> list
             return [x["result"] for x in res]
         except Exception as e:
             err = e
-    raise RuntimeError(f"BSC 노드 연결 실패: {err}")
+    raise RuntimeError(f"노드 연결 실패: {err}")
 
 
-async def bsc_wallet(client: httpx.AsyncClient, w: dict, prices: dict) -> dict:
-    addr = w["address"]
-    out = {"address": addr, "label": w.get("label") or short(addr), "ok": False, "error": "", "assets": [], "total_usdt": 0.0}
+async def _evm(client, net: str, addr: str) -> list[tuple[str, float]]:
+    _, urls, native, tokens = EVM[net]
     calls = [("eth_getBalance", [addr, "latest"])]
-    for _, token, _ in BSC_TOKENS:
+    for _, token, _ in tokens:
         calls.append(("eth_call", [{"to": token, "data": "0x70a08231" + addr[2:].lower().rjust(64, "0")}, "latest"]))
+    res = await _rpc(client, urls, calls)
+    return [(native, int(res[0], 16) / 1e18)] + [(name, int(res[i + 1] or "0x0", 16) / 10 ** dec)
+                                                for i, (name, _, dec) in enumerate(tokens)]
+
+
+async def _tron(client, addr: str) -> list[tuple[str, float]]:
+    r = await client.get(f"{TRON_API}/v1/accounts/{addr}", timeout=10)
+    r.raise_for_status()
+    data = (r.json().get("data") or [{}])[0]               # 한 번도 안 쓴 주소면 비어 있음
+    trc = {}
+    for d in data.get("trc20") or []:
+        trc.update(d)
+    return [("TRX", int(data.get("balance") or 0) / 1e6)] + [(name, int(trc.get(c) or 0) / 10 ** dec) for name, c, dec in TRON_TOKENS]
+
+
+async def _sol(client, addr: str) -> list[tuple[str, float]]:
+    calls = [("getBalance", [addr])] + [("getTokenAccountsByOwner", [addr, {"mint": mint}, {"encoding": "jsonParsed"}])
+                                         for _, mint in SOL_TOKENS]
+    res = await _rpc(client, SOL_RPCS, calls)
+    out = [("SOL", int(res[0]["value"]) / 1e9)]
+    for (name, _), r in zip(SOL_TOKENS, res[1:]):
+        out.append((name, sum(float(a["account"]["data"]["parsed"]["info"]["tokenAmount"]["uiAmount"] or 0) for a in r["value"])))
+    return out
+
+
+async def _btc(client, addr: str) -> list[tuple[str, float]]:
+    r = await client.get(f"https://mempool.space/api/address/{addr}", timeout=10)
+    r.raise_for_status()
+    j = r.json()
+    sat = sum(j[k]["funded_txo_sum"] - j[k]["spent_txo_sum"] for k in ("chain_stats", "mempool_stats"))
+    return [("BTC", sat / 1e8)]
+
+
+async def wallet(client: httpx.AsyncClient, w: dict, prices: dict) -> dict:
+    net, addr = w["network"], w["address"]
+    out = {"network": net, "network_name": NETWORKS.get(net, net), "address": addr, "label": w.get("label") or short(addr),
+           "ok": False, "error": "", "assets": [], "total_usdt": 0.0}
     try:
-        res = await _rpc(client, calls)
+        vals = await (_evm(client, net, addr) if net in EVM else _tron(client, addr) if net == "tron"
+                      else _sol(client, addr) if net == "sol" else _btc(client, addr))
     except Exception as e:
         out["error"] = str(e)[:200]
         return out
-    vals = [("BNB", int(res[0], 16) / 1e18)] + [(name, int(res[i + 1] or "0x0", 16) / 10 ** dec)
-                                              for i, (name, _, dec) in enumerate(BSC_TOKENS)]
     for asset, amt in vals:
-        if amt > 0:
+        if amt > (0.005 if asset in STABLE else 1e-8):       # 먼지(0.00 으로 보이는 양)는 빼고
             out["assets"].append({"asset": asset, "amount": amt, "usdt": _usdt(asset, amt, prices)})
     out["total_usdt"] = sum(a["usdt"] or 0 for a in out["assets"])
     out["ok"] = True
@@ -239,10 +328,10 @@ async def summary(refresh: bool = False) -> dict:
             prices = await _prices(client)
         except Exception:
             prices = {}
-        bn, krw, *bsc = await asyncio.gather(binance(client, prices), _krw_rate(client),
-                                             *(bsc_wallet(client, w, prices) for w in c["bsc"]))
-    total = (bn["total_usdt"] if bn["ok"] else 0) + sum(w["total_usdt"] for w in bsc if w["ok"])
-    data = {"binance": bn, "bsc": bsc, "total_usdt": total, "krw_rate": krw,
+        bn, krw, *ws = await asyncio.gather(binance(client, prices), _krw_rate(client),
+                                            *(wallet(client, w, prices) for w in c["list"]))
+    total = (bn["total_usdt"] if bn["ok"] else 0) + sum(w["total_usdt"] for w in ws if w["ok"])
+    data = {"binance": bn, "wallets": ws, "total_usdt": total, "krw_rate": krw,
             "total_krw": total * krw if krw else None, "notify": c["notify"], "at": int(time.time())}
     _cache.update(at=time.time(), data=data)
     return data
@@ -267,14 +356,15 @@ def text(d: dict) -> str:
               for a in bn["assets"][:6]]
     else:
         L.append(f"<b>바이낸스</b>  {html.escape(bn['error'])}")
-    for w in d["bsc"]:
+    for w in d["wallets"]:
         L.append("")
         name = html.escape(w["label"]) + (f" ({short(w['address'])})" if w["label"] != short(w["address"]) else "")
         if w["ok"]:
-            L.append(f"<b>BSC · {name}</b>  {_n(w['total_usdt'])} USDT")
-            L += [f"   {_amt(a['asset'], a['amount'])}" for a in w["assets"]] or ["   비어 있음"]
+            L.append(f"<b>{html.escape(w['network_name'])} · {name}</b>  {_n(w['total_usdt'])} USDT")
+            L += [f"   {_amt(a['asset'], a['amount'])}" + (f" ≈ {_n(a['usdt'])}" if a["usdt"] is not None and a["asset"] not in STABLE else "")
+                  for a in w["assets"]] or ["   비어 있음"]
         else:
-            L.append(f"<b>BSC · {name}</b>  {html.escape(w['error'])}")
+            L.append(f"<b>{html.escape(w['network_name'])} · {name}</b>  {html.escape(w['error'])}")
     L += ["", "━━━━━━━━━━━━━━", f"합계 <b>{_n(d['total_usdt'])} USDT</b>"
           + (f" ≈ <b>{d['total_krw']:,.0f}원</b> (1 USDT = {d['krw_rate']:,.0f}원)" if d.get("total_krw") else "")]
     deps = [x for x in (bn.get("deposits") or []) if x["done"]][:3]
@@ -282,8 +372,8 @@ def text(d: dict) -> str:
         L.append("")
         L.append("최근 바이낸스 입금")
         L += [f"   {datetime.fromtimestamp(x['time']):%m/%d %H:%M}  +{_amt(x['coin'], x['amount'])} ({x['network']})" for x in deps]
-    if not d["bsc"]:
-        L.append("\n<i>BSC 지갑 추가: /잔고 추가 0x주소 이름</i>")
+    if not d["wallets"]:
+        L.append("\n<i>개인 지갑 추가: /잔고 추가 네트워크 주소 이름 (예: /잔고 추가 tron T… 지갑1)</i>")
     return "\n".join(L)[:4000]
 
 
@@ -294,7 +384,7 @@ def _state_path() -> str:
 
 
 async def check_once(send) -> None:
-    """send(text) - 바이낸스 새 입금 · BSC 잔고 늘어남 → 알림. 첫 실행은 기준만 저장"""
+    """send(text) - 바이낸스 새 입금 · 개인 지갑 잔고 늘어남 → 알림. 첫 실행은 기준만 저장"""
     if not cfg()["notify"]:
         return
     d = await summary(refresh=True)
@@ -314,19 +404,21 @@ async def check_once(send) -> None:
                 if not first and "bn_seen" in st:
                     msgs.append(f"📥 <b>바이낸스 입금 도착</b>  +{_amt(x['coin'], x['amount'])} ({x['network']})")
         st["bn_seen"] = list(seen)[-50:]
-    bal = st.get("bsc") or {}
-    for w in d["bsc"]:
+    bal = st.get("wallets") or {f"bsc:{k}": v for k, v in (st.get("bsc") or {}).items()}
+    for w in d["wallets"]:
         if not w["ok"]:
             continue
         now = {a["asset"]: a["amount"] for a in w["assets"]}
-        old = bal.get(w["address"].lower())
+        wkey = f"{w['network']}:{w['address'].lower()}"
+        old = bal.get(wkey)
         if old is not None:
             for asset, amt in now.items():
                 up = amt - (old.get(asset) or 0)
                 if up > (0.01 if asset in STABLE else 0.0001):
-                    msgs.append(f"📥 <b>BSC 지갑 입금</b> · {w['label']}  +{_amt(asset, up)} (잔고 {_amt(asset, amt)})")
-        bal[w["address"].lower()] = now
-    st["bsc"] = bal
+                    msgs.append(f"📥 <b>{w['network_name']} 지갑 입금</b> · {w['label']}  +{_amt(asset, up)} (잔고 {_amt(asset, amt)})")
+        bal[wkey] = now
+    st["wallets"] = bal
+    st.pop("bsc", None)
     try:
         tmp = _state_path() + ".tmp"
         with open(tmp, "w", encoding="utf-8") as f:
@@ -350,7 +442,7 @@ async def loop(live, client) -> None:
     while True:
         try:
             c = cfg()
-            if c["binance"] or c["bsc"]:
+            if c["binance"] or c["list"]:
                 await check_once(send)
         except Exception as e:
             print(f"[wallets] 확인 실패: {e}")
@@ -363,30 +455,36 @@ async def cmd(live, client, token, cid: str, arg: str) -> None:
     w = (arg or "").split()
     try:
         if w and w[0] in ("추가", "add"):
+            # /잔고 추가 [네트워크] 주소 [이름] - 네트워크를 빼면 주소 모양으로 짐작 (0x… 는 BSC)
             if len(w) < 2:
-                raise ValueError("예) /잔고 추가 0x1234…abcd 개인지갑1")
-            cur = cfg()["bsc"]
-            cur.append({"address": w[1], "label": " ".join(w[2:]) or f"지갑{len(cur) + 1}"})
-            save_cfg(bsc=cur)
-            await live._send(client, token, cid, f"➕ BSC 지갑 추가: {html.escape(short(w[1]))}")
+                raise ValueError("예) /잔고 추가 tron T… 지갑1 · /잔고 추가 eth 0x… 메타마스크\n네트워크: " + " · ".join(NETWORKS))
+            net = net_key(w[1])
+            addr, rest = (w[2], w[3:]) if net and len(w) > 2 else (w[1], w[2:])
+            net = net or guess_net(addr)
+            if not net:
+                raise ValueError("주소 모양을 모르겠습니다. 네트워크를 앞에 붙여 주세요. 예) /잔고 추가 sol 주소\n네트워크: " + " · ".join(NETWORKS))
+            cur = cfg()["list"]
+            cur.append({"network": net, "address": addr, "label": " ".join(rest) or f"지갑{len(cur) + 1}"})
+            save_cfg(lst=cur)
+            await live._send(client, token, cid, f"➕ {NETWORKS[net]} 지갑 추가: {html.escape(short(addr))}")
         elif w and w[0] in ("삭제", "del", "remove"):
-            cur = cfg()["bsc"]
+            cur = cfg()["list"]
             i = int(w[1]) - 1 if len(w) > 1 and w[1].isdigit() else -1
             if not 0 <= i < len(cur):
-                lst = "\n".join(f"{n + 1}. {html.escape(x['label'] or '')} {short(x['address'])}" for n, x in enumerate(cur)) or "(없음)"
+                lst = "\n".join(f"{n + 1}. {NETWORKS[x['network']]} {html.escape(x['label'] or '')} {short(x['address'])}" for n, x in enumerate(cur)) or "(없음)"
                 raise ValueError(f"지울 번호를 붙여 주세요. 예) /잔고 삭제 1\n{lst}")
             gone = cur.pop(i)
-            save_cfg(bsc=cur)
-            await live._send(client, token, cid, f"🗑 BSC 지갑 삭제: {html.escape(gone['label'])} {short(gone['address'])}")
+            save_cfg(lst=cur)
+            await live._send(client, token, cid, f"🗑 지갑 삭제: {NETWORKS[gone['network']]} {html.escape(gone['label'])} {short(gone['address'])}")
         elif w and w[0] in ("목록", "list"):
-            cur = cfg()["bsc"]
-            await live._send(client, token, cid, "BSC 지갑\n" + ("\n".join(
-                f"{n + 1}. {html.escape(x['label'] or '')} <code>{x['address']}</code>" for n, x in enumerate(cur)) or "(없음)"))
+            cur = cfg()["list"]
+            await live._send(client, token, cid, "개인 지갑\n" + ("\n".join(
+                f"{n + 1}. {NETWORKS[x['network']]} · {html.escape(x['label'] or '')}\n<code>{x['address']}</code>" for n, x in enumerate(cur)) or "(없음)"))
             return
         elif w and w[0] in ("알림", "notify"):
             on = not (len(w) > 1 and w[1] in ("끄기", "off"))
             save_cfg(notify=on)
-            await live._send(client, token, cid, f"입금 알림 {'켬' if on else '끔'} (바이낸스 입금 · BSC 지갑 잔고 늘어남, 5분마다 확인)")
+            await live._send(client, token, cid, f"입금 알림 {'켬' if on else '끔'} (바이낸스 입금 · 개인 지갑 잔고 늘어남, 5분마다 확인)")
             return
     except ValueError as e:
         await live._send(client, token, cid, html.escape(str(e)))
@@ -396,4 +494,4 @@ async def cmd(live, client, token, cid: str, arg: str) -> None:
     except Exception as e:
         await live._send(client, token, cid, f"잔고 조회 실패: {html.escape(str(e))[:200]}")
         return
-    await live._send(client, token, cid, text(d) + "\n\n<i>/잔고 추가 0x주소 이름 · /잔고 삭제 번호 · /잔고 목록 · /잔고 알림 끄기</i>")
+    await live._send(client, token, cid, text(d) + "\n\n<i>/잔고 추가 네트워크 주소 이름 · /잔고 삭제 번호 · /잔고 목록 · /잔고 알림 끄기</i>")

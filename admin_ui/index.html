@@ -651,10 +651,11 @@
         넣은 키는 계좌 비밀번호와 같은 방식으로 암호화해서 저장하고, 이 화면에는 다시 보여주지 않습니다 (앞뒤 4자만).</p>
     </div>
     <div class="panel">
-      <h2>BSC 개인 지갑</h2>
-      <p class="hint">주소만 넣으면 BNB · USDT · USDC 잔고를 공개 노드로 봅니다. 개인키나 비밀번호는 필요 없고, 주소로는 돈을 옮길 수 없습니다.</p>
+      <h2>개인 지갑</h2>
+      <p class="hint">네트워크를 고르고 주소만 넣으면 공개 노드로 잔고를 봅니다 (기본 코인 + USDT · USDC, 비트코인은 BTC).
+        개인키나 비밀번호는 필요 없고, 주소로는 돈을 옮길 수 없습니다. 같은 0x 주소라도 네트워크마다 잔고가 따로라서, 여러 네트워크에서 쓰면 네트워크마다 한 줄씩 넣으세요.</p>
       <div id="wlList"></div>
-      <label class="switch" style="margin-top:10px"><input type="checkbox" id="wlNotify"> 입금 알림 (5분마다 확인 · 바이낸스 입금 완료, BSC 지갑 잔고가 늘면 텔레그램)</label>
+      <label class="switch" style="margin-top:10px"><input type="checkbox" id="wlNotify"> 입금 알림 (5분마다 확인 · 바이낸스 입금 완료, 개인 지갑 잔고가 늘면 텔레그램)</label>
       <div class="actions">
         <button class="btn" id="wlAdd">+ 지갑 추가</button>
         <button class="btn primary" id="wlSave">저장</button>
@@ -1670,12 +1671,13 @@ async function loadUpdate(check) {
 }
 // 버전별 다운로드 횟수 (GitHub 릴리스 자산의 download_count, 서버에서 10분 캐시)
 // ── 지갑 (바이낸스 · BSC) ──
-let wlRows = [];
+let wlRows = [], wlNets = {};
 const wlAmt = (a) => `${Number(a.amount).toLocaleString('en-US', { maximumFractionDigits: ['USDT', 'USDC', 'FDUSD', 'BUSD'].includes(a.asset) ? 2 : 6 })} ${esc(a.asset)}`;
 function wlRenderList() {
-  $('wlList').innerHTML = wlRows.length ? wlRows.map((w, i) => `<div class="row" style="display:flex;gap:6px;margin:4px 0;align-items:center">
+  $('wlList').innerHTML = wlRows.length ? wlRows.map((w, i) => `<div class="row" style="display:flex;gap:6px;margin:4px 0;align-items:center;flex-wrap:wrap">
+      <select data-i="${i}" data-k="network" style="width:150px">${Object.entries(wlNets).map(([k, n]) => `<option value="${k}"${k === w.network ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select>
       <input data-i="${i}" data-k="label" value="${esc(w.label)}" placeholder="이름" style="width:110px">
-      <input data-i="${i}" data-k="address" value="${esc(w.address)}" placeholder="0x… (42자)" style="flex:1;font-family:monospace;font-size:12px">
+      <input data-i="${i}" data-k="address" value="${esc(w.address)}" placeholder="지갑 주소" style="flex:1;min-width:220px;font-family:monospace;font-size:12px">
       <button class="btn" data-del="${i}" title="이 지갑 빼기">삭제</button></div>`).join('')
     : '<p class="hint">등록한 지갑이 없습니다. [+ 지갑 추가]를 누르세요.</p>';
 }
@@ -1684,7 +1686,8 @@ async function loadWallets(refresh) {
   try {
     const r = await api('wallets' + (refresh ? '?refresh=true' : ''));
     const c = r.config, d = r.data || {};
-    wlRows = c.bsc.map((w) => ({ ...w }));
+    wlNets = c.networks || {};
+    wlRows = c.list.map((w) => ({ ...w }));
     wlRenderList();
     $('wlNotify').checked = c.notify;
     const bn = d.binance || {};
@@ -1699,20 +1702,22 @@ async function loadWallets(refresh) {
       : `<tr><td>${name}</td><td colspan="2" class="muted">${esc(w.error)}</td></tr>`;
     const rows = [];
     if (c.binance) rows.push(tr('바이낸스', bn));
-    for (const w of d.bsc || []) rows.push(tr(`BSC · ${esc(w.label)}<br><small class="muted" style="font-family:monospace">${esc(w.address.slice(0, 6) + '…' + w.address.slice(-4))}</small>`, w));
+    for (const w of d.wallets || []) rows.push(tr(`${esc(w.network_name)} · ${esc(w.label)}<br><small class="muted" style="font-family:monospace">${esc(w.address.slice(0, 6) + '…' + w.address.slice(-4))}</small>`, w));
     const deps = (bn.deposits || []).filter((x) => x.done).slice(0, 5);
     $('wlSum').innerHTML = rows.length ? `<table class="tbl" style="width:100%"><thead><tr><th style="text-align:left">어디</th><th style="text-align:left">코인</th><th style="text-align:right">USDT 환산</th></tr></thead>
         <tbody>${rows.join('')}</tbody>
         <tfoot><tr><th style="text-align:left">합계</th><th></th><th style="text-align:right">${money(d.total_usdt)} USDT${d.total_krw ? `<br><small>≈ ${Math.round(d.total_krw).toLocaleString()}원</small>` : ''}</th></tr></tfoot></table>
       ${d.krw_rate ? `<p class="hint">1 USDT = ${Math.round(d.krw_rate).toLocaleString()}원 (업비트) · 코인 시세는 바이낸스</p>` : ''}
       ${deps.length ? `<h3 style="margin-top:14px">최근 바이낸스 입금</h3>${deps.map((x) => `<div class="muted" style="font-size:13px">${esc(new Date(x.time * 1000).toLocaleString())} · +${Number(x.amount).toLocaleString()} ${esc(x.coin)} (${esc(x.network)})</div>`).join('')}` : ''}`
-      : '<p class="hint">바이낸스 키나 BSC 지갑을 넣으면 여기에 잔고가 나옵니다.</p>';
+      : '<p class="hint">바이낸스 키나 개인 지갑을 넣으면 여기에 잔고가 나옵니다.</p>';
     $('wlAt').textContent = d.at ? new Date(d.at * 1000).toLocaleTimeString() + ' 기준' : '';
   } catch (e) { $('wlSum').innerHTML = `<div class="warnbar">${esc(e.message)}</div>`; }
 }
-$('wlList').addEventListener('input', (e) => { const i = e.target.dataset.i; if (i != null) wlRows[i][e.target.dataset.k] = e.target.value.trim(); });
+const wlEdit = (e) => { const i = e.target.dataset.i; if (i != null) wlRows[i][e.target.dataset.k] = e.target.value.trim(); };
+$('wlList').addEventListener('input', wlEdit);
+$('wlList').addEventListener('change', wlEdit);
 $('wlList').addEventListener('click', (e) => { const i = e.target.dataset.del; if (i != null) { wlRows.splice(Number(i), 1); wlRenderList(); } });
-$('wlAdd').onclick = () => { wlRows.push({ label: `지갑${wlRows.length + 1}`, address: '' }); wlRenderList(); };
+$('wlAdd').onclick = () => { wlRows.push({ network: 'bsc', label: `지갑${wlRows.length + 1}`, address: '' }); wlRenderList(); };
 $('wlRefresh').onclick = () => loadWallets(true);
 $('wlBnSave').onclick = async () => {
   const k = $('wlBnKey').value.trim(), sec = $('wlBnSec').value.trim();
@@ -1731,7 +1736,7 @@ $('wlBnClear').onclick = async () => {
 };
 $('wlSave').onclick = async () => {
   try {
-    await api('wallets', { method: 'PUT', body: JSON.stringify({ bsc: wlRows.filter((w) => w.address), notify: $('wlNotify').checked }) });
+    await api('wallets', { method: 'PUT', body: JSON.stringify({ list: wlRows.filter((w) => w.address), notify: $('wlNotify').checked }) });
     toast('저장했습니다.');
     loadWallets(true);
   } catch (e) { toast(e.message, true); }

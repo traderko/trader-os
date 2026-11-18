@@ -998,7 +998,7 @@ def _log_dir() -> str:
 
 @router.get("/api/wallets")
 async def wallets_get(refresh: bool = False):
-    """바이낸스(읽기 전용 키) · BSC 지갑 잔고 (services/wallets.py)"""
+    """바이낸스(읽기 전용 키) · 개인 지갑(여러 네트워크) 잔고 (services/wallets.py)"""
     from services import wallets
     c = wallets.cfg()
     try:
@@ -1016,7 +1016,7 @@ async def wallets_put(body: dict):
             wallets.save_binance(None, None, clear=True)
         elif body.get("binance_key") or body.get("binance_secret"):
             wallets.save_binance(body.get("binance_key"), body.get("binance_secret"))   # 암호화해서 저장 · 응답에 Secret 없음
-        c = wallets.save_cfg(bsc=body.get("bsc"), notify=body.get("notify"))
+        c = wallets.save_cfg(lst=body.get("list"), notify=body.get("notify"))
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"config": c}

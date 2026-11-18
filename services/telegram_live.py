@@ -1441,7 +1441,7 @@ class TelegramLive:
             oneway_task = asyncio.create_task(oneway.loop())
             from services import withdraw_notice         # 출금 알림 (services/withdraw_notice.py)
             wd_task = asyncio.create_task(withdraw_notice.loop(self, client))
-            from services import wallets                 # 바이낸스 · BSC 지갑 입금 알림 (services/wallets.py)
+            from services import wallets                 # 바이낸스 · 개인 지갑 입금 알림 (services/wallets.py)
             wallet_task = asyncio.create_task(wallets.loop(self, client))
             try:
                 await self._poll_loop(client)
@@ -1468,7 +1468,7 @@ class TelegramLive:
                         print(f"[telegram-live] 봇 {status['bot']} 연결됨 - 봇에게 /start 를 보내면 chat id를 알려줍니다")
                         await self._call(client, token, "setMyCommands", commands=[
                             {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
-                            {"command": "wallet", "description": "바이낸스 · BSC 지갑 잔고 (/잔고 · /잔고 추가 0x주소 이름)"},
+                            {"command": "wallet", "description": "바이낸스 · 개인 지갑 잔고 (/잔고 · /잔고 추가 네트워크 주소 이름)"},
                             {"command": "withdraw", "description": "출금 가능액 + 출금 페이지 (/출금 · /출금 알림 30)"},
                             {"command": "show", "description": "실시간 현황에 보일 것 켜고 끄기 (/표시)"},
                             {"command": "oneway", "description": "원웨이 장 - 지금 몇 KTR 갔는지·알림 설정 (/원웨이)"},
