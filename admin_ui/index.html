@@ -638,15 +638,13 @@
     <div class="panel">
       <h2>바이낸스</h2>
       <div id="wlBn"></div>
-      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
-        <input id="wlBnKey" type="password" autocomplete="off" placeholder="API Key" style="flex:1;min-width:200px">
-        <input id="wlBnSec" type="password" autocomplete="off" placeholder="Secret Key" style="flex:1;min-width:200px">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:10px 0 4px">
+        <input id="wlBnKey" type="password" autocomplete="off" placeholder="API Key" style="flex:1 1 220px;min-width:0">
+        <input id="wlBnSec" type="password" autocomplete="off" placeholder="Secret Key" style="flex:1 1 220px;min-width:0">
+        <button class="btn primary" id="wlBnSave" style="white-space:nowrap">키 저장 · 연결 확인</button>
+        <button class="btn" id="wlBnClear" style="white-space:nowrap">키 지우기</button>
       </div>
-      <div class="actions">
-        <button class="btn" id="wlBnClear">키 지우기</button>
-        <button class="btn primary" id="wlBnSave">키 저장 · 연결 확인</button>
-      </div>
-      <p class="hint">바이낸스 → API 관리에서 키를 만들 때 <b>'읽기(Enable Reading)'만</b> 켜고 거래·출금 권한은 끄고,
+      <p class="hint" style="margin-top:8px">바이낸스 → API 관리에서 키를 만들 때 <b>'읽기(Enable Reading)'만</b> 켜고 거래·출금 권한은 끄고,
         '신뢰할 수 있는 IP' 에 이 서버 PC 의 공인 IP 만 넣으세요. 그러면 키가 새도 잔고를 보는 것 말고는 아무것도 할 수 없습니다.
         넣은 키는 계좌 비밀번호와 같은 방식으로 암호화해서 저장하고, 이 화면에는 다시 보여주지 않습니다 (앞뒤 4자만).</p>
     </div>
@@ -1676,8 +1674,8 @@ const wlAmt = (a) => `${Number(a.amount).toLocaleString('en-US', { maximumFracti
 function wlRenderList() {
   $('wlList').innerHTML = wlRows.length ? wlRows.map((w, i) => `<div class="row" style="display:flex;gap:6px;margin:4px 0;align-items:center;flex-wrap:wrap">
       <select data-i="${i}" data-k="network" style="width:150px">${Object.entries(wlNets).map(([k, n]) => `<option value="${k}"${k === w.network ? ' selected' : ''}>${esc(n)}</option>`).join('')}</select>
-      <input data-i="${i}" data-k="label" value="${esc(w.label)}" placeholder="이름" style="width:110px">
-      <input data-i="${i}" data-k="address" value="${esc(w.address)}" placeholder="지갑 주소" style="flex:1;min-width:220px;font-family:monospace;font-size:12px">
+      <input type="text" data-i="${i}" data-k="label" value="${esc(w.label)}" placeholder="이름" style="width:110px">
+      <input type="text" data-i="${i}" data-k="address" value="${esc(w.address)}" placeholder="지갑 주소" style="flex:1;min-width:220px;font-family:monospace;font-size:12px">
       <button class="btn" data-del="${i}" title="이 지갑 빼기">삭제</button></div>`).join('')
     : '<p class="hint">등록한 지갑이 없습니다. [+ 지갑 추가]를 누르세요.</p>';
 }
