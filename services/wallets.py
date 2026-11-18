@@ -339,7 +339,8 @@ async def _mt5() -> list[dict]:
     return list(await asyncio.gather(*(one(a) for a in accs)))
 
 
-async def summary(refresh: bool = False) -> dict:
+async def summary(refresh: bool = False, bank_force: bool | None = None) -> dict:
+    """refresh: 지갑·바이낸스 새로 조회. bank_force: 은행(CODEF, 하루 100회)도 10분 넘었으면 새로 - 기본은 refresh 와 같음"""
     if not refresh and _cache.get("at", 0) > time.time() - CACHE_SEC:
         return _cache["data"]
     c = cfg()
@@ -350,13 +351,22 @@ async def summary(refresh: bool = False) -> dict:
             prices = {}
         bn, krw, mt5, *ws = await asyncio.gather(binance(client, prices), _krw_rate(client), _mt5(),
                                                  *(wallet(client, w, prices) for w in c["list"]))
+    try:                                                                                          # 은행 (원화)
+        from services import banks
+        bk = await banks.summary(force=refresh if bank_force is None else bank_force)
+    except Exception as e:
+        bk = {"banks": [], "total_krw": 0.0, "error": str(e)[:200]}
     total = (bn["total_usdt"] if bn["ok"] else 0) + sum(w["total_usdt"] for w in ws if w["ok"])   # 지갑 합계
     mt5_total = sum(m["equity"] for m in mt5 if m["ok"])                                         # MT5 평가금 합계
-    grand = total + mt5_total
-    data = {"binance": bn, "wallets": ws, "mt5": mt5, "total_usdt": total, "mt5_total": mt5_total,
+    bank_krw = bk["total_krw"]
+    bank_usdt = bank_krw / krw if krw else 0.0
+    grand = total + mt5_total + bank_usdt
+    data = {"binance": bn, "wallets": ws, "mt5": mt5, "banks": bk["banks"], "total_usdt": total, "mt5_total": mt5_total,
+            "bank_krw": bank_krw, "bank_usdt": bank_usdt,
             "wallet_pct": total / mt5_total * 100 if mt5_total > 0 else None,      # 지갑이 MT5 평가금의 몇 %
             "grand_usdt": grand, "krw_rate": krw,
-            "total_krw": total * krw if krw else None, "grand_krw": grand * krw if krw else None,
+            "total_krw": total * krw if krw else None,
+            "grand_krw": (total + mt5_total) * krw + bank_krw if krw else None,
             "notify": c["notify"], "at": int(time.time())}
     _cache.update(at=time.time(), data=data)
     return data
@@ -396,6 +406,17 @@ def text(d: dict) -> str:
         L.append(f"<b>MT5 평가금(증거금)</b>  {_n(d['mt5_total'])}")
         L += [f"   {html.escape(m['account_number'])}  " + (f"{_n(m['equity'])} {html.escape(m['currency'])}" if m["ok"] else "MT5 연결 안 됨")
               for m in mt5]
+    bks = d.get("banks") or []
+    if bks:
+        from datetime import datetime as _dt
+        L.append("")
+        L.append(f"<b>은행 (원화)</b>  {d['bank_krw']:,.0f}원")
+        for x in bks:
+            age = int(time.time() - x["at"]) if x.get("at") else None
+            when = "" if age is None else (f"{age // 60}분 전" if age < 3600 else f"{age // 3600}시간 전" if age < 86400 else f"{age // 86400}일 전")
+            tag = "직접 입력" if x["source"] == "manual" else "자동"
+            L.append(f"   {html.escape(x['name'])}  {x['amount']:,.0f}원  <i>({tag}{' · ' + when if when else ''})</i>"
+                     + (f"\n   ⚠️ {html.escape(x['error'])}" if not x["ok"] else ""))
     krw = d.get("krw_rate")
     won = lambda v: f" ≈ {v * krw:,.0f}원" if krw else ""
     L += ["", "━━━━━━━━━━━━━━",
@@ -403,7 +424,11 @@ def text(d: dict) -> str:
           + (f"\n   = MT5 평가금의 <b>{d['wallet_pct']:.1f}%</b>" if d.get("wallet_pct") is not None else "")]
     if mt5:
         L.append(f"MT5 평가금 <b>{_n(d['mt5_total'])}</b>{won(d['mt5_total'])}")
-        L.append(f"전체 (지갑 + MT5) <b>{_n(d['grand_usdt'])}</b>{won(d['grand_usdt'])}")
+    if bks:
+        L.append(f"은행 <b>{d['bank_krw']:,.0f}원</b>")
+    if mt5 or bks:
+        parts = " + ".join(x for x, ok in (("지갑", True), ("MT5", bool(mt5)), ("은행", bool(bks))) if ok)
+        L.append(f"전체 ({parts}) <b>{_n(d['grand_usdt'])}</b>" + (f" ≈ <b>{d['grand_krw']:,.0f}원</b>" if d.get("grand_krw") else ""))
     if krw:
         L.append(f"<i>1 USDT = {krw:,.0f}원 · MT5 계좌 달러는 USDT 와 1:1 로 계산</i>")
     deps = [x for x in (bn.get("deposits") or []) if x["done"]][:3]
@@ -426,7 +451,7 @@ async def check_once(send) -> None:
     """send(text) - 바이낸스 새 입금 · 개인 지갑 잔고 늘어남 → 알림. 첫 실행은 기준만 저장"""
     if not cfg()["notify"]:
         return
-    d = await summary(refresh=True)
+    d = await summary(refresh=True, bank_force=False)       # 은행은 1시간마다만 (CODEF 데모 하루 100회)
     try:
         with open(_state_path(), encoding="utf-8") as f:
             st = json.load(f)
@@ -520,6 +545,24 @@ async def cmd(live, client, token, cid: str, arg: str) -> None:
             await live._send(client, token, cid, "개인 지갑\n" + ("\n".join(
                 f"{n + 1}. {NETWORKS[x['network']]} · {html.escape(x['label'] or '')}\n<code>{x['address']}</code>" for n, x in enumerate(cur)) or "(없음)"))
             return
+        elif w and w[0] in ("은행", "bank"):
+            # /잔고 은행 토스 1234000 (직접 입력) · /잔고 은행 토스 삭제
+            from services import banks
+            if len(w) < 3:
+                lst = "\n".join(f"{m['name']}  {m['amount']:,.0f}원" for m in banks.cfg()["manual"]) or "(없음)"
+                raise ValueError(f"예) /잔고 은행 토스 1234000 · /잔고 은행 토스 삭제\n직접 입력한 은행:\n{lst}")
+            name, val = w[1], w[2]
+            if val in ("삭제", "del"):
+                banks.set_manual([m for m in banks.cfg()["manual"] if m["name"] != name])
+                await live._send(client, token, cid, f"🗑 {html.escape(name)} 지웠습니다")
+            else:
+                try:
+                    amt = float(val.replace(",", "").replace("원", ""))
+                except ValueError:
+                    raise ValueError("금액은 숫자로. 예) /잔고 은행 토스 1234000")
+                banks.set_manual_one(name, amt)
+                _cache.clear()
+                await live._send(client, token, cid, f"🏦 {html.escape(name)} {amt:,.0f}원 저장")
         elif w and w[0] in ("알림", "notify"):
             on = not (len(w) > 1 and w[1] in ("끄기", "off"))
             save_cfg(notify=on)
@@ -533,4 +576,4 @@ async def cmd(live, client, token, cid: str, arg: str) -> None:
     except Exception as e:
         await live._send(client, token, cid, f"잔고 조회 실패: {html.escape(str(e))[:200]}")
         return
-    await live._send(client, token, cid, text(d) + "\n\n<i>/잔고 추가 네트워크 주소 이름 · /잔고 삭제 번호 · /잔고 목록 · /잔고 알림 끄기</i>")
+    await live._send(client, token, cid, text(d) + "\n\n<i>/잔고 추가 네트워크 주소 이름 · /잔고 삭제 번호 · /잔고 목록 · /잔고 은행 토스 1234000 · /잔고 알림 끄기</i>")

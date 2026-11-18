@@ -649,6 +649,30 @@
         넣은 키는 계좌 비밀번호와 같은 방식으로 암호화해서 저장하고, 이 화면에는 다시 보여주지 않습니다 (앞뒤 4자만).</p>
     </div>
     <div class="panel">
+      <h2>은행 (원화)</h2>
+      <h3 style="margin:6px 0">직접 입력 <small class="hint" style="font-weight:400">토스뱅크처럼 자동 조회가 안 되는 곳 · 텔레그램 <code>/잔고 은행 토스 1234000</code> 으로도 바꿀 수 있음</small></h3>
+      <div id="bkManual"></div>
+      <div class="actions"><button class="btn" id="bkAdd">+ 은행 추가</button><button class="btn primary" id="bkSave">저장</button></div>
+      <h3 style="margin:16px 0 6px">자동 조회 (CODEF) <small class="hint" style="font-weight:400">국민·신한·우리·하나·농협 등 · 데모는 하루 100회라 1시간에 한 번 조회</small></h3>
+      <div id="bkCodef"></div>
+      <div id="bkKeys" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0">
+        <input id="bkCid" type="password" autocomplete="off" placeholder="Client ID" style="flex:1 1 160px;min-width:0">
+        <input id="bkSec" type="password" autocomplete="off" placeholder="Client Secret" style="flex:1 1 160px;min-width:0">
+        <input id="bkPub" type="password" autocomplete="off" placeholder="공개키 (Public Key)" style="flex:2 1 220px;min-width:0">
+        <button class="btn primary" id="bkKeySave" style="white-space:nowrap">키 저장</button>
+        <button class="btn" id="bkKeyClear" style="white-space:nowrap">키 · 연결 모두 지우기</button>
+      </div>
+      <div id="bkConnect" style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin:8px 0">
+        <select id="bkOrg" style="width:140px"></select>
+        <input id="bkId" type="text" autocomplete="off" placeholder="인터넷뱅킹 아이디" style="flex:1 1 140px;min-width:0">
+        <input id="bkPw" type="password" autocomplete="new-password" placeholder="인터넷뱅킹 비밀번호" style="flex:1 1 140px;min-width:0">
+        <button class="btn primary" id="bkConn" style="white-space:nowrap">은행 연결</button>
+      </div>
+      <p class="hint">CODEF 키는 codef.io 가입 → 마이페이지 → 키 관리(데모)에서 받습니다. 키와 연결 정보는 암호화해서 저장합니다.
+        은행 비밀번호는 CODEF 공개키로 암호화해 CODEF 로만 보내고 이 서버에는 남기지 않습니다 (연결 아이디만 저장).
+        다만 은행 로그인을 외부 업체(CODEF)에 맡기는 방식이라는 점은 알고 쓰세요.</p>
+    </div>
+    <div class="panel">
       <h2>개인 지갑</h2>
       <p class="hint">네트워크를 고르고 주소만 넣으면 공개 노드로 잔고를 봅니다 (기본 코인 + USDT · USDC, 비트코인은 BTC).
         개인키나 비밀번호는 필요 없고, 주소로는 돈을 옮길 수 없습니다. 같은 0x 주소라도 네트워크마다 잔고가 따로라서, 여러 네트워크에서 쓰면 네트워크마다 한 줄씩 넣으세요.</p>
@@ -1684,6 +1708,7 @@ async function loadWallets(refresh) {
   try {
     const r = await api('wallets' + (refresh ? '?refresh=true' : ''));
     const c = r.config, d = r.data || {};
+    bkRender(c.banks || {});
     wlNets = c.networks || {};
     wlRows = c.list.map((w) => ({ ...w }));
     wlRenderList();
@@ -1701,6 +1726,10 @@ async function loadWallets(refresh) {
     const rows = [];
     if (c.binance) rows.push(tr('바이낸스', bn));
     for (const w of d.wallets || []) rows.push(tr(`${esc(w.network_name)} · ${esc(w.label)}<br><small class="muted" style="font-family:monospace">${esc(w.address.slice(0, 6) + '…' + w.address.slice(-4))}</small>`, w));
+    const ago = (t) => { if (!t) return ''; const a = Date.now() / 1000 - t; return a < 3600 ? `${Math.floor(a / 60)}분 전` : a < 86400 ? `${Math.floor(a / 3600)}시간 전` : `${Math.floor(a / 86400)}일 전`; };
+    for (const x of d.banks || []) rows.push(`<tr><td>은행 · ${esc(x.name)}<br><small class="muted">${x.source === 'manual' ? '직접 입력' : '자동'} · ${ago(x.at)}</small></td>
+      <td>${Math.round(x.amount).toLocaleString()}원${x.ok ? '' : `<br><small class="muted">⚠️ ${esc(x.error)}</small>`}</td>
+      <td style="text-align:right">${d.krw_rate ? money(x.amount / d.krw_rate) : '-'}</td></tr>`);
     for (const m of d.mt5 || []) rows.push(m.ok
       ? `<tr><td>MT5 · ${esc(m.account_number)}<br><small class="muted">평가금(증거금)</small></td><td>${money(m.equity)} ${esc(m.currency)}</td><td style="text-align:right">${money(m.equity)}</td></tr>`
       : `<tr><td>MT5 · ${esc(m.account_number)}</td><td colspan="2" class="muted">MT5 연결 안 됨</td></tr>`);
@@ -1710,8 +1739,9 @@ async function loadWallets(refresh) {
         <tbody>${rows.join('')}</tbody>
         <tfoot>
           <tr><th style="text-align:left">지갑 합계</th><th style="text-align:left">${d.wallet_pct != null ? `MT5 평가금의 <b>${d.wallet_pct.toFixed(1)}%</b>` : ''}</th><th style="text-align:right">${money(d.total_usdt)} USDT${won(d.total_usdt)}</th></tr>
-          ${(d.mt5 || []).length ? `<tr><th style="text-align:left">MT5 평가금</th><th></th><th style="text-align:right">${money(d.mt5_total)}${won(d.mt5_total)}</th></tr>
-          <tr><th style="text-align:left">전체 (지갑 + MT5)</th><th></th><th style="text-align:right">${money(d.grand_usdt)}${won(d.grand_usdt)}</th></tr>` : ''}
+          ${(d.mt5 || []).length ? `<tr><th style="text-align:left">MT5 평가금</th><th></th><th style="text-align:right">${money(d.mt5_total)}${won(d.mt5_total)}</th></tr>` : ''}
+          ${(d.banks || []).length ? `<tr><th style="text-align:left">은행</th><th></th><th style="text-align:right">${Math.round(d.bank_krw).toLocaleString()}원</th></tr>` : ''}
+          ${(d.mt5 || []).length || (d.banks || []).length ? `<tr><th style="text-align:left">전체</th><th></th><th style="text-align:right">${money(d.grand_usdt)}${d.grand_krw ? `<br><small>≈ ${Math.round(d.grand_krw).toLocaleString()}원</small>` : ''}</th></tr>` : ''}
         </tfoot></table>
       ${d.krw_rate ? `<p class="hint">1 USDT = ${Math.round(d.krw_rate).toLocaleString()}원 (업비트) · 코인 시세는 바이낸스 · MT5 계좌 달러는 USDT 와 1:1 로 계산</p>` : ''}
       ${deps.length ? `<h3 style="margin-top:14px">최근 바이낸스 입금</h3>${deps.map((x) => `<div class="muted" style="font-size:13px">${esc(new Date(x.time * 1000).toLocaleString())} · +${Number(x.amount).toLocaleString()} ${esc(x.coin)} (${esc(x.network)})</div>`).join('')}` : ''}`
@@ -1725,6 +1755,60 @@ $('wlList').addEventListener('change', wlEdit);
 $('wlList').addEventListener('click', (e) => { const i = e.target.dataset.del; if (i != null) { wlRows.splice(Number(i), 1); wlRenderList(); } });
 $('wlAdd').onclick = () => { wlRows.push({ network: 'bsc', label: `지갑${wlRows.length + 1}`, address: '' }); wlRenderList(); };
 $('wlRefresh').onclick = () => loadWallets(true);
+
+// ── 은행 (직접 입력 · CODEF) ──
+let bkRows = [];
+function bkRender(b) {
+  bkRows = (b.manual || []).map((m) => ({ ...m }));
+  bkRenderManual();
+  $('bkOrg').innerHTML = Object.entries(b.banks || {}).map(([k, n]) => `<option value="${k}">${esc(n)}</option>`).join('');
+  $('bkCodef').innerHTML = !b.codef ? '<p class="hint">CODEF 키가 없습니다. 아래에 넣고 [키 저장]을 누르세요.</p>'
+    : `<p>CODEF 키 <code>${esc(b.codef_id)}</code> · 연결한 은행: ${(b.orgs || []).length ? b.orgs.map((o) =>
+        `<span class="pill" style="margin-right:6px">${esc(o.name)} <a href="#" data-unlink="${o.organization}" title="연결 해제">✕</a></span>`).join('') : '없음'}</p>`;
+  $('bkConnect').style.display = b.codef ? 'flex' : 'none';
+  $('bkKeyClear').hidden = !b.codef;
+}
+function bkRenderManual() {
+  $('bkManual').innerHTML = bkRows.length ? bkRows.map((m, i) => `<div style="display:flex;gap:6px;margin:4px 0;align-items:center">
+      <input type="text" data-b="${i}" data-k="name" value="${esc(m.name)}" placeholder="은행 이름" style="width:140px">
+      <input type="text" data-b="${i}" data-k="amount" value="${m.amount ? Math.round(m.amount).toLocaleString() : ''}" placeholder="잔액(원)" style="flex:1;text-align:right">
+      <button class="btn" data-bdel="${i}">삭제</button></div>`).join('')
+    : '<p class="hint">직접 입력한 은행이 없습니다.</p>';
+}
+$('bkManual').addEventListener('input', (e) => { const i = e.target.dataset.b; if (i != null) bkRows[i][e.target.dataset.k] = e.target.value.trim(); });
+$('bkManual').addEventListener('click', (e) => { const i = e.target.dataset.bdel; if (i != null) { bkRows.splice(Number(i), 1); bkRenderManual(); } });
+$('bkAdd').onclick = () => { bkRows.push({ name: bkRows.length ? '' : '토스뱅크', amount: '' }); bkRenderManual(); };
+$('bkSave').onclick = async () => {
+  try {
+    await api('wallets', { method: 'PUT', body: JSON.stringify({ manual_banks: bkRows.filter((m) => m.name).map((m) => ({ name: m.name, amount: String(m.amount).replace(/,/g, '') || '0' })) }) });
+    toast('저장했습니다.'); loadWallets(false);
+  } catch (e) { toast(e.message, true); }
+};
+$('bkKeySave').onclick = async () => {
+  const k = { client_id: $('bkCid').value.trim(), client_secret: $('bkSec').value.trim(), public_key: $('bkPub').value.trim() };
+  if (!k.client_id || !k.client_secret || !k.public_key) { toast('Client ID · Secret · 공개키를 모두 넣으세요.', true); return; }
+  try { await api('wallets', { method: 'PUT', body: JSON.stringify({ codef_keys: k }) }); $('bkCid').value = $('bkSec').value = $('bkPub').value = ''; toast('CODEF 키를 저장했습니다. 이제 은행을 연결하세요.'); loadWallets(false); }
+  catch (e) { toast(e.message, true); }
+};
+$('bkKeyClear').onclick = async () => {
+  if (!confirm('CODEF 키와 연결한 은행을 모두 지울까요?')) return;
+  try { await api('wallets', { method: 'PUT', body: JSON.stringify({ codef_clear: true }) }); toast('지웠습니다.'); loadWallets(false); }
+  catch (e) { toast(e.message, true); }
+};
+$('bkConn').onclick = async () => {
+  const body = { organization: $('bkOrg').value, login_id: $('bkId').value.trim(), password: $('bkPw').value };
+  if (!body.login_id || !body.password) { toast('인터넷뱅킹 아이디와 비밀번호를 넣으세요.', true); return; }
+  $('bkConn').disabled = true; $('bkConn').textContent = '연결 중…';
+  try { await api('wallets/bank', { method: 'POST', body: JSON.stringify(body) }); $('bkPw').value = ''; toast('연결했습니다. 잔고를 불러옵니다…'); loadWallets(true); }
+  catch (e) { toast(e.message, true); }
+  finally { $('bkPw').value = ''; $('bkConn').disabled = false; $('bkConn').textContent = '은행 연결'; }
+};
+$('bkCodef').addEventListener('click', async (e) => {
+  const o = e.target.dataset.unlink; if (!o) return; e.preventDefault();
+  if (!confirm('이 은행 연결을 해제할까요?')) return;
+  try { await api('wallets/bank', { method: 'POST', body: JSON.stringify({ organization: o, disconnect: true }) }); toast('해제했습니다.'); loadWallets(true); }
+  catch (e2) { toast(e2.message, true); }
+});
 $('wlBnSave').onclick = async () => {
   const k = $('wlBnKey').value.trim(), sec = $('wlBnSec').value.trim();
   if (!k || !sec) { toast('API Key 와 Secret Key 를 둘 다 넣으세요.', true); return; }

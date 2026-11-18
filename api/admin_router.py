@@ -999,8 +999,9 @@ def _log_dir() -> str:
 @router.get("/api/wallets")
 async def wallets_get(refresh: bool = False):
     """바이낸스(읽기 전용 키) · 개인 지갑(여러 네트워크) 잔고 (services/wallets.py)"""
-    from services import wallets
+    from services import banks, wallets
     c = wallets.cfg()
+    c["banks"] = banks.cfg()
     try:
         data = await wallets.summary(refresh=refresh)
     except Exception as e:
@@ -1016,10 +1017,35 @@ async def wallets_put(body: dict):
             wallets.save_binance(None, None, clear=True)
         elif body.get("binance_key") or body.get("binance_secret"):
             wallets.save_binance(body.get("binance_key"), body.get("binance_secret"))   # 암호화해서 저장 · 응답에 Secret 없음
+        from services import banks
+        if body.get("codef_clear"):
+            banks.clear_codef()
+        elif body.get("codef_keys"):
+            k = body["codef_keys"]
+            banks.set_codef_keys(k.get("client_id"), k.get("client_secret"), k.get("public_key"))   # 암호화해서 저장
+        if body.get("manual_banks") is not None:
+            banks.set_manual(body["manual_banks"])
         c = wallets.save_cfg(lst=body.get("list"), notify=body.get("notify"))
     except ValueError as e:
         raise HTTPException(400, str(e))
     return {"config": c}
+
+
+@router.post("/api/wallets/bank")
+async def wallets_bank(body: dict):
+    """CODEF 은행 연결/해제 - 인터넷뱅킹 비밀번호는 CODEF 공개키로 암호화해서 CODEF 로만 보내고 저장하지 않음"""
+    from services import banks, wallets
+    try:
+        if body.get("disconnect"):
+            await banks.disconnect_bank(str(body.get("organization") or ""))
+        else:
+            await banks.connect_bank(str(body.get("organization") or ""), str(body.get("login_id") or "").strip(), str(body.get("password") or ""))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        raise HTTPException(400, f"은행 연결 실패: {e}")
+    wallets._cache.clear()
+    return {"ok": True}
 
 
 @router.get("/api/logs")
