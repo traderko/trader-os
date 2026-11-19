@@ -399,11 +399,11 @@ class TelegramLive:
                 body = "<b>원웨이 진행 중</b>\n" + "\n".join(ow) + "\n" + SEP + body
         except Exception:
             pass
-        try:                                   # 반대 포지션을 들고 있는데 마지막 마감 봉이 돌파캔들(BOB)이면 맨 위에
+        try:                                   # 돌파캔들(BOB) - 종목·시간봉마다 지금 방향 (반대 포지션이면 ⚠️) · 맨 위에
             from services import breakout
             bob = breakout.live_lines() if show["bob"] else []
             if bob:
-                body = "<b>돌파캔들(BOB) · 반대 포지션</b>\n" + "\n".join(bob) + "\n" + SEP + body
+                body = "<b>돌파캔들(BOB)</b>\n" + "\n".join(bob) + "\n" + SEP + body
         except Exception:
             pass
         return f"<b>TraderOS 실시간</b> · {datetime.now().strftime('%H:%M:%S')}\n\n{body}"
