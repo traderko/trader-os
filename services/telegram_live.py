@@ -179,7 +179,7 @@ def _lock_line(s: dict | None) -> str:
 
 # 실시간 현황에 넣을 것 - 켜고 끄기 (/표시 또는 현황 아래 [⚙️ 표시] 버튼). 잠금 줄은 항상 보임
 LIVE_PARTS = [
-    ("oneway", "원웨이"), ("ea", "EA 경고"), ("equity", "평가금·손익"), ("margin", "증거금"),
+    ("oneway", "원웨이"), ("bob", "돌파캔들(BOB)"), ("ea", "EA 경고"), ("equity", "평가금·손익"), ("margin", "증거금"),
     ("withdraw", "출금 가능"), ("liq", "강제청산까지"), ("positions", "포지션"),
     ("split", "구간매매·직접 나눠 보기"), ("sltp", "SL·TP시 예상 손익"), ("buttons", "SL·TP 버튼"),
 ]
@@ -397,6 +397,13 @@ class TelegramLive:
             ow = oneway.live_lines(allpos) if show["oneway"] else []
             if ow:
                 body = "<b>원웨이 진행 중</b>\n" + "\n".join(ow) + "\n" + SEP + body
+        except Exception:
+            pass
+        try:                                   # 반대 포지션을 들고 있는데 마지막 마감 봉이 돌파캔들(BOB)이면 맨 위에
+            from services import breakout
+            bob = breakout.live_lines() if show["bob"] else []
+            if bob:
+                body = "<b>돌파캔들(BOB) · 반대 포지션</b>\n" + "\n".join(bob) + "\n" + SEP + body
         except Exception:
             pass
         return f"<b>TraderOS 실시간</b> · {datetime.now().strftime('%H:%M:%S')}\n\n{body}"

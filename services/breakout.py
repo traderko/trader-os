@@ -33,6 +33,7 @@ TFS = [("2m", "M2", 2, "2분"), ("5m", "M5", 5, "5분"), ("10m", "M10", 10, "10�
 TF_KR = {k: kr for k, _, _, kr in TFS}
 DEFAULT_ON = {"2m": False, "5m": False, "10m": True, "1h": True, "2h": True}
 _sent: dict[str, float] = {}          # (계좌·종목·시간봉·봉시각·방향) → 보낸 시각
+ACTIVE: dict = {"at": 0, "rows": []}  # 지금 마지막 마감 봉이 BOB 이고 반대 포지션이 있는 것 - 텔레그램 실시간 현황에 보임
 
 
 # ── 설정 ──
@@ -163,6 +164,7 @@ async def check_once() -> None:
     for k in [k for k, v in _sent.items() if now - v > 3 * 86400]:
         _sent.pop(k, None)
     groups: dict[tuple, list] = {}                         # 같은 계좌·종목·방향은 한 메시지로 (여러 시간봉이 한꺼번에 넘을 때)
+    active = []
     for r in await scan():
         h = r["hit"]
         if not h:
@@ -170,11 +172,14 @@ async def check_once() -> None:
         against = 1 if h["dir"] == "up" else 0                # 상승 돌파면 매도(1)가 반대
         if not r["held"][against]:
             continue
+        active.append(r)
+        ACTIVE.update(at=now, rows=active)
         key = f"{r['aid']}|{r['symbol']}|{r['tf']}|{h['t']}|{h['dir']}"
         if key in _sent:
             continue
         _sent[key] = now
         groups.setdefault((r["acc"], r["symbol"], h["dir"]), []).append(r)
+    ACTIVE.update(at=now, rows=active)
     for (acc, sym, d), rs in groups.items():
         up = d == "up"
         ps = rs[0]["held"][1 if up else 0]
@@ -191,6 +196,24 @@ async def check_once() -> None:
             get_fcm_service().send(title, "\n".join(lines), '{"type":"breakout"}')
         except Exception as e:
             print(f"[breakout] 알림 실패: {e}")
+
+
+def live_lines() -> list[str]:
+    """텔레그램 실시간 현황용 - 마지막 마감 봉이 반대 방향 BOB 인 종목 (다음 봉이 마감되면 저절로 사라짐)"""
+    if time.time() - ACTIVE["at"] > 120:
+        return []
+    by: dict[tuple, list] = {}
+    for r in ACTIVE["rows"]:
+        by.setdefault((r["acc"], r["symbol"], r["hit"]["dir"]), []).append(r)
+    out = []
+    for (acc, sym, d), rs in by.items():
+        up = d == "up"
+        ps = rs[0]["held"][1 if up else 0]
+        tfs = " · ".join(f"{TF_KR[r['tf']]} {datetime.fromtimestamp(r['hit']['t'], timezone(timedelta(hours=9))):%H:%M}"
+                         for r in sorted(rs, key=lambda r: [t for t, *_ in TFS].index(r["tf"])))
+        out.append(f"{'▲' if up else '▼'} {html.escape(symbols.group_of(sym)['label'] if symbols.group_of(sym) else sym)} "
+                   f"<b>{'상승' if up else '하락'} BOB</b> · {tfs}\n      ⚠️ <b>반대 {'매도' if up else '매수'} {_held_txt(ps)}</b>")
+    return out
 
 
 async def loop() -> None:
