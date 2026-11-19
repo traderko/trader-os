@@ -1262,6 +1262,9 @@ class TelegramLive:
                 elif mine and (text.startswith("/문구") or text.startswith("/phrases")):
                     from services import telegram_phrases
                     await telegram_phrases.cmd_phrases(self, client, token, cid)
+                elif mine and (text.startswith("/돌파") or text.lower().startswith("/bob") or text.startswith("/breakout")):
+                    from services import breakout
+                    await breakout.cmd(self, client, token, cid)
                 elif mine and (text.startswith("/잔고") or text.startswith("/wallet")):
                     from services import wallets
                     await wallets.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
@@ -1374,6 +1377,16 @@ class TelegramLive:
                                                                    (cb.get("message") or {}).get("message_id"))
                         except Exception as e:
                             answer = f"실패: {e}"[:190]
+                elif data.startswith("bo:"):          # /BOB 시간봉·기준·켜기 버튼 (services/breakout.py)
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        from services import breakout
+                        try:
+                            answer = await breakout.button(self, client, token, cid, data,
+                                                           (cb.get("message") or {}).get("message_id"))
+                        except Exception as e:
+                            answer = f"실패: {e}"[:190]
                 elif data.startswith("ow:"):          # /원웨이 시간봉·켜기 버튼 (services/oneway.py)
                     if cid != str(telegram_cfg()["chat_id"] or ""):
                         answer = "등록된 대화에서만 쓸 수 있습니다"
@@ -1443,6 +1456,8 @@ class TelegramLive:
             wd_task = asyncio.create_task(withdraw_notice.loop(self, client))
             from services import wallets                 # 바이낸스 · 개인 지갑 입금 알림 (services/wallets.py)
             wallet_task = asyncio.create_task(wallets.loop(self, client))
+            from services import breakout                # 돌파캔들(BOB) · 반대 포지션 알림 (services/breakout.py)
+            bo_task = asyncio.create_task(breakout.loop())
             try:
                 await self._poll_loop(client)
             finally:
@@ -1450,6 +1465,7 @@ class TelegramLive:
                 oneway_task.cancel()
                 wd_task.cancel()
                 wallet_task.cancel()
+                bo_task.cancel()
 
     async def _poll_loop(self, client: httpx.AsyncClient) -> None:
         while True:
@@ -1468,6 +1484,7 @@ class TelegramLive:
                         print(f"[telegram-live] 봇 {status['bot']} 연결됨 - 봇에게 /start 를 보내면 chat id를 알려줍니다")
                         await self._call(client, token, "setMyCommands", commands=[
                             {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
+                            {"command": "bob", "description": "돌파캔들(BOB) 알림 - 반대 포지션 경고 · 시간봉 켜기·끄기"},
                             {"command": "wallet", "description": "바이낸스 · 개인 지갑 잔고 (/잔고 · /잔고 추가 네트워크 주소 이름)"},
                             {"command": "withdraw", "description": "출금 가능액 + 출금 페이지 (/출금 · /출금 알림 30)"},
                             {"command": "show", "description": "실시간 현황에 보일 것 켜고 끄기 (/표시)"},
