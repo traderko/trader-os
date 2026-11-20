@@ -12,6 +12,10 @@
              주 단계 이상 갔던 다리가 되돌림 허용을 넘게 꺾이면 '멈춤' 알림 한 번
              그 방향과 반대인 포지션(원웨이 상승인데 매도 보유)이 있으면 ⚠️ 로 같이 알려줌
   장마다 새로 셈 (장이 바뀌면 그 장의 KTR로 처음부터). 1시간·2시간 KTR은 장 시작 뒤 그 봉이 끝나야 셈
+  평소 KTR : 지난 20거래일 같은 장 · 같은 시간봉 시작 봉 KTR 의 평균 (장마다 한 번, 뒤에서 계산)
+             오늘 KTR ÷ 평소 KTR = 시작 크기 (0.7 미만 작은 시작 · 1.3 넘으면 큰 시작)
+             움직임 ÷ 평소 KTR 도 같이 보여 줌 - 봉 하나로 잰 오늘 KTR 이 지표 봉 등으로 너무 크거나 작게 잡혔는지 확인용
+             (알림 기준은 그대로 오늘 KTR)
 
   부담: KTR은 장마다 시간봉별로 한 번만 구하고(캐시), 1분마다 종목당 2분봉 한 번만 받아 모든 시간봉을 같이 계산.
         텔레그램 버튼 처리와는 따로 도는 작업이라 버튼이 느려지지 않음
@@ -185,6 +189,77 @@ async def _ktrs(aid: int, group: str, sid: str, opened: datetime, now: datetime)
     return out
 
 
+# ── 평소 KTR (지난 20거래일 같은 장 시작 봉 평균) ──
+AVG_DAYS = 20
+_avg_cache: dict = {}            # (group, sid, opened, tf) → {"avg", "n"}
+_avg_busy: set = set()
+
+
+def _past_opens(sid: str, opened: datetime, n: int) -> list[datetime]:
+    out, t = [], opened - timedelta(minutes=1)
+    for _ in range(n * 2):
+        if len(out) >= n:
+            break
+        try:
+            o = grid.session_open(sid, t)
+        except grid.GridError:
+            break
+        out.append(o)
+        t = o - timedelta(minutes=1)
+    return out
+
+
+async def _avg_compute(aid: int, group: str, sid: str, opened: datetime) -> None:
+    key0 = (group, sid, opened.isoformat())
+    try:
+        opens = _past_opens(sid, opened, AVG_DAYS)
+        sem = asyncio.Semaphore(4)
+        for tf in TFS:
+            span = timedelta(minutes=grid.TIMEFRAMES[tf][1])
+
+            async def one(o):
+                async with sem:
+                    try:
+                        cs = await grid._candles(aid, group, "mt5", tf, o - span * 3, o + span * 2)
+                        return grid._ktr_from(cs, sid, o, tf, "mt5")["ktr"]
+                    except Exception:
+                        return None             # 그날 봉이 없음 (휴장 · 월요일 아시아장 직전 봉 없음 등)
+            vals = [v for v in await asyncio.gather(*(one(o) for o in opens)) if v and v > 0]
+            if len(vals) >= 5:
+                _avg_cache[key0 + (tf,)] = {"avg": sum(vals) / len(vals), "n": len(vals)}
+    finally:
+        _avg_busy.discard(key0)
+    old = (opened - timedelta(days=2)).isoformat()
+    for k in [k for k in _avg_cache if k[2] < old]:
+        _avg_cache.pop(k, None)
+
+
+def _avg_for(aid: int, group: str, sid: str, opened: datetime) -> dict:
+    """{tf: avg} - 없으면 뒤에서 계산을 시작하고 빈 dict (다음 확인부터 나옴)"""
+    key0 = (group, sid, opened.isoformat())
+    out = {tf: v["avg"] for tf in TFS if (v := _avg_cache.get(key0 + (tf,)))}
+    if not out and key0 not in _avg_busy:
+        _avg_busy.add(key0)
+        try:
+            asyncio.get_running_loop().create_task(_avg_compute(aid, group, sid, opened))
+        except RuntimeError:
+            _avg_busy.discard(key0)
+    return out
+
+
+def start_word(r: float) -> str:
+    return "큰 시작" if r > 1.3 else "작은 시작" if r < 0.7 else "보통"
+
+
+def _avg_note(k_today: float, k_avg: float, main: float) -> str:
+    """오늘 KTR 기준과 평소 KTR 기준이 원웨이 판정에서 엇갈리면 한 줄"""
+    if k_today >= main > k_avg:
+        return "오늘 KTR 이 작게 잡혀 크게 나왔을 수 있음 (평소 기준으로는 원웨이 아래)"
+    if k_avg >= main > k_today:
+        return "오늘 KTR 이 크게 잡힘 (지표 봉 등) - 평소 기준으로는 원웨이"
+    return ""
+
+
 async def measure(aid: int, group: str, now: datetime | None = None, c: dict | None = None) -> dict | None:
     """지금 장의 원웨이 상태 - 시간봉마다 {ktr, legs}. KTR을 하나도 못 구했으면 None"""
     c = c or cfg()
@@ -198,7 +273,8 @@ async def measure(aid: int, group: str, now: datetime | None = None, c: dict | N
     candles = [x for x in candles if x["t"] >= int(opened.timestamp())]
     if not candles:
         return None
-    per = {tf: {"ktr": k, "legs": legs(candles, c["tfs"][tf]["retrace"] * k)} for tf, k in ktrs.items()}
+    avg = _avg_for(aid, group, sid, opened)
+    per = {tf: {"ktr": k, "avg": avg.get(tf), "legs": legs(candles, c["tfs"][tf]["retrace"] * k)} for tf, k in ktrs.items()}
     return {"group": group, "sid": sid, "session": grid.SESSIONS[sid][0], "opened": opened, "tfs": per,
             "last_t": candles[-1]["t"], "lo": min(x["l"] for x in candles), "hi": max(x["h"] for x in candles)}
 
@@ -283,6 +359,14 @@ def live_lines(positions: list[dict] | None = None) -> list[str]:
             t0 = datetime.fromtimestamp(leg["t0"], KST)
             line += (f"\n   {_p(leg['start'])} ({t0:%H:%M}) → {_p(leg['end'])} · "
                      f"{_p(leg['stop'])} {'아래면' if d == 'up' else '위면'} 멈춤")
+            if leg.get("avg"):            # 평소 KTR 기준 배수 · 시작 크기
+                ks = [(h[0], h[3]["len"] / h[3]["avg"]) for h in hs if h[3].get("avg")]
+                r = leg["ktr"] / leg["avg"]
+                line += (f"\n   평소 기준 " + " · ".join(f"{TF_KR[tf]} {k:.1f}" for tf, k in ks)
+                         + f" KTR · 시작 {r:.1f}배 ({start_word(r)})")
+                note = _avg_note(big[1], leg["len"] / leg["avg"], big[2])
+                if note:
+                    line += f"\n   <i>{note}</i>"
             if positions:
                 want = 1 if d == "up" else 0
                 ps = [p for p in positions if (symbols.group_of(p.get("symbol", "")) or {}).get("key") == group
@@ -324,7 +408,7 @@ async def check_once(now: datetime | None = None) -> None:
                 k = leg["len"] / x["ktr"]
                 if t["levels"] and k >= min(t["levels"]):
                     stop = leg["end"] - t["retrace"] * x["ktr"] if d == "up" else leg["end"] + t["retrace"] * x["ktr"]
-                    dirs[d].append((tf, k, t["main"], dict(leg, stop=stop)))
+                    dirs[d].append((tf, k, t["main"], dict(leg, stop=stop, ktr=x["ktr"], avg=x.get("avg"))))
         if dirs["up"] or dirs["down"]:
             ACTIVE[group] = {"at": time.time(), "session": m["session"], "dirs": dirs}
         else:
@@ -363,6 +447,13 @@ async def check_once(now: datetime | None = None) -> None:
                     f"{_p(leg['end'] - top[2]['retrace'] * ktr if d == 'up' else leg['end'] + top[2]['retrace'] * ktr)} "
                     f"{'아래로' if d == 'up' else '위로'} 오면 멈춤\n"
                     f"전체: {_all_line(m, d)}")
+            avg = m["tfs"][top[0]].get("avg")
+            if avg:
+                r = ktr / avg
+                body += (f"\n평소 KTR {_p(avg)} → 오늘 {r:.1f}배 ({start_word(r)}) · 평소 기준 {leg['len'] / avg:.1f} KTR")
+                note = _avg_note(top[1], leg["len"] / avg, top[2]["main"])
+                if note:
+                    body += "\n" + note
             warn = await _counter_positions(group, d)
             if warn:
                 body += "\n" + warn
@@ -608,6 +699,7 @@ async def status_text() -> str:
             L.append(f"{html.escape(_label(group))}: {html.escape(err) or 'KTR을 아직 못 구함 (장 시작 첫 봉 전이거나 MT5 연결 안 됨)'}")
             continue
         L.append(f"<b>{html.escape(_label(group))}</b> · {m['session']} · 장 폭 {_p(m['hi'] - m['lo'])}")
+        L.append("   <i>숫자 = 오늘 KTR 배수 (괄호 = 평소 KTR 배수) · 평소 = 지난 20거래일 같은 장 시작 봉 평균</i>")
         for tf in TFS:
             x = m["tfs"].get(tf)
             if not x:
@@ -619,8 +711,14 @@ async def status_text() -> str:
                 leg = x["legs"].get(d)
                 if leg:
                     k = leg["len"] / x["ktr"]
-                    parts.append(f"{'🔥' if k >= t['main'] else ('↗' if d == 'up' else '↘')}{k:.1f}")
-            L.append(f"   {TF_KR[tf]} KTR {_p(x['ktr'])}: " + "  ".join(parts))
+                    parts.append(f"{'🔥' if k >= t['main'] else ('↗' if d == 'up' else '↘')}{k:.1f}"
+                                 + (f"({leg['len'] / x['avg']:.1f})" if x.get("avg") else ""))
+            if x.get("avg"):
+                r = x["ktr"] / x["avg"]
+                head = f"   {TF_KR[tf]} KTR {_p(x['ktr'])} · 평소 {_p(x['avg'])} {r:.1f}배{' ' + start_word(r) if start_word(r) != '보통' else ''}"
+            else:
+                head = f"   {TF_KR[tf]} KTR {_p(x['ktr'])} · 평소 계산 중"
+            L.append(head + ": " + "  ".join(parts))
         # 오늘 이미 끝난 장도 원웨이였는지 (지금 장만 보면 아침 아시아장 원웨이를 놓쳐 보임)
         try:
             from datetime import date
