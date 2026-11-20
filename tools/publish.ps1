@@ -4,6 +4,7 @@
 #   publish.bat release         ... and tag the next version (v0.2.1 -> v0.2.2); GitHub Actions builds the Release
 #   publish.bat release 0.3.0   ... tag this exact version
 #   publish.bat -m "message"    commit message
+#   publish.bat release -y      release without asking (answers y) - used by ship.bat
 #
 # Commit message (no need to type one):
 #   1) -m "..." if given
@@ -24,10 +25,11 @@
 param([Parameter(ValueFromRemainingArguments = $true)][string[]]$Rest)
 $ErrorActionPreference = 'Stop'
 
-$release = $false; $version = $null; $msg = $null
+$release = $false; $version = $null; $msg = $null; $yes = $false
 for ($i = 0; $i -lt $Rest.Count; $i++) {
     $a = $Rest[$i]
     if ($a -eq 'release') { $release = $true }
+    elseif ($a -eq '-y' -or $a -eq 'yes') { $yes = $true }
     elseif ($a -eq '-m' -and $i + 1 -lt $Rest.Count) { $msg = $Rest[$i + 1]; $i++ }
     elseif ($a -match '^v?\d+\.\d+\.\d+$') { $version = $a.TrimStart('v') }
     else { Write-Host "  unknown argument: $a"; exit 1 }
@@ -159,7 +161,8 @@ try {
             $pending | ForEach-Object { $r = ($_ -split "`t", 2)[1]; Write-Host "     - $(if ($r) { $r } else { '(no reason)' })" }
             $choice = "(y = $tag / p = v$patchVer instead / N)"
         }
-        $ans = Read-Host "   Create release $tag ? $choice"
+        if ($yes) { $ans = 'y'; Write-Host "   Create release $tag (auto)" }
+        else { $ans = Read-Host "   Create release $tag ? $choice" }
         if ($auto -and $ans -match '^[pP]') { $version = $patchVer; $tag = "v$version" }
         elseif ($ans -notmatch '^[yY]') { Write-Host "   skipped"; exit 0 }
         if (Git tag --list $tag) { throw "tag $tag already exists - give a version: release.bat 0.3.0" }
