@@ -663,7 +663,12 @@ class TelegramLive:
             if me is None:
                 await self._send(client, token, chat_id, "이 포지션은 이미 청산됐거나 MT5에 연결되지 않았습니다.")
                 return "포지션 없음"
-            from services.sltp import ref_levels
+            from services.sltp import ref_levels, level_options
+            if kind == "sameall":
+                opts = {f: level_options(targets, f) for f in ("sl", "tp")}
+                if any(len(o) > 1 for o in opts.values()):      # 값이 두 개 이상 - 어느 값으로 맞출지 고르게
+                    await self._send_level_choice(client, token, chat_id, aid, me, targets, opts)
+                    return "어느 값으로 맞출지 고르세요"
             rsl, rtp, nsl, ntp = ref_levels(targets, 10 ** 18 if kind == "sameall" else ticket)
             if not (nsl or ntp):
                 return "이미 같은 SL/TP 입니다" if (rsl or rtp) else "먼저 들어간 포지션에 SL/TP 가 없습니다"
@@ -675,6 +680,34 @@ class TelegramLive:
                     await self._apply_level(client, token, chat_id, aid, "tp", rtp, ntp, me)
             self._bg(run())
             return "같은 SL/TP 거는 중"
+        if data.startswith("pos:pick:"):
+            # pos:pick:<sl|tp|both>:<계좌id>:<티켓>[:<가격>]  [📋 맞추기] 에서 고른 값으로 같은 종목·방향 전부
+            #   both = 둘 다 '가장 최근에 고친 값' 으로
+            try:
+                parts = data.split(":")
+                field, aid, ticket = parts[2], int(parts[3]), int(parts[4])
+                price = float(parts[5]) if len(parts) > 5 else None
+            except (ValueError, IndexError):
+                return "잘못된 버튼"
+            me, targets = await self._targets(aid, ticket, "a")
+            if me is None:
+                await self._send(client, token, chat_id, "이 포지션은 이미 청산됐거나 MT5에 연결되지 않았습니다.")
+                return "포지션 없음"
+            from services.sltp import level_options
+            jobs = []
+            for f in (("sl", "tp") if field == "both" else (field,)):
+                v = price if field != "both" else next((o["value"] for o in level_options(targets, f)), 0)
+                need = [p for p in targets if v and abs(float(p.get(f) or 0) - v) > 1e-9]
+                if need:
+                    jobs.append((f, v, need))
+            if not jobs:
+                return "이미 다 같은 값입니다"
+
+            async def run_pick():
+                for f, v, need in jobs:
+                    await self._apply_level(client, token, chat_id, aid, f, v, need, me)
+            self._bg(run_pick())
+            return "맞추는 중"
         if data.startswith("pos:set:"):
             try:
                 _, _, field, scope, aid, ticket, price = data.split(":")
@@ -829,6 +862,34 @@ class TelegramLive:
         t = asyncio.create_task(coro)
         tasks.add(t)
         t.add_done_callback(tasks.discard)
+
+    async def _send_level_choice(self, client, token, chat_id, aid, me, targets, opts) -> None:
+        """SL/TP 가 서로 다를 때 - 값마다 버튼 (최근에 고친 값이 맨 앞)"""
+        d = me.get("digits")
+        lines = [f"📋 <b>맞추기</b> · {self._describe(me, targets)}", "어느 값으로 전부 맞출까요?"]
+        rows, recent_any = [], False
+        for f in ("sl", "tp"):
+            o = opts[f]
+            name = "SL" if f == "sl" else "TP"
+            if not o:
+                lines.append(f"{name}: 없음")
+                continue
+            if len(o) == 1:
+                left = sum(1 for p in targets if not p.get(f))
+                lines.append(f"{name}: {self._fmt_price(o[0]['value'], d)} 하나" + (f" (빠진 {left}개는 이 값으로)" if left else ""))
+                continue
+            lines.append(f"{name}: 값이 {len(o)}가지")
+            row = []
+            for i, x in enumerate(o[:4]):
+                recent = i == 0 and x["changed"] > 0
+                recent_any |= recent
+                row.append({"text": f"{name} {self._fmt_price(x['value'], d)} · {x['count']}개" + (" · 최근 고침" if recent else ""),
+                            "callback_data": f"pos:pick:{f}:{aid}:{me['ticket']}:{x['value']!r}"})
+            rows += [[b] for b in row]
+        if recent_any:
+            rows.insert(0, [{"text": "⚡ 최근 고친 값으로 맞추기" + (" (SL·TP 둘 다)" if all(len(opts[f]) > 1 for f in ("sl", "tp")) else ""), "callback_data": f"pos:pick:both:{aid}:{me['ticket']}"}])
+        lines.append("<i>MT5 에서 포지션 하나만 SL/TP 를 고친 뒤 누르면, 그 값이 '최근 고침'으로 맨 위에 나옵니다</i>")
+        await self._send(client, token, chat_id, "\n".join(lines), reply_markup={"inline_keyboard": rows})
 
     async def _apply_level(self, client, token, chat_id, aid, field, price, targets, me) -> None:
         cur = me.get("price_current") or 0

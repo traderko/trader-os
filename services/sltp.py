@@ -86,17 +86,40 @@ def _reason(e: Exception) -> str:
     return str(d or e or type(e).__name__)[:200]
 
 
+def _modified_at(p: dict) -> int:
+    """포지션의 SL/TP 를 진입 뒤에 고친 시각(ms). 진입하면서 걸린 것이거나 모르면 0"""
+    up, opened = int(p.get("time_update") or 0), int(p.get("time") or 0) * 1000
+    return up if up and up - opened > 2000 else 0
+
+
+def level_options(ps: list[dict], key: str) -> list[dict]:
+    """포지션들에 걸린 key('sl'|'tp') 값들 (0 빼고) - [{value, count, changed(ms)}]
+    최근에 고친 값이 먼저, 그다음 많이 걸린 값"""
+    opts: dict[float, dict] = {}
+    for p in ps:
+        v = round(float(p.get(key) or 0), 10)
+        if not v:
+            continue
+        o = opts.setdefault(v, {"value": v, "count": 0, "changed": 0})
+        o["count"] += 1
+        o["changed"] = max(o["changed"], _modified_at(p))
+    # 가장 많이 걸린 값은 '원래 값'으로 봄 - 그 포지션이 다른 쪽(SL 고칠 때 TP 등)을 고쳐서 시각이 바뀐 것일 수 있음
+    top = sorted(opts.values(), key=lambda o: -o["count"])
+    if len(top) > 1 and top[0]["count"] > top[1]["count"]:
+        top[0]["changed"] = 0
+    return sorted(opts.values(), key=lambda o: (-o["changed"], -o["count"]))
+
+
 def ref_levels(same_side: list[dict], ticket: int) -> tuple[float, float, list[dict], list[dict]]:
     """새로 들어간 포지션(ticket)에 맞출 '기존' SL/TP 와, 맞춰야 할 포지션들.
     same_side: 같은 종목·같은 방향 포지션 전부 (worker /positions-all 의 dict)
-    기준 = ticket 보다 먼저 들어간 포지션들에 가장 많이 걸린 SL/TP (0 은 빼고). 없으면 0
+    기준 = ticket 보다 먼저 들어간 포지션들에 걸린 SL/TP 중 가장 최근에 고친 값 (고친 적 없으면 가장 많이 걸린 값, 0 은 빼고). 없으면 0
     돌려줌: (기준 SL, 기준 TP, SL 을 바꿔야 할 포지션들, TP 를 바꿔야 할 포지션들)"""
-    from collections import Counter
     older = [p for p in same_side if p.get("ticket", 0) < ticket] or []
-    def mode(key):
-        c = Counter(round(float(p.get(key) or 0), 10) for p in older if p.get(key))
-        return c.most_common(1)[0][0] if c else 0.0
-    sl, tp = mode("sl"), mode("tp")
+    def pick(key):
+        o = level_options(older, key)
+        return o[0]["value"] if o else 0.0
+    sl, tp = pick("sl"), pick("tp")
     need_sl = [p for p in same_side if sl and abs(float(p.get("sl") or 0) - sl) > 1e-9]
     need_tp = [p for p in same_side if tp and abs(float(p.get("tp") or 0) - tp) > 1e-9]
     return sl, tp, need_sl, need_tp
