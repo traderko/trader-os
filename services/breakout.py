@@ -41,6 +41,7 @@ TF_KR = {k: kr for k, _, _, kr in TFS}
 TF_ORDER = [k for k, *_ in TFS]
 DEFAULT_ON = {"2m": False, "5m": False, "10m": True, "1h": True, "2h": True}
 KST = timezone(timedelta(hours=9))
+UP, DN = "↑", "↓"                     # 상승 · 하락 표시
 LOOKBACK = 40                         # 처음 상태를 찾을 때 거슬러 보는 마감 봉 수
 _state: dict | None = None            # {"gold|10m": {dir, t, price, bb20, bb4}}
 _view: dict = {"at": 0, "markets": []}  # 마지막 확인 결과 (실시간 현황 · /bob 화면)
@@ -243,7 +244,7 @@ async def check_once() -> None:
         against = m["held"][1 if up else 0]
         tfs = " · ".join(TF_KR[tf] for _, tf, _ in sorted(rs, key=lambda x: TF_ORDER.index(x[1])))
         title = (f"⚠️ {m['label']} {'상승' if up else '하락'} 돌파캔들(BOB) ({tfs}) · 반대 {'매도' if up else '매수'} 보유" if against
-                 else f"{'▲' if up else '▼'} {m['label']} {'상승' if up else '하락'} 돌파캔들(BOB) ({tfs})")
+                 else f"{UP if up else DN} {m['label']} {'상승' if up else '하락'} 돌파캔들(BOB) ({tfs})")
         i = 2 if up else 0
         lines = []
         if against:
@@ -268,7 +269,7 @@ def _market_line(m: dict) -> list[str]:
             parts.append(f"{TF_KR[tf]} -")
             continue
         up = s["dir"] == "up"
-        parts.append(f"{TF_KR[tf]} {'▲' if up else '▼'}{_when(s['t'])}")
+        parts.append(f"{TF_KR[tf]} {UP if up else DN}{_when(s['t'])}")
         if m["held"][1 if up else 0]:
             warn.append((tf, up))
     out = [f"{html.escape(m['label'])}  " + " · ".join(parts)]
@@ -281,7 +282,7 @@ def _market_line(m: dict) -> list[str]:
 
 
 def live_lines() -> list[str]:
-    """텔레그램 실시간 현황용 - 종목마다 시간봉별 BOB 방향(▲ 상승 · ▼ 하락)과 그 BOB 봉 시각. 반대 포지션이면 ⚠️"""
+    """텔레그램 실시간 현황용 - 종목마다 시간봉별 BOB 방향(↑ 상승 · ↓ 하락)과 그 BOB 봉 시각. 반대 포지션이면 ⚠️"""
     if time.time() - _view["at"] > 120:
         return []
     out = []
@@ -332,7 +333,7 @@ async def status_text() -> str:
             L.append("      " + " · ".join(x for x in ((f"매수 {_held_txt(b)}" if b else ""), (f"매도 {_held_txt(s)}" if s else "")) if x))
     if not markets and len(L) == 4:
         L.append("MT5 가 연결된 계좌가 없습니다.")
-    L.append("\n<i>▲ 상승 · ▼ 하락 · 옆 시각은 그 BOB 봉 · 종목 바꾸기: /bob 종목 gold nasdaq</i>")
+    L.append(f"\n<i>{UP} 상승 · {DN} 하락 · 옆 시각은 그 BOB 봉 · 종목 바꾸기: /bob 종목 gold nasdaq</i>")
     return "\n".join(L)[:4000]
 
 
