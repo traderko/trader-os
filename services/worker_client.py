@@ -26,7 +26,14 @@ async def worker_get(account_id: int, path: str, params: dict | None = None):
             raise HTTPException(503, f"워커(account_id={account_id})에 연결할 수 없습니다.")
     if res.status_code != 200:
         raise HTTPException(res.status_code, res.text)
-    return res.json()
+    data = res.json()
+    if path == "/positions-all":          # SL/TP 를 언제 고쳤는지 기록 (맞추기에서 '최근 고침')
+        try:
+            from services.sltp import observe
+            observe(account_id, data)
+        except Exception:
+            pass
+    return data
 
 
 async def worker_post(account_id: int, path: str, json: dict, timeout: float = 10.0):

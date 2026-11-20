@@ -102,7 +102,6 @@ async def get_all_positions(request: Request):
             "ticket": p.ticket, "symbol": p.symbol, "volume": p.volume, "type": p.type,
             "price_open": p.price_open, "price_current": p.price_current, "profit": p.profit,
             "swap": p.swap, "sl": p.sl, "tp": p.tp, "time": p.time, "magic": p.magic, "comment": p.comment,
-            "time_update": getattr(p, "time_update_msc", 0),     # 마지막으로 바뀐 시각(ms) - SL/TP 를 고치면 바뀜
         }
         for p in positions
     ]

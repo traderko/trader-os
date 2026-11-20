@@ -888,7 +888,8 @@ class TelegramLive:
             rows += [[b] for b in row]
         if recent_any:
             rows.insert(0, [{"text": "⚡ 최근 고친 값으로 맞추기" + (" (SL·TP 둘 다)" if all(len(opts[f]) > 1 for f in ("sl", "tp")) else ""), "callback_data": f"pos:pick:both:{aid}:{me['ticket']}"}])
-        lines.append("<i>MT5 에서 포지션 하나만 SL/TP 를 고친 뒤 누르면, 그 값이 '최근 고침'으로 맨 위에 나옵니다</i>")
+        if not recent_any:
+            lines.append("<i>어느 값을 최근에 고쳤는지 모릅니다 (서버가 켜진 뒤 바뀐 게 없음). 맞출 값을 직접 고르세요</i>")
         await self._send(client, token, chat_id, "\n".join(lines), reply_markup={"inline_keyboard": rows})
 
     async def _apply_level(self, client, token, chat_id, aid, field, price, targets, me) -> None:

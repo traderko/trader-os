@@ -86,10 +86,34 @@ def _reason(e: Exception) -> str:
     return str(d or e or type(e).__name__)[:200]
 
 
-def _modified_at(p: dict) -> int:
-    """포지션의 SL/TP 를 진입 뒤에 고친 시각(ms). 진입하면서 걸린 것이거나 모르면 0"""
-    up, opened = int(p.get("time_update") or 0), int(p.get("time") or 0) * 1000
-    return up if up and up - opened > 2000 else 0
+# ── SL/TP 를 언제 고쳤는지 ──
+# MT5 는 SL/TP 를 고친 시각을 따로 주지 않아서 (포지션의 time_update 는 SL/TP 를 고쳐도 안 바뀜),
+# TraderOS 가 포지션을 읽을 때마다(실시간 현황 · BOB 확인 등 몇 초~20초마다) 이전 값과 비교해 바뀐 시각을 적어 둠.
+# MT5 에서 직접 고친 것도 잡힘. 서버를 다시 켜면 처음부터 (그 전에 고친 건 모름)
+_seen: dict[tuple, dict] = {}
+
+
+def observe(account_id: int, rows: list) -> None:
+    """/positions-all 결과를 받을 때마다 호출 (worker_client 가 부름). 각 포지션에 sl_changed · tp_changed(ms) 를 붙임"""
+    import time
+    now = int(time.time() * 1000)
+    live = set()
+    for p in rows or []:
+        if not isinstance(p, dict) or "ticket" not in p:
+            continue
+        k = (account_id, int(p["ticket"]))
+        live.add(k)
+        prev = _seen.get(k)
+        cur = {"sl": float(p.get("sl") or 0), "tp": float(p.get("tp") or 0),
+               "sl_at": (prev or {}).get("sl_at", 0), "tp_at": (prev or {}).get("tp_at", 0)}
+        if prev:
+            for f in ("sl", "tp"):
+                if not _same(prev[f], cur[f]):
+                    cur[f + "_at"] = now
+        _seen[k] = cur
+        p["sl_changed"], p["tp_changed"] = cur["sl_at"], cur["tp_at"]
+    for k in [k for k in _seen if k[0] == account_id and k not in live]:   # 청산된 포지션
+        del _seen[k]
 
 
 def level_options(ps: list[dict], key: str) -> list[dict]:
@@ -102,11 +126,7 @@ def level_options(ps: list[dict], key: str) -> list[dict]:
             continue
         o = opts.setdefault(v, {"value": v, "count": 0, "changed": 0})
         o["count"] += 1
-        o["changed"] = max(o["changed"], _modified_at(p))
-    # 가장 많이 걸린 값은 '원래 값'으로 봄 - 그 포지션이 다른 쪽(SL 고칠 때 TP 등)을 고쳐서 시각이 바뀐 것일 수 있음
-    top = sorted(opts.values(), key=lambda o: -o["count"])
-    if len(top) > 1 and top[0]["count"] > top[1]["count"]:
-        top[0]["changed"] = 0
+        o["changed"] = max(o["changed"], int(p.get(key + "_changed") or 0))
     return sorted(opts.values(), key=lambda o: (-o["changed"], -o["count"]))
 
 
