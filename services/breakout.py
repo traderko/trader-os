@@ -189,7 +189,7 @@ async def scan() -> tuple[list[dict], list]:
         for p in pos or []:
             g = symbols.group_of(p.get("symbol", ""))
             key = g["key"] if g else p.get("symbol", "")
-            m = markets.setdefault(key, {"key": key, "label": f"{g.get('icon', '')} {g['label']}".strip() if g else key,
+            m = markets.setdefault(key, {"key": key, "label": p.get("symbol") or key,
                                          "aid": a.id, "held": {0: [], 1: []}, "accs": set()})
             m["held"][_side(p)].append(p)
             m["accs"].add(a.account_number)
@@ -198,7 +198,7 @@ async def scan() -> tuple[list[dict], list]:
     for g in c["groups"]:
         if g not in markets:
             gg = symbols.group_by_key(g) or {}
-            markets[g] = {"key": g, "label": f"{gg.get('icon', '')} {gg.get('label', g)}".strip(), "aid": aid0,
+            markets[g] = {"key": g, "label": symbols.display_name(g), "aid": aid0,
                           "held": {0: [], 1: []}, "accs": set()}
     new = []
     for m in markets.values():
@@ -319,7 +319,7 @@ async def status_text() -> str:
          "BOB = 봉 마감 종가가 BB(20,2) 종가 + BB(4,4) 시가 두 밴드를 모두 넘은 봉. 반대 방향 BOB 가 나올 때까지 그 방향 유지",
          f"시간봉: {' · '.join(TF_KR[t] for t in TF_ORDER if c['tfs'][t]) or '없음'} · "
          f"알림: {'모든 BOB' if c['alert_all'] else '반대 포지션 보유 때만'} · 보는 종목: 포지션 든 종목 + "
-         + " · ".join((symbols.group_by_key(g) or {}).get("label", g) for g in c["groups"]), ""]
+         + " · ".join(symbols.display_name(g) for g in c["groups"]), ""]
     try:
         markets, _ = await asyncio.wait_for(scan(), 60)
         _view.update(at=time.time(), markets=markets)

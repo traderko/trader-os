@@ -30,7 +30,10 @@ async def worker_get(account_id: int, path: str, params: dict | None = None):
     if path == "/positions-all":          # SL/TP 를 언제 고쳤는지 기록 (맞추기에서 '최근 고침')
         try:
             from services.sltp import observe
+            from services.symbols import remember
             observe(account_id, data)
+            for p in data or []:
+                remember(p.get("symbol", ""))
         except Exception:
             pass
     return data

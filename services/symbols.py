@@ -39,6 +39,24 @@ def group_by_key(key: str) -> dict | None:
     return next((g for g in groups() if g["key"] == key), None)
 
 
+# 묶음마다 이 브로커에서 실제로 쓰는 종목 이름 (포지션을 읽을 때 기억 - worker_client) → 텔레그램 실시간 현황 표시용
+_broker_name: dict[str, str] = {}
+
+
+def remember(symbol: str) -> None:
+    g = group_of(symbol)
+    if g and symbol:
+        _broker_name[g["key"]] = symbol
+
+
+def display_name(key: str) -> str:
+    """종목명 (예: XAUUSD+, NAS100+) - 포지션에서 본 브로커 이름, 없으면 묶음의 대표 이름"""
+    if key in _broker_name:
+        return _broker_name[key]
+    g = group_by_key(key)
+    return (g.get("names") or [key])[0] if g else key
+
+
 def group_of(symbol: str) -> dict | None:
     n = norm(symbol)
     if not n:

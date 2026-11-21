@@ -350,7 +350,7 @@ def live_lines(positions: list[dict] | None = None) -> list[str]:
                 continue
             grade = "원웨이" if any(h[2] <= h[1] for h in hs) else "조짐"
             arrow, word = ("▲", "상승") if d == "up" else ("▼", "하락")
-            name = (symbols.group_by_key(group) or {}).get("label", group)   # 실시간 현황은 이모지 없이 (경고 ⚠️ 만)
+            name = symbols.display_name(group)        # 실시간 현황은 종목명 · 이모지 없이 (경고 ⚠️ 만)
             line = (f"{arrow} {html.escape(name)} <b>{word} {grade}</b> · "
                     + " · ".join(f"{TF_KR[h[0]]} {h[1]:.1f}" for h in hs) + f" KTR · {a['session']}")
             # 시작점 → 끝 · 멈춤선 (가장 큰 시간봉 기준 - 되돌림 허용이 넓어 멈춤선이 가장 멀고 의미가 큼)
