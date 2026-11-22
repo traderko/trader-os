@@ -51,6 +51,10 @@ async def apply_tags(data: dict, db: AsyncSession = Depends(get_db)):
         await db.execute(delete(TradeTagMap).where(TradeTagMap.trade_id.in_(trade_ids), TradeTagMap.tag_id.in_(remove_ids)))
     have = set((await db.execute(select(TradeTagMap.trade_id, TradeTagMap.tag_id).where(
         TradeTagMap.trade_id.in_(trade_ids), TradeTagMap.tag_id.in_(tag_ids)))).all())
+    if have:                                   # 추정 근거(auto)로 붙어 있던 걸 고르면 확정
+        from sqlalchemy import update
+        await db.execute(update(TradeTagMap).where(TradeTagMap.trade_id.in_(trade_ids), TradeTagMap.tag_id.in_(tag_ids))
+                         .values(auto=None))
     added = 0
     for t in trade_ids:
         for g in tag_ids:

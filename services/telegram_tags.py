@@ -98,7 +98,9 @@ async def _screen(db, kind: str, ids: list[int], tok: str) -> tuple[str, dict]:
     show_types = types                          # 청산이면 손실 근거도 항상 (익절 묶음 안의 손실 건에도 달 수 있게)
     from db.models.trade_tag import TagType
     tags = (await db.execute(select(TradeTag).where(TradeTag.type.in_([TagType(x) for x in show_types])).order_by(TradeTag.type, TradeTag.id))).scalars().all()
-    chosen = set((await db.execute(select(TradeTagMap.tag_id).where(TradeTagMap.trade_id == t0.id))).scalars().all())
+    maps = (await db.execute(select(TradeTagMap.tag_id, TradeTagMap.auto).where(TradeTagMap.trade_id == t0.id))).all()
+    chosen = {m[0] for m in maps}
+    guessed = {m[0] for m in maps if m[1]}       # 진입할 때 차트로 추정해서 붙인 근거 (services/tag_guess.py)
     note = (await db.execute(select(TradeNote).where(TradeNote.trade_id == t0.id))).scalar_one_or_none()
     memo = getattr(note, field, None) if note else None
 
@@ -107,17 +109,18 @@ async def _screen(db, kind: str, ids: list[int], tok: str) -> tuple[str, dict]:
             + (f" (📦 묶음 {len(trades)}건)" if grouped else f" ({len(trades)}건)" if len(trades) > 1 else "")
             + (f" · {net:+,.2f}" if kind == "c" else ""))
     picked = [g for g in tags if g.id in chosen]
-    lines = [head, "선택: " + (", ".join(html.escape(g.name) for g in picked) if picked else "없음")]
+    lines = [head, "선택: " + (", ".join(html.escape(g.name) + (" (추정)" if g.id in guessed else "") for g in picked) if picked else "없음")]
     if memo:
         lines.append(f"메모: {html.escape(memo)}")
     if not tags:
         lines.append(f"\n아직 {label} 근거가 없습니다. [➕ 새 근거] 로 만들면 다음부터 버튼으로 나옵니다.")
     else:
-        lines.append("\n누를 때마다 켜고 끕니다 (바로 저장).")
+        lines.append("\n누를 때마다 켜고 끕니다 (바로 저장)."
+                     + ("\n❔ = 차트로 추정한 근거 · 누르면 확정(✅), 한 번 더 누르면 뺌" if guessed & {g.id for g in tags} else ""))
 
     kb, row = [], []
     for g in tags:
-        mark = "✅ " if g.id in chosen else ""
+        mark = "❔ " if g.id in guessed else "✅ " if g.id in chosen else ""
         pre = "🔻" if g.type.value == "loss" else ""
         row.append({"text": f"{mark}{pre}{g.name}"[:40], "callback_data": f"tg:{kind}:{tok}:t.{g.id}"})
         if len(row) == 2:
@@ -208,9 +211,15 @@ async def button_pressed(live, client, token, chat_id: str, data: str, message_i
             if tag is None:
                 return "지워진 근거입니다"
             ids, _ = await _members(db, kind, ids)
-            have = (await db.execute(select(TradeTagMap.trade_id).where(
-                TradeTagMap.tag_id == tag_id, TradeTagMap.trade_id.in_(ids)))).scalars().all()
-            if ids[0] in have:                 # 켜져 있으면 끄기 (묶음 전체)
+            rows = (await db.execute(select(TradeTagMap.trade_id, TradeTagMap.auto).where(
+                TradeTagMap.tag_id == tag_id, TradeTagMap.trade_id.in_(ids)))).all()
+            have = [r[0] for r in rows]
+            if any(r[0] == ids[0] and r[1] for r in rows):     # 추정 근거 → 누르면 확정 (직접 고른 근거로)
+                from sqlalchemy import update
+                await db.execute(update(TradeTagMap).where(TradeTagMap.tag_id == tag_id, TradeTagMap.trade_id.in_(ids))
+                                 .values(auto=None))
+                msg = f"{tag.name} 확정"
+            elif ids[0] in have:               # 켜져 있으면 끄기 (묶음 전체)
                 await db.execute(delete(TradeTagMap).where(TradeTagMap.tag_id == tag_id, TradeTagMap.trade_id.in_(ids)))
                 msg = f"{tag.name} 뺌"
             else:
