@@ -50,7 +50,8 @@ def _trade_json(t: Trade) -> dict:
             "exit_reason": t.note.exit_reason, "loss_reason": t.note.loss_reason, "memo": t.note.memo,
         },
         "images": [{"id": i.id, "file_path": i.file_path} for i in (t.images or [])],
-        "tags": [{"id": m.tag.id, "name": m.tag.name, "type": getattr(m.tag.type, "value", m.tag.type)}
+        "tags": [{"id": m.tag.id, "name": m.tag.name, "type": getattr(m.tag.type, "value", m.tag.type),
+                  **({"auto": True} if getattr(m, "auto", None) else {})}
                  for m in (t.tags or []) if m.tag is not None],
     }
 
@@ -220,6 +221,11 @@ async def create_trade(
                                                     data.volume, kst_time))
         _bg.add(gt)
         gt.add_done_callback(_bg.discard)
+        try:                                  # 진입 근거 추정 - 차트를 보고 근거 태그를 '추정'으로 붙여 둠 (services/tag_guess.py)
+            from services import tag_guess
+            tag_guess.on_open(account.id, trade.id, data.symbol, data.position, data.price, getattr(data, "magic", 0))
+        except Exception as e:
+            print(f"[tag_guess] {e}")
         if not forced:                        # 첫 진입 추가 리밋 (services/addon.py) - 나눠 들어가는 게 끝나길 기다렸다가 확인
             try:
                 from services import addon
