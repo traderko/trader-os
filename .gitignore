@@ -18,3 +18,6 @@ release.json
 
 # publish.bat commit message (written by Claude, deleted after push)
 publish.msg
+
+# ship_watch.bat trigger file (Claude drops it, the watcher deletes it)
+ship.now
