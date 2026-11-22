@@ -2841,6 +2841,7 @@ const POINT_VALUE = { gold: 100, nasdaq: 1, oil: 100, btc: 1 };
 const SYMBOL_NAME = { gold: '🧈Gold', nasdaq: '🗽Nasdaq', oil: '🛢️Oil', btc: '₿Bitcoin' };
 let stYear = new Date().getFullYear();
 let stRaw = null;        // { trades, report }
+let stEqDD = null;       // 평가금 기준 최대 낙폭 (/accounts/{n}/equity-drawdown)
 let stMode = 'symbol';
 let stShow = 50;
 let stTagType = 'entry', stTagPick = null;     // 근거별 성과: 보는 종류 / 눌러서 목록을 거른 근거 (id, 0 = 근거 없음)
@@ -3148,6 +3149,11 @@ async function loadStats() {
   };
   if (![...tradePaths, repPath].every(cacheGet)) $('sBody').innerHTML = '<div class="empty">불러오는 중…</div>';
   stShow = 50;
+  // 평가금 기준 최대 낙폭 (서버의 1분 평가금 기록) - 계좌 하나일 때만
+  const p0 = stPeriod === 'year' ? new Date(stYear, 0, 1) : from, p1 = stPeriod === 'year' ? new Date(stYear + 1, 0, 1) : new Date(now.getTime() + 60000);
+  stEqDD = null;
+  if (!all) api(`/accounts/${an}/equity-drawdown?from_ts=${Math.floor(p0 / 1000)}&to_ts=${Math.floor(p1 / 1000)}`)
+    .then((r) => { if (want !== key()) return; stEqDD = r; if (stRaw) renderStats(); }).catch(() => {});
   // 리포트는 실패해도 나머지 통계는 표시 (따로 받아서, 바뀌었을 때만 다시 그림)
   apiRaw(repPath).then((r) => {
     const old = cacheGet(repPath), changed = !old || old.text !== r.text;
@@ -3262,6 +3268,15 @@ function exitAnalysis(ts) {
     byOrder: [...perOrder.keys()].sort((a, b) => a - b).map((k) => { const a = perOrder.get(k);
       const w = a.filter((x) => x > 0).length, l = a.filter((x) => x < 0).length;
       return { order: k, count: a.length, winRate: w + l ? w / (w + l) : null, avg: a.reduce((s, x) => s + x, 0) / a.length }; }) };
+}
+
+// 평가금 기준 최대 낙폭 - 들고 있는 동안의 평가손까지 (청산 기준 낙폭은 살아나서 청산한 건 안 잡힘)
+function eqDDHtml(r) {
+  if (!r) return '';
+  const hm = (s) => { const d = new Date(s * 1000); return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
+  const since = `${hm(r.since)} 기록부터`;
+  return `<div><small>최대 낙폭 (평가금)</small><span class="num down">${r.pct ? `-${(r.pct * 100).toFixed(1)}%` : fmt(-r.amount)}</span><em>${r.pct ? fmt(-r.amount) + ' · ' : ''}${r.trough_at ? hm(r.peak_at) + ' → ' + hm(r.trough_at) : since}</em></div>
+      <div><small>최대 평가손</small><span class="num down">${fmt(r.float_min)}</span><em>${r.float_min_at ? hm(r.float_min_at) + ' · ' : ''}${since}</em></div>`;
 }
 
 function balanceDrawdown(report, ts) {
@@ -3427,6 +3442,7 @@ function renderStats() {
       <div><small>최대 낙폭 (손익)</small><span class="num down">${fmt(-S.mdd)}</span></div>
       ${dd ? `<div><small>최대 낙폭 (잔고 대비)</small><span class="num down">-${(dd.pct * 100).toFixed(1)}%</span><em>${fmt(-dd.amount)}</em></div>
       <div><small>고점 → 저점</small><span class="num" style="font-size:13px">${dd.peakT ? dayKey(dd.peakT).slice(2) : '연초'} → ${dayKey(dd.troughT).slice(2)}</span><em>${fmt(dd.peak, 0)} → ${fmt(dd.trough, 0)}</em></div>` : ''}
+      ${eqDDHtml(stEqDD)}
     </div></section>
 
     <h3 class="sec">누적 손익 (트레이드 순)</h3>

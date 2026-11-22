@@ -304,6 +304,33 @@ def _hold_bucket(t: Trade) -> str:
     return "5분 미만" if s < 300 else "5~30분" if s < 1800 else "30분~2시간" if s < 7200 else "2시간~1일" if s < 86400 else "1일 이상"
 
 
+def _equity_dd_lines(accs: list[Account], acc: int, d0: date, d1: date) -> list[str]:
+    """평가금 기준 최대 낙폭 (들고 있다가 마이너스였다 살아난 것까지) - 평가금 기록이 있는 기간만"""
+    from services import equity_log
+    start, end = _bounds(d0, d1)
+    out = []
+    for a in accs:
+        if acc and a.id != acc:
+            continue
+        try:
+            r = equity_log.drawdown(a.id, start, end)
+        except Exception:
+            r = None
+        if not r:
+            continue
+        hm = lambda ts: datetime.fromtimestamp(ts, KST).strftime("%m/%d %H:%M")
+        who = "" if acc or len(accs) == 1 else f"{a.account_number} "
+        pct = f" ({r['pct'] * 100:.1f}%)" if r.get("pct") else ""
+        line = f"{who}평가금 기준 최대 낙폭 -{_m(r['amount'])}{pct}"
+        if r["float_min"] < 0:
+            line += f" · 최대 평가손 -{_m(-r['float_min'])} ({hm(r['float_min_at'])})"
+        since = datetime.fromtimestamp(r["since"], KST)
+        if since > start + timedelta(hours=1):
+            line += f" · {since.strftime('%m/%d %H:%M')} 기록부터"
+        out.append(line)
+    return out
+
+
 async def stats_view(code: str, acc: int) -> tuple[str, dict]:
     accs, ts, d0, d1 = await _load(code, acc)
     B = _basic(ts)
@@ -322,6 +349,7 @@ async def stats_view(code: str, acc: int) -> tuple[str, dict]:
         f"최대 연패 {B['streak']}번 · 최대 낙폭 -{_m(B['mdd'])}",
         f"최고 {_s(B['best'])} · 최악 {_s(B['worst'])}",
     ]
+    L += _equity_dd_lines(accs, acc, d0, d1)
     holds = [(t.close_time - t.open_time).total_seconds() for t in ts if t.open_time]
     hw = [(t.close_time - t.open_time).total_seconds() for t in ts if t.open_time and _net(t) > 0]
     hl = [(t.close_time - t.open_time).total_seconds() for t in ts if t.open_time and _net(t) < 0]

@@ -219,6 +219,17 @@ async def get_monthly_report(
             **(await _report(db, account, month_start, month_end, f"{year}-{month:02d}"))}
 
 
+@router.get("/{account_number}/equity-drawdown")
+async def get_equity_drawdown(account_number: int, from_ts: int, to_ts: int, db: AsyncSession = Depends(get_db)):
+    """평가금 기준 최대 낙폭 (1분 평가금 기록 - services/equity_log.py). 기록이 없으면 null
+    from_ts · to_ts: epoch 초"""
+    from services import equity_log
+    account = await get_account_or_default(db, account_number)
+    if account is None:
+        raise HTTPException(404, f"account not found: {account_number}")
+    return equity_log.drawdown(account.id, datetime.fromtimestamp(from_ts, timezone.utc), datetime.fromtimestamp(to_ts, timezone.utc))
+
+
 @router.get("/{account_number}/withdraw-rule")
 async def get_withdraw_rule(account_number: int, db: AsyncSession = Depends(get_db)):
     """일일 출금 규칙: 오늘(거래일, 한국 시간 06:00 시작) 순수익의 pct% 까지 뺄 수 있고, 오늘 이미 뺀 출금은 차감.

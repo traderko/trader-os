@@ -27,6 +27,12 @@ async def worker_get(account_id: int, path: str, params: dict | None = None):
     if res.status_code != 200:
         raise HTTPException(res.status_code, res.text)
     data = res.json()
+    if path == "/account-info":           # 평가금 1분 기록 (평가금 기준 최대 낙폭)
+        try:
+            from services.equity_log import observe as eq_observe
+            eq_observe(account_id, data)
+        except Exception:
+            pass
     if path == "/positions-all":          # SL/TP 를 언제 고쳤는지 기록 (맞추기에서 '최근 고침')
         try:
             from services.sltp import observe
