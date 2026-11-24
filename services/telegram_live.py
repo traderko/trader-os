@@ -1358,6 +1358,9 @@ class TelegramLive:
                 elif mine and (text.startswith("/출금") or text.startswith("/withdraw")):
                     from services import withdraw_notice
                     await withdraw_notice.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                elif mine and (text.startswith("/계좌") or text.startswith("/accounts")):
+                    from services import telegram_accounts
+                    await telegram_accounts.cmd(self, client, token, cid)
                 elif mine and (text.startswith("/잠금") or text.startswith("/lock")):
                     from services import self_lock
                     await self_lock.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
@@ -1465,6 +1468,16 @@ class TelegramLive:
                         try:
                             answer = await telegram_phrases.button(self, client, token, cid, data,
                                                                    (cb.get("message") or {}).get("message_id"))
+                        except Exception as e:
+                            answer = f"실패: {e}"[:190]
+                elif data.startswith("ac:"):          # /계좌 기본 계좌 바꾸기 (services/telegram_accounts.py)
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        from services import telegram_accounts
+                        try:
+                            answer = await telegram_accounts.button(self, client, token, cid, data,
+                                                                    (cb.get("message") or {}).get("message_id"))
                         except Exception as e:
                             answer = f"실패: {e}"[:190]
                 elif data.startswith("lk:"):          # 스스로 잠그기 (services/self_lock.py)
@@ -1585,6 +1598,7 @@ class TelegramLive:
                         await self._call(client, token, "setMyCommands", commands=[
                             {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
                             {"command": "lock", "description": "스스로 잠그기 - 정한 시간 동안 문구로도 못 풂 (/잠금 90)"},
+                            {"command": "accounts", "description": "계좌 목록 · 기본 계좌(★) 바꾸기 (/계좌)"},
                             {"command": "bob", "description": "돌파캔들(BOB) 알림 - 반대 포지션 경고 · 시간봉 켜기·끄기"},
                             {"command": "wallet", "description": "바이낸스 · 개인 지갑 잔고 (/잔고 · /잔고 추가 네트워크 주소 이름)"},
                             {"command": "withdraw", "description": "출금 가능액 + 출금 페이지 (/출금 · /출금 알림 30)"},

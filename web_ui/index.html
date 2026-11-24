@@ -563,6 +563,7 @@
   <span class="dot" id="dot"></span>
   <h1>TraderOS</h1>
   <select id="acc" aria-label="계좌"></select>
+  <button class="btn small" id="accDef" hidden title="이 계좌를 기본 계좌로 (★)">☆ 기본으로</button>
   <div class="theme" id="theme" title="화면 테마">
     <button data-theme="auto">자동</button><button data-theme="light">☀</button><button data-theme="dark">☾</button>
   </div>
@@ -1152,11 +1153,27 @@ async function loadAccounts() {
     `<option value="${esc(a.account_number)}">${a.is_default ? '★ ' : ''}${esc(a.account_number)}</option>`).join('');
   if (acc) $('acc').value = acc.account_number;
   applyViewOnly();
+  accDefBtn();
 }
+// 기본 계좌 바꾸기 - 계좌 번호 없이 오는 요청(EA 일부 · 텔레그램 구간매매 등)이 쓰는 계좌, 처음 열 때 고르는 계좌
+function accDefBtn() { $('accDef').hidden = !acc || !!acc.is_default || accounts.length < 2; }
+$('accDef').onclick = async () => {
+  if (!acc || !(await ask('기본 계좌 바꾸기', `${acc.account_number} 을(를) 기본 계좌(★)로 바꿉니다.\n계좌 번호 없이 들어오는 요청과 텔레그램의 계좌 기본값이 이 계좌로 바뀝니다. 잠금·포지션에는 영향이 없습니다.`))) return;
+  try {
+    await api(`/accounts/${encodeURIComponent(acc.account_number)}/default`, { method: 'PATCH' });
+    accounts.forEach((a) => { a.is_default = String(a.account_number) === String(acc.account_number); });
+    cacheSet('/accounts', JSON.stringify(accounts), accounts);
+    $('acc').innerHTML = accounts.map((a) => `<option value="${esc(a.account_number)}">${a.is_default ? '★ ' : ''}${esc(a.account_number)}</option>`).join('');
+    $('acc').value = acc.account_number;
+    accDefBtn();
+    toast(`${acc.account_number} 을(를) 기본 계좌로 바꿨습니다.`);
+  } catch (e) { toast(e.message, true); }
+};
 $('acc').onchange = () => {
   acc = accounts.find((a) => String(a.account_number) === $('acc').value);
   store.set('acc', acc && acc.account_number);
   applyViewOnly();
+  accDefBtn();
   resetForAccountOrSymbol();
   trades = [];
   refreshAll();
