@@ -28,7 +28,9 @@ async def _set_default(account_id: int) -> str | None:
         await db.flush()
         acc.is_default = True
         await db.commit()
-        return str(acc.account_number)
+        from services.account import ensure_mt5_running
+        started = await ensure_mt5_running(db, acc)          # MT5 실행이 꺼져 있으면 켜고 워커·MT5 띄움
+        return str(acc.account_number) + (" · MT5 실행을 켰습니다 (1~2분 걸림)" if started else "")
 
 
 async def _view() -> tuple[str, dict]:
@@ -63,14 +65,15 @@ async def button(live, client, token, cid: str, data: str, message_id) -> str:
         if not a:
             return "계좌를 찾을 수 없습니다"
         await _edit(live, client, token, cid, message_id,
-                    f"★ <b>{html.escape(str(a.account_number))}</b> 을(를) 기본 계좌로 바꿀까요?",
+                    f"★ <b>{html.escape(str(a.account_number))}</b> 을(를) 기본 계좌로 바꿀까요?"
+                    + ("" if a.lock_enabled else "\nMT5 실행이 꺼져 있어서 <b>같이 켭니다</b> (이 계좌에도 거래 잠금이 적용됨)"),
                     {"inline_keyboard": [[{"text": "★ 바꾸기", "callback_data": f"ac:go:{a.id}"},
                                           {"text": "그만두기", "callback_data": "ac:list"}]]})
         return ""
     if act == "go" and len(p) > 2:
         num = await _set_default(int(p[2]))
         text, kb = await _view()
-        await _edit(live, client, token, cid, message_id, (f"✅ {num} 을(를) 기본 계좌로 바꿨습니다.\n\n" if num else "") + text, kb)
+        await _edit(live, client, token, cid, message_id, (f"✅ 기본 계좌: {num}\n\n" if num else "") + text, kb)
         return "바꿨습니다" if num else "계좌를 찾을 수 없습니다"
     text, kb = await _view()
     await _edit(live, client, token, cid, message_id, text, kb)

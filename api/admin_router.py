@@ -861,6 +861,8 @@ async def edit_account(account_id: int, body: AccountPatch, db: AsyncSession = D
         acc.password_encrypted = CryptoService().encrypt(body.password)
     if body.is_default:
         await _make_default(db, acc)
+        if not acc.lock_enabled and body.lock_enabled is None:    # 기본 계좌는 MT5 도 같이 켬
+            body.lock_enabled = True
     if body.lock_enabled is not None and body.lock_enabled != acc.lock_enabled:
         acc.lock_enabled = body.lock_enabled
         turned_on, turned_off = body.lock_enabled, not body.lock_enabled

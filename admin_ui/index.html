@@ -1641,7 +1641,9 @@ $('accList').addEventListener('click', async (e) => {
     if (e.target.closest('[data-acc-restart]')) {
       if (!(await restartMt5(id, num))) return;
     } else if (e.target.closest('[data-acc-default]')) {
-      await api('accounts/' + id, { method: 'PATCH', body: JSON.stringify({ is_default: true }) }); toast(`${num}을(를) 기본 계좌로 바꿨습니다.`);
+      const wasOff = row.textContent.includes('조회 전용');
+      await api('accounts/' + id, { method: 'PATCH', body: JSON.stringify({ is_default: true }) });
+      toast(`${num}을(를) 기본 계좌로 바꿨습니다.` + (wasOff ? ' MT5 실행도 같이 켭니다 (1~2분).' : ''));
     } else if (e.target.closest('[data-acc-pw]')) {
       const pw = prompt(`${num} 계좌의 새 비밀번호`); if (!pw) return;
       await api('accounts/' + id, { method: 'PATCH', body: JSON.stringify({ password: pw }) });
