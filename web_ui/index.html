@@ -835,6 +835,24 @@
   </div>
 </div>
 
+<div class="modal" id="selfLockModal" hidden>
+  <div class="sheet">
+    <h3>🔒 스스로 잠그기</h3>
+    <p>정한 시간 동안 거래를 잠급니다. <b>그 전에는 확인 문구로도 풀 수 없습니다.</b></p>
+    <div class="seg" id="slSeg">
+      <button data-v="30">30분</button><button data-v="60">1시간</button><button data-v="120">2시간</button><button data-v="day">오늘 끝까지</button><button data-v="custom">직접</button>
+    </div>
+    <input id="slMin" type="number" min="1" inputmode="numeric" placeholder="분 (예: 90)" hidden>
+    <label id="slAllRow" style="display:block;margin:8px 0"><input type="checkbox" id="slAll" checked> 잠금 켠 모든 계좌 (<span id="slAllN"></span>개)</label>
+    <p class="muted" id="slUntil"></p>
+    <div class="msg" id="slMsg"></div>
+    <div class="acts">
+      <button class="btn" data-close>취소</button>
+      <button class="btn primary" id="slGo">🔒 잠그기</button>
+    </div>
+  </div>
+</div>
+
 <!-- 거래 선택 막대 (거래내역 → ☑ 선택) -->
 <div id="tSelBar" hidden>
   <div class="r1">
@@ -1208,10 +1226,49 @@ function renderLock() {
       ${manual ? '' : '<button class="btn small" id="unlockOpen">잠금 풀기</button>'}`;
   } else {
     el.className = 'lock open';
-    el.innerHTML = `<div><b>🔓 거래 가능</b><small>${esc(why)}${why ? ' · ' : ''}${hm(s.remaining_sec)} 뒤 다시 잠김</small>${dl}</div>`;
+    el.innerHTML = `<div style="flex:1"><b>🔓 거래 가능</b><small>${esc(why)}${why ? ' · ' : ''}${hm(s.remaining_sec)} 뒤 다시 잠김</small>${dl}</div>
+      <button class="btn small" id="selfLockOpen" title="정한 시간 동안 확인 문구로도 못 풀게 잠급니다">🔒 잠그기</button>`;
   }
 }
-$('lock').addEventListener('click', (e) => { if (e.target.id === 'unlockOpen') openUnlock(); });
+$('lock').addEventListener('click', (e) => { if (e.target.id === 'unlockOpen') openUnlock(); if (e.target.id === 'selfLockOpen') openSelfLock(); });
+
+// ── 스스로 잠그기 (수동 잠금) - 정한 시간 동안 확인 문구로도 못 풂. 텔레그램 /잠금 과 같음 (services/self_lock.py) ──
+let slPick = '60';
+function slMinutes() {
+  if (slPick === 'custom') return Math.max(0, Math.floor(Number($('slMin').value) || 0));
+  return slPick === 'day' ? 0 : Number(slPick);
+}
+function slRender() {
+  document.querySelectorAll('#slSeg button').forEach((b) => b.classList.toggle('on', b.dataset.v === slPick));
+  $('slMin').hidden = slPick !== 'custom';
+  const m = slMinutes();
+  const lockAccs = accounts.filter((a) => a.lock_enabled !== false);
+  $('slAllRow').hidden = lockAccs.length < 2;
+  $('slAllN').textContent = lockAccs.length;
+  const until = slPick === 'day' ? '다음 거래일 시작(07:00/08:00)' : (m ? (() => { const d = new Date(Date.now() + m * 60000); return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; })() : '-');
+  $('slUntil').textContent = `${until}까지 잠깁니다.`;
+  $('slGo').disabled = slPick !== 'day' && !m;
+}
+function openSelfLock() { slPick = '60'; $('slMsg').textContent = ''; $('slAll').checked = true; slRender(); $('selfLockModal').hidden = false; }
+$('slSeg').onclick = (e) => { const b = e.target.closest('button[data-v]'); if (!b) return; slPick = b.dataset.v; slRender(); if (slPick === 'custom') $('slMin').focus(); };
+$('slMin').addEventListener('input', slRender);
+$('slGo').onclick = async () => {
+  const day = slPick === 'day', m = slMinutes();
+  const targets = $('slAll').checked && !$('slAllRow').hidden ? accounts.filter((a) => a.lock_enabled !== false) : [acc];
+  $('slGo').disabled = true;
+  const done = [];
+  try {
+    for (const a of targets) {
+      await api('/lock/manual-lock', { method: 'POST', body: JSON.stringify({ account_number: Number(a.account_number), minutes: m, until_day_end: day }) });
+      done.push(a.account_number);
+    }
+    $('selfLockModal').hidden = true;
+    toast(`잠갔습니다 · ${done.join(', ')}`);
+    loadLock();
+  } catch (e) {
+    $('slMsg').textContent = (done.length ? `${done.join(', ')} 은 잠금 · ` : '') + e.message; $('slGo').disabled = false;
+  }
+};
 
 // ── 잠금 해제 (앱·EA·관리 화면과 같은 규칙: 정확한 문구를 직접 입력) ──
 async function openUnlock() {

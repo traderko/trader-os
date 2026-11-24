@@ -39,7 +39,8 @@ class ConfirmRequest(BaseModel):
  
 class ManualLockRequest(BaseModel):
     account_number: int
-    minutes: int
+    minutes: int = 0
+    until_day_end: bool = False      # 오늘 끝까지 (다음 거래일 시작 07:00/08:00)
  
  
 @router.get("/status")
@@ -79,7 +80,9 @@ async def manual_lock(req: ManualLockRequest, db: AsyncSession = Depends(get_db)
     """사용자가 스스로 거는 락. 확인 문구로 못 풂 - 시간 지나야만 자동 해제."""
     account_id = await _resolve_account_id(db, req.account_number)
     try:
-        return await svc.set_manual_lock(db, account_id, str(req.account_number), req.minutes)
+        from services.self_lock import minutes_of
+        mins = minutes_of("day") if req.until_day_end else req.minutes
+        return await svc.set_manual_lock(db, account_id, str(req.account_number), mins)
     except svc.InvalidLockDurationError as e:
         raise HTTPException(status_code=400, detail=str(e))
  

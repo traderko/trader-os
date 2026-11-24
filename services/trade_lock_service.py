@@ -496,9 +496,15 @@ async def set_manual_lock(db: AsyncSession, account_id: int, account_number: str
  
     now = datetime.now(KST)
     lock = await _get_or_create_lock(db, account_id)
-    lock.manual_lock_since = now.replace(tzinfo=None)
-    lock.manual_lock_until = (now + timedelta(minutes=minutes)).replace(tzinfo=None)
+    want = (now + timedelta(minutes=minutes)).replace(tzinfo=None)
+    kept = bool(lock.manual_lock_until and lock.manual_lock_until > want)   # 이미 더 늦게까지 잠김 (손실 한도 등) - 줄이지 않음
+    if not kept:
+        if not (lock.manual_lock_until and lock.manual_lock_until > now.replace(tzinfo=None)):
+            lock.manual_lock_since = now.replace(tzinfo=None)
+        lock.manual_lock_until = want
     await db.commit()
+    if kept:
+        return {"status": "locked", "minutes": minutes, "locked_until": lock.manual_lock_until.isoformat(), "kept": True}
  
     init_firebase()
     FCMService().send(
