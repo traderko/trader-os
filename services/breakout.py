@@ -41,7 +41,7 @@ TF_KR = {k: kr for k, _, _, kr in TFS}
 TF_ORDER = [k for k, *_ in TFS]
 DEFAULT_ON = {"2m": False, "5m": False, "10m": True, "1h": True, "2h": True}
 KST = timezone(timedelta(hours=9))
-UP, DN = "↑", "↓"                     # 상승 · 하락 표시
+UP, DN = "▲", "▼"                     # 상승 · 하락 표시
 LOOKBACK = 40                         # 처음 상태를 찾을 때 거슬러 보는 마감 봉 수
 _state: dict | None = None            # {"gold|10m": {dir, t, price, bb20, bb4}}
 _view: dict = {"at": 0, "markets": []}  # 마지막 확인 결과 (실시간 현황 · /bob 화면)
@@ -282,7 +282,7 @@ def _market_line(m: dict) -> list[str]:
 
 
 def live_lines() -> list[str]:
-    """텔레그램 실시간 현황용 - 종목마다 시간봉별 BOB 방향(↑ 상승 · ↓ 하락)과 그 BOB 봉 시각. 반대 포지션이면 ⚠️"""
+    """텔레그램 실시간 현황용 - 종목마다 시간봉별 BOB 방향(▲ 상승 · ▼ 하락)과 그 BOB 봉 시각. 반대 포지션이면 ⚠️"""
     if time.time() - _view["at"] > 120:
         return []
     out = []
