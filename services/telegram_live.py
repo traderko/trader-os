@@ -233,14 +233,31 @@ def _positions_block(positions: list[dict], show: dict | None = None) -> list[st
             if mine:
                 out.append(f"   직접 {len(mine)}개 {_f(sum(p['volume'] for p in mine))}lot  {_money(sum(p['profit'] + (p.get('swap') or 0) for p in mine))}")
         if pv is not None and show.get("sltp", True):
-            proj = []
-            for key, label in (("sl", "SL시"), ("tp", "TP시")):
-                w = [p for p in ps if p.get(key)]
-                if w:
-                    total = sum(((p[key] - p["price_open"]) if p["type"] == 0 else (p["price_open"] - p[key])) * p["volume"] * pv for p in w)
-                    proj.append(f"{label} {_s(total)} ({len(w)}/{len(ps)})")
-            if proj:
-                out.append("   " + " · ".join(proj))
+            # SL·TP 가격 · 평단에서 몇 포인트 · 지금가에서 몇 포인트 · 닿으면 손익 (방향별, 이익 쪽 +)
+            both = len({p["type"] for p in ps}) > 1
+            for t, side_label in ((0, "BUY"), (1, "SELL")):
+                side = [p for p in ps if p["type"] == t]
+                if not side:
+                    continue
+                dg = side[0].get("digits") if isinstance(side[0].get("digits"), int) else 2
+                nd = min(dg, 2)
+                sg = 1 if t == 0 else -1
+                vol = sum(p["volume"] for p in side)
+                avg = sum(p["price_open"] * p["volume"] for p in side) / vol if vol else 0
+                cur = side[0].get("price_current") or 0
+                for key, name in (("sl", "SL"), ("tp", "TP")):
+                    w = [p for p in side if p.get(key)]
+                    if not w:
+                        continue
+                    wv = sum(p["volume"] for p in w)
+                    lv = sum(p[key] * p["volume"] for p in w) / wv          # 값이 제각각이면 랏 가중 평균
+                    same = len({round(p[key], 6) for p in w}) == 1
+                    total = sum((p[key] - p["price_open"]) * sg * p["volume"] * pv for p in w)
+                    pts = f"평단 {(lv - avg) * sg:+,.{nd}f}pt"
+                    if cur:
+                        pts += f" · 지금 {(lv - cur) * sg:+,.{nd}f}pt"
+                    cnt = f" ({len(w)}/{len(side)})" if len(w) != len(side) else ""
+                    out.append(f"   {side_label + ' ' if both else ''}{name} {'' if same else '평균 '}{_f(lv)} ({pts}) → {_s(total)}{cnt}")
     return out
 
 
