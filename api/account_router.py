@@ -498,6 +498,21 @@ async def get_liquidation(account_number: int, db: AsyncSession = Depends(get_db
 async def get_default_account(db: AsyncSession = Depends(get_db)):
     return await get_account_or_default(db, account_number=None)
  
+@router.patch("/{account_number}/mt5")
+async def set_account_mt5(account_number: int, on: bool, db: AsyncSession = Depends(get_db)):
+    """MT5 실행(잠금) 켜기 · 끄기 - 잠겨 있는 동안은 끌 수 없음 (services/account.py)"""
+    from services.account import Mt5ToggleError, set_mt5_running
+    try:
+        account = await get_account_or_default(db, account_number)
+    except ValueError:
+        raise HTTPException(404, f"account not found: {account_number}")
+    try:
+        changed = await set_mt5_running(db, account, on)
+    except Mt5ToggleError as e:
+        raise HTTPException(409, str(e))
+    return {"account_number": account.account_number, "lock_enabled": account.lock_enabled, "changed": changed}
+
+
 @router.patch("/{account_number}/default")
 async def set_account_as_default(account_number: int, db: AsyncSession = Depends(get_db)):
     account = await set_default_account(db, account_number)

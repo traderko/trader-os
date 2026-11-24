@@ -564,6 +564,7 @@
   <h1>TraderOS</h1>
   <select id="acc" aria-label="계좌"></select>
   <button class="btn small" id="accDef" hidden title="이 계좌를 기본 계좌로 (★)">☆ 기본으로</button>
+  <button class="btn small" id="accMt5" hidden></button>
   <div class="theme" id="theme" title="화면 테마">
     <button data-theme="auto">자동</button><button data-theme="light">☀</button><button data-theme="dark">☾</button>
   </div>
@@ -1156,7 +1157,28 @@ async function loadAccounts() {
   accDefBtn();
 }
 // 기본 계좌 바꾸기 - 계좌 번호 없이 오는 요청(EA 일부 · 텔레그램 구간매매 등)이 쓰는 계좌, 처음 열 때 고르는 계좌
-function accDefBtn() { $('accDef').hidden = !acc || !!acc.is_default || accounts.length < 2; }
+function accDefBtn() {
+  $('accDef').hidden = !acc || !!acc.is_default || accounts.length < 2;
+  $('accMt5').hidden = !acc;
+  if (acc) { const on = acc.lock_enabled !== false; $('accMt5').textContent = on ? '⏹ MT5' : '▶ MT5'; $('accMt5').title = on ? 'MT5 실행 끄기 (잠긴 동안은 못 끔)' : 'MT5 실행 켜기'; }
+}
+// MT5 실행(잠금) 켜기 · 끄기 - 끄면 그 계좌 잠금 · 자동 청산이 멈춰서, 잠긴 동안은 서버가 막음 (services/account.py)
+$('accMt5').onclick = async () => {
+  if (!acc) return;
+  const on = acc.lock_enabled === false;
+  const ok = await ask(on ? 'MT5 실행 켜기' : 'MT5 실행 끄기', on
+    ? `${acc.account_number} 의 워커와 MT5 를 띄웁니다 (1~2분). 이 계좌에도 거래 잠금이 적용됩니다.`
+    : `${acc.account_number} 의 MT5 · 워커를 끕니다. 이 계좌의 잠금 · 자동 청산 · 실시간 현황이 멈춥니다. 잠겨 있는 동안에는 끌 수 없습니다.`);
+  if (!ok) return;
+  try {
+    await api(`/accounts/${encodeURIComponent(acc.account_number)}/mt5?on=${on}`, { method: 'PATCH' });
+    acc.lock_enabled = on;
+    cacheSet('/accounts', JSON.stringify(accounts), accounts);
+    applyViewOnly(); accDefBtn();
+    toast(on ? 'MT5 실행을 켰습니다. 1~2분 뒤 포지션 · 잠금이 보입니다.' : 'MT5 실행을 껐습니다.');
+    if (on) setTimeout(refreshAll, 90000);
+  } catch (e) { toast(e.message, true); }
+};
 $('accDef').onclick = async () => {
   if (!acc || !(await ask('기본 계좌 바꾸기', `${acc.account_number} 을(를) 기본 계좌(★)로 바꿉니다.\n계좌 번호 없이 들어오는 요청과 텔레그램의 계좌 기본값이 이 계좌로 바뀝니다.`
     + (acc.lock_enabled === false ? '\nMT5 실행이 꺼져 있어서 같이 켭니다 (이 계좌에도 거래 잠금이 적용됩니다).' : ' 잠금·포지션에는 영향이 없습니다.')))) return;

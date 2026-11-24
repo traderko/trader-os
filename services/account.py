@@ -65,3 +65,28 @@ async def ensure_mt5_running(db: AsyncSession, account: Account) -> bool:
     except Exception as e:
         print(f"[account] {account.account_number} MT5 시작 실패: {e}")
     return True
+
+
+class Mt5ToggleError(Exception):
+    pass
+
+
+async def set_mt5_running(db: AsyncSession, account: Account, on: bool) -> bool:
+    """'MT5 실행(잠금)' 켜기 · 끄기 (텔레그램 /계좌 · 웹). 바뀌었으면 True
+    끄기는 잠겨 있는 동안 막음 - 끄면 그 계좌 잠금이 멈춰서 잠금을 피해 가는 길이 되므로"""
+    if on:
+        return await ensure_mt5_running(db, account)
+    if not account.lock_enabled:
+        return False
+    from services import trade_lock_service as lock_svc
+    st = await lock_svc.get_lock_state(db, account.id)
+    if st.get("locked"):
+        raise Mt5ToggleError("잠겨 있는 동안에는 MT5 실행을 끌 수 없습니다 (끄면 잠금이 풀리는 것과 같아서). 잠금이 풀린 뒤에 끄세요.")
+    account.lock_enabled = False
+    await db.commit()
+    try:
+        from api.admin_router import _run_in_background
+        _run_in_background(account.id, start=False)
+    except Exception as e:
+        print(f"[account] {account.account_number} MT5 중지 실패: {e}")
+    return True
