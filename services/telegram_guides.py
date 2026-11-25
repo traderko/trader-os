@@ -37,12 +37,12 @@ def _view(page: int = 0) -> tuple[str, dict]:
         pct = round(w / total * 100)
         lines.append(f"{_stars(w)} {pct}% · {html.escape(t)}")
         short = t if len(t) <= 22 else t[:21] + "…"
-        kb.append([{"text": f"{_stars(w)} {short}", "callback_data": f"gw:t:{i}:{page}"}])
+        kb.append([{"text": f"{_stars(w)} {short}", "callback_data": f"gd:t:{i}:{page}"}])
     nav = []
     if page > 0:
-        nav.append({"text": "◀", "callback_data": f"gw:p:{page - 1}"})
+        nav.append({"text": "◀", "callback_data": f"gd:p:{page - 1}"})
     if page < pages - 1:
-        nav.append({"text": "▶", "callback_data": f"gw:p:{page + 1}"})
+        nav.append({"text": "▶", "callback_data": f"gd:p:{page + 1}"})
     if nav:
         kb.append(nav)
     return "\n".join(lines)[:4000], {"inline_keyboard": kb}

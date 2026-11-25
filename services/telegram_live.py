@@ -1473,7 +1473,7 @@ class TelegramLive:
                                                                    (cb.get("message") or {}).get("message_id"))
                         except Exception as e:
                             answer = f"실패: {e}"[:190]
-                elif data.startswith("gw:"):          # /지침 중요도 (services/telegram_guides.py)
+                elif data.startswith("gd:"):          # /지침 중요도 (services/telegram_guides.py)
                     if cid != str(telegram_cfg()["chat_id"] or ""):
                         answer = "등록된 대화에서만 쓸 수 있습니다"
                     else:
