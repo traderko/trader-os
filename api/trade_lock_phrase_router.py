@@ -98,6 +98,8 @@ async def create_phrase(data: PhraseCreate, db: AsyncSession = Depends(get_db)):
     db.add(row)
     await db.commit()
     await db.refresh(row)
+    from services import guidelines
+    guidelines.phrase_added(row.phrase, row.phrase_type)     # 자동 추가가 켜져 있으면 지침에도
     return row
 
 # 삭제(비활성화)

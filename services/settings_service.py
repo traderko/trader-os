@@ -101,6 +101,7 @@ DEFAULTS: dict = {
         "enabled": True,
         "cooldown_min": 30,          # 같은 지침은 이 시간 안에 다시 보내지 않음
         "entry_gap_sec": 60,         # 같은 종목·방향 체결이 직전 체결에서 이 시간 안이면 한 번의 진입 (0.5랏씩 다다다 → 합쳐서 하나)
+        "sync_phrases": False,       # 켜면 지침 목록에 추가한 건 정기 재확인 문구에도, 정기 재확인 문구에 추가한 건 지침에도 (추가만, 지우기는 따로)
         "items": [
             "돈을 가져오는 매매가 아닌 돈을 주는 매매를 하고 있는가?",
             "손실보다 수익을 먼저 생각하고 있는가?",
@@ -444,6 +445,7 @@ _GUIDE_RANGES = {
 
 def _validate_guidelines(g: dict) -> None:
     g["enabled"] = bool(g.get("enabled", True))
+    g["sync_phrases"] = bool(g.get("sync_phrases", False))
     cd = g.get("cooldown_min", 30)
     if not _int(cd) or not (1 <= cd <= 1440):
         raise SettingsError("지침 반복 방지 시간은 1~1440분이어야 합니다.")

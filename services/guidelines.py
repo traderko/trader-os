@@ -632,12 +632,52 @@ async def _check_margin(a, acc: str, r: dict, entry: str | None = None) -> None:
 
 
 # ── 지침 → 확인 문구 ────────────────────────────────────────────────
-async def add_items_as_phrases(db) -> dict:
-    """지침 목록을 정기 재확인 문구(checkin)로 넣음. 이미 있는 문구는 건너뜀"""
+def sync_on() -> bool:
+    """지침 ↔ 정기 재확인 문구 자동 추가 (관리 화면 지침 탭에서 켜고 끔, 기본 꺼짐)"""
+    return bool(cfg().get("sync_phrases"))
+
+
+def add_texts_to_items(texts: list[str]) -> dict:
+    """문구들을 지침 목록 끝에 넣음. 이미 있는 건 건너뜀 (지침은 100개까지)"""
+    from services.settings_service import get_settings, update_settings
+    items = list(get_settings()["guidelines"].get("items") or [])
+    added = skipped = 0
+    for t in texts:
+        t = " ".join(str(t).split())
+        if not t or t in items or len(items) >= 100:
+            skipped += 1
+            continue
+        items.append(t)
+        added += 1
+    if added:
+        update_settings({"guidelines": {"items": items}})
+    return {"added": added, "skipped": skipped}
+
+
+async def phrases_to_items(db) -> dict:
+    """정기 재확인 문구(checkin)를 지침 목록으로 넣음 (관리 화면 확인 문구 탭 [지침 목록으로 추가])"""
+    from sqlalchemy import select
+    from db.models.trade_lock_phrase import TradeLockPhrase
+    rows = (await db.execute(select(TradeLockPhrase.phrase).where(
+        TradeLockPhrase.is_active == True, TradeLockPhrase.phrase_type == "checkin").order_by(TradeLockPhrase.id))).scalars().all()
+    return add_texts_to_items(list(rows))
+
+
+def phrase_added(text: str, ptype: str) -> None:
+    """확인 문구가 추가됐을 때 - 자동 추가가 켜져 있고 정기 재확인 문구면 지침에도"""
+    if ptype == "checkin" and sync_on():
+        try:
+            add_texts_to_items([text])
+        except Exception as e:
+            print(f"[guidelines] 지침에 자동 추가 실패: {e}")
+
+
+async def add_items_as_phrases(db, only: list[str] | None = None) -> dict:
+    """지침 목록(only 를 주면 그것만)을 정기 재확인 문구(checkin)로 넣음. 이미 있는 문구는 건너뜀"""
     from sqlalchemy import select
     from db.models.trade_lock_phrase import TradeLockPhrase
     added = skipped = 0
-    for text in cfg().get("items") or []:
+    for text in (only if only is not None else (cfg().get("items") or [])):
         row = (await db.execute(select(TradeLockPhrase).where(TradeLockPhrase.phrase == text))).scalar_one_or_none()
         if row is None:
             db.add(TradeLockPhrase(phrase=text, phrase_type="checkin", is_active=True))

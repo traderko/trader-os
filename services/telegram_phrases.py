@@ -208,6 +208,11 @@ async def text_input(live, client, token, cid: str, raw: str) -> None:
                 db.add(TradeLockPhrase(phrase=phrase, phrase_type=ptype, is_active=True))
             msg = "➕ 추가했습니다."
         await db.commit()
+        if p.get("op") != "edit":
+            from services import guidelines
+            if ptype == "checkin" and guidelines.sync_on():
+                guidelines.phrase_added(phrase, ptype)
+                msg += " (지침 목록에도 추가)"
     live.pending.pop(cid, None)
     text, kb = await _type_view(ptype)
     await live._send(client, token, cid, msg + "\n\n" + text, reply_markup=kb)

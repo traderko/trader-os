@@ -575,9 +575,10 @@ async def read_guidelines():
 
 
 @router.put("/api/guidelines")
-async def write_guidelines(body: dict):
+async def write_guidelines(body: dict, db: AsyncSession = Depends(get_db)):
     from services import guidelines
-    patch = {k: body[k] for k in ("enabled", "cooldown_min", "entry_gap_sec", "items", "rules") if k in body}
+    old_items = set(get_settings()["guidelines"].get("items") or [])
+    patch = {k: body[k] for k in ("enabled", "cooldown_min", "entry_gap_sec", "items", "rules", "sync_phrases") if k in body}
     if "item_weights" in body:                     # 통째로 바꿈 (합치면 지운 ★가 남음)
         from services.settings_service import get_settings as _gs
         cur = _gs()["guidelines"]
@@ -587,6 +588,10 @@ async def write_guidelines(body: dict):
         update_settings({"guidelines": patch})
     except SettingsError as e:
         raise HTTPException(400, str(e))
+    if guidelines.sync_on():                       # 새로 넣은 지침은 정기 재확인 문구에도
+        new = [x for x in get_settings()["guidelines"]["items"] if x not in old_items]
+        if new:
+            await guidelines.add_items_as_phrases(db, only=new)
     return {"settings": get_settings()["guidelines"], "rules": guidelines.RULES, "defaults": _guide_defaults()}
 
 
@@ -673,7 +678,16 @@ async def add_phrase(body: PhraseIn, db: AsyncSession = Depends(get_db)):
         await db.rollback()
         raise HTTPException(400, "이미 등록된 문구입니다.")
     await db.refresh(row)
+    from services import guidelines
+    guidelines.phrase_added(row.phrase, row.phrase_type)     # 자동 추가가 켜져 있으면 지침에도
     return {"id": row.id, "phrase": row.phrase, "phrase_type": row.phrase_type}
+
+
+@router.post("/api/phrases/to-guidelines")
+async def phrases_to_guidelines(db: AsyncSession = Depends(get_db)):
+    """정기 재확인 문구를 지침 목록으로 추가 (이미 있는 건 건너뜀)"""
+    from services import guidelines
+    return await guidelines.phrases_to_items(db)
 
 
 class PhraseDefaultsIn(BaseModel):
