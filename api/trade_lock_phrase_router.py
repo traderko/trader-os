@@ -85,7 +85,9 @@ async def get_random_phrase(
     phrases = _prefer(result.scalars().all(), type)
     if not phrases:
         raise HTTPException(status_code=404, detail=f"등록된 확인 문구가 없습니다. (type={type})")
-    return random.choice(phrases)
+    from services.phrase_pick import pick       # 중요도(★)가 높을수록 자주
+    chosen = pick([(p.phrase, p.weight) for p in phrases])
+    return next(p for p in phrases if p.phrase == chosen)
 
 # 추가
 @router.post("/phrases", response_model=PhraseOut)

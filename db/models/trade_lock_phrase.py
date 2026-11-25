@@ -11,4 +11,5 @@ class TradeLockPhrase(Base):
     is_active = Column(Boolean, default=True, server_default=false(), nullable=False)
     # checkin: 정기 재확인·연속손절 해제용 / session: 아시아장 집중 구간(목·금·지표일) 전용
     phrase_type = Column(String, default="checkin", server_default="checkin", nullable=False)
+    weight = Column(Integer, nullable=True)   # 중요도 ★1~5 - 높을수록 자주 나옴 (비어 있으면 1, services/phrase_pick.py)
     created_at = Column(DateTime, server_default=func.now(), nullable=False)

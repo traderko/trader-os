@@ -582,12 +582,13 @@ class TelegramLive:
                                  f"🔒 {num} 은(는) 수동 잠금입니다. 문구로 풀 수 없고 {_hm(st.get('remaining_sec', 0))} 뒤에 풀립니다.")
                 return
             types = st.get("phrase_types") or [st.get("phrase_type")]
-            rows = (await db.execute(select(TradeLockPhrase.phrase).where(
-                TradeLockPhrase.is_active == True, TradeLockPhrase.phrase_type.in_(types)))).scalars().all()
+            rows = (await db.execute(select(TradeLockPhrase.phrase, TradeLockPhrase.weight).where(
+                TradeLockPhrase.is_active == True, TradeLockPhrase.phrase_type.in_(types)))).all()
         if not rows:
             await self._send(client, token, chat_id, "이 잠금에 쓸 문구가 없습니다. 관리 화면 확인 문구 탭에서 먼저 추가하세요.")
             return
-        phrase = random.choice(rows)
+        from services.phrase_pick import pick as _pick_phrase
+        phrase = _pick_phrase(rows)                      # 중요도(★)가 높을수록 자주
         why = _lock_line(st).replace("<b>잠김</b> · ", "")
         r = await self._send(
             client, token, chat_id,

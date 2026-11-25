@@ -158,6 +158,9 @@
   .gdw .st { white-space: nowrap; cursor: pointer; font-size: 16px; letter-spacing: 1px; user-select: none; }
   .gdw .st span { color: var(--line); } .gdw .st span.on { color: #f5b301; }
   .gdw .tx { flex: 1; font-size: 13px; } .gdw .pc { color: var(--muted); font-size: 12px; min-width: 44px; text-align: right; }
+  .pst { white-space: nowrap; cursor: pointer; font-size: 15px; letter-spacing: 1px; user-select: none; }
+  .pst b { font-weight: normal; color: var(--line); } .pst b.on { color: #f5b301; }
+  .ppc { color: var(--muted); min-width: 36px; text-align: right; }
   .phrase { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
   .phrase:first-child { border-top: 0; }
   .phrase span { flex: 1; word-break: keep-all; }
@@ -1244,7 +1247,11 @@ async function loadPhrases() {
     const list = await api('phrases');
     renderPhraseDefaults(list);
     const isDef = (p) => ((phraseDefs || {})[p.phrase_type] || []).includes(p.phrase);
-    const row = (p) => `<div class="phrase"><span>${esc(p.phrase)}${isDef(p) ? '<span class="tagdef">기본</span>' : ''}</span><button class="btn danger" data-del="${p.id}">삭제</button></div>`;
+    // 중요도 ★1~5 - 같은 종류 안에서 높을수록 자주 나옴 (services/phrase_pick.py). %는 그 종류 안에서의 비율
+    const tot = {}; list.forEach((p) => { tot[p.phrase_type] = (tot[p.phrase_type] || 0) + (p.weight || 1); });
+    const row = (p) => { const w = p.weight || 1;
+      return `<div class="phrase"><span class="pst" data-pw="${p.id}" title="눌러서 중요도 (높을수록 자주 나옴)">${[1, 2, 3, 4, 5].map((k) => `<b data-k="${k}" class="${k <= w ? 'on' : ''}">★</b>`).join('')}</span>
+        <span style="flex:1">${esc(p.phrase)}${isDef(p) ? '<span class="tagdef">기본</span>' : ''}</span><small class="ppc">${Math.round(w / (tot[p.phrase_type] || 1) * 100)}%</small><button class="btn danger" data-del="${p.id}">삭제</button></div>`; };
     const sessions = (settings && settings.lock.sessions) || [];
     const isSess = (t) => t === 'session' || t.startsWith('session:');
     const ck = list.filter((p) => p.phrase_type === 'checkin');
@@ -1277,6 +1284,11 @@ async function loadPhrases() {
   } catch (e) { toast(e.message, true); }
 }
 
+$('phrases').addEventListener('click', async (e) => {
+  const st = e.target.closest('[data-k]'), box = e.target.closest('[data-pw]'); if (!st || !box) return;
+  try { await api('phrases/' + box.dataset.pw, { method: 'PATCH', body: JSON.stringify({ weight: Number(st.dataset.k) }) }); loadPhrases(); }
+  catch (err) { toast(err.message, true); }
+});
 $('phrases').onclick = async (e) => {
   const del = e.target.closest('[data-del]'), add = e.target.closest('[data-add]');
   if (del) {

@@ -622,9 +622,22 @@ async def list_phrases(db: AsyncSession = Depends(get_db)):
         select(TradeLockPhrase).where(TradeLockPhrase.is_active == True).order_by(TradeLockPhrase.id)
     )
     return [
-        {"id": p.id, "phrase": p.phrase, "phrase_type": p.phrase_type}
+        {"id": p.id, "phrase": p.phrase, "phrase_type": p.phrase_type, "weight": p.weight or 1}
         for p in result.scalars().all()
     ]
+
+
+@router.patch("/api/phrases/{phrase_id}")
+async def set_phrase_weight(phrase_id: int, body: dict, db: AsyncSession = Depends(get_db)):
+    """확인 문구 중요도 ★1~5 (높을수록 잠금 풀 때 자주 나옴)"""
+    from services.phrase_pick import weight_of
+    row = await db.get(TradeLockPhrase, phrase_id)
+    if row is None or not row.is_active:
+        raise HTTPException(404, "없는 문구입니다.")
+    w = weight_of(body.get("weight"))
+    row.weight = None if w == 1 else w
+    await db.commit()
+    return {"id": row.id, "weight": w}
 
 
 @router.post("/api/phrases")
@@ -962,13 +975,14 @@ async def unlock_phrase(account_id: int, db: AsyncSession = Depends(get_db)):
 
     types = state.get("phrase_types") or [state["phrase_type"]]
     rows = (await db.execute(
-        select(TradeLockPhrase.phrase)
+        select(TradeLockPhrase.phrase, TradeLockPhrase.weight)
         .where(TradeLockPhrase.is_active == True, TradeLockPhrase.phrase_type.in_(types))
-    )).scalars().all()
+    )).all()
     if not rows:
         return {"locked": True, "reason": state["reason"], "phrase": None,
                 "message": "이 잠금에 쓸 문구가 없습니다. 확인 문구 탭에서 먼저 추가하세요."}
-    return {"locked": True, "reason": state["reason"], "phrase": random.choice(rows)}
+    from services.phrase_pick import pick
+    return {"locked": True, "reason": state["reason"], "phrase": pick(rows)}
 
 
 @router.post("/api/accounts/{account_id}/unlock")

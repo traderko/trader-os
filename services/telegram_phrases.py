@@ -4,7 +4,7 @@
   [종류]               → 그 종류 문구 목록 + [✏️ n] [🗑 n] [➕ 추가]
   ✏️ / ➕              → 새 문구를 답장으로 받음 (/cancel 로 그만두기)
 
-버튼 콜백: ph:l (종류 목록) · ph:t:<종류> · ph:a:<종류> · ph:e:<id> · ph:d:<id> · ph:dy:<id> (삭제 확인)
+버튼 콜백: ph:l (종류 목록) · ph:t:<종류> · ph:a:<종류> · ph:e:<id> · ph:d:<id> · ph:dy:<id> (삭제 확인) · ph:w:<id> (중요도 ★ 올림)
 지키는 것
   - 거래가 잠겨 있는 동안에는 바꿀 수 없음 (보기는 됨) - 잠긴 김에 문구를 쉽게 바꿔 푸는 것을 막음
   - 문구는 8~200자, 한 줄
@@ -76,9 +76,14 @@ async def _type_view(ptype: str) -> tuple[str, dict]:
     if ptype.startswith("session:") and not rows:
         lines.append("<i>없으면 집중 구간 공통 문구로 풉니다.</i>")
     kb = []
+    total = sum(max(1, min(5, r.weight or 1)) for r in rows) or 1
+    if rows:
+        lines.append("<i>★ = 중요도 - 높을수록 잠금 풀 때 자주 나옴. [★n] 을 누를 때마다 하나씩 올라감 (★5 다음 ★1)</i>")
     for i, r in enumerate(rows, 1):
-        lines.append(f"\n<b>{i}.</b> {html.escape(r.phrase)}")
-        kb.append([{"text": f"✏️ {i} 수정", "callback_data": f"ph:e:{r.id}"},
+        w = max(1, min(5, r.weight or 1))
+        lines.append(f"\n<b>{i}.</b> {'★' * w}{'☆' * (5 - w)} {round(w / total * 100)}% · {html.escape(r.phrase)}")
+        kb.append([{"text": f"★{w} {i}", "callback_data": f"ph:w:{r.id}"},
+                   {"text": f"✏️ {i} 수정", "callback_data": f"ph:e:{r.id}"},
                    {"text": f"🗑 {i} 삭제", "callback_data": f"ph:d:{r.id}"}])
     kb.append([{"text": "➕ 추가", "callback_data": f"ph:a:{ptype}"[:64]}, {"text": "⬅ 종류", "callback_data": "ph:l"}])
     return "\n".join(lines)[:3900], {"inline_keyboard": kb}
@@ -134,6 +139,15 @@ async def button(live, client, token, cid: str, data: str, message_id) -> str:
         row = await db.get(TradeLockPhrase, pid)
         if row is None or not row.is_active:
             return "이미 없는 문구입니다"
+        if op == "w":                                   # 중요도 ★ 하나 올림 (★5 다음 ★1)
+            w = max(1, min(5, row.weight or 1))
+            nw = 1 if w >= 5 else w + 1
+            row.weight = None if nw == 1 else nw
+            ptype = row.phrase_type
+            await db.commit()
+            text, kb = await _type_view(ptype)
+            await _edit_or_send(live, client, token, cid, message_id, text, kb)
+            return f"★{nw}"
         if op == "e":
             r = await live._send(client, token, cid,
                                  f"✏️ 지금 문구:\n<blockquote>{html.escape(row.phrase)}</blockquote>\n바꿀 문구를 답장으로 보내세요. ({MIN_LEN}~{MAX_LEN}자 · 그만두려면 /cancel)",
