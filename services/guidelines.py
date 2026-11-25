@@ -637,20 +637,25 @@ def sync_on() -> bool:
     return bool(cfg().get("sync_phrases"))
 
 
-def add_texts_to_items(texts: list[str]) -> dict:
-    """문구들을 지침 목록 끝에 넣음. 이미 있는 건 건너뜀 (지침은 100개까지)"""
+def add_texts_to_items(texts: list, weights: dict | None = None) -> dict:
+    """문구들을 지침 목록 끝에 넣음. 이미 있는 건 건너뜀 (지침은 100개까지). weights: 문구 → 중요도(★) 같이 옮김"""
     from services.settings_service import get_settings, update_settings
     items = list(get_settings()["guidelines"].get("items") or [])
+    new_w = {}
     added = skipped = 0
     for t in texts:
+        raw = t
         t = " ".join(str(t).split())
         if not t or t in items or len(items) >= 100:
             skipped += 1
             continue
         items.append(t)
+        w = (weights or {}).get(raw)
+        if w and int(w) > 1:
+            new_w[t] = int(w)
         added += 1
     if added:
-        update_settings({"guidelines": {"items": items}})
+        update_settings({"guidelines": {"items": items, **({"item_weights": new_w} if new_w else {})}})
     return {"added": added, "skipped": skipped}
 
 
@@ -658,9 +663,9 @@ async def phrases_to_items(db) -> dict:
     """정기 재확인 문구(checkin)를 지침 목록으로 넣음 (관리 화면 확인 문구 탭 [지침 목록으로 추가])"""
     from sqlalchemy import select
     from db.models.trade_lock_phrase import TradeLockPhrase
-    rows = (await db.execute(select(TradeLockPhrase.phrase).where(
-        TradeLockPhrase.is_active == True, TradeLockPhrase.phrase_type == "checkin").order_by(TradeLockPhrase.id))).scalars().all()
-    return add_texts_to_items(list(rows))
+    rows = (await db.execute(select(TradeLockPhrase.phrase, TradeLockPhrase.weight).where(
+        TradeLockPhrase.is_active == True, TradeLockPhrase.phrase_type == "checkin").order_by(TradeLockPhrase.id))).all()
+    return add_texts_to_items([p for p, _ in rows], {p: w for p, w in rows})   # 중요도(★)도 같이
 
 
 def phrase_added(text: str, ptype: str) -> None:
@@ -679,11 +684,13 @@ async def add_items_as_phrases(db, only: list[str] | None = None) -> dict:
     added = skipped = 0
     for text in (only if only is not None else (cfg().get("items") or [])):
         row = (await db.execute(select(TradeLockPhrase).where(TradeLockPhrase.phrase == text))).scalar_one_or_none()
+        w = item_weight(text)                                 # 중요도(★)도 같이
         if row is None:
-            db.add(TradeLockPhrase(phrase=text, phrase_type="checkin", is_active=True))
+            db.add(TradeLockPhrase(phrase=text, phrase_type="checkin", is_active=True, weight=w if w > 1 else None))
             added += 1
         elif not row.is_active:
             row.is_active, row.phrase_type = True, "checkin"
+            row.weight = w if w > 1 else None
             added += 1
         else:
             skipped += 1
