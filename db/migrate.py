@@ -31,8 +31,11 @@ def run() -> None:
     from alembic import command
     from alembic.config import Config
 
-    cfg = Config(ini)
+    # alembic.ini 를 읽지 않고 필요한 설정만 코드로 넣음 - 한국어 Windows(cp949)에서 alembic 이 ini 를
+    # 기본 인코딩으로 읽다가 UnicodeDecodeError('cp949' ...)가 나는 걸 피하려고 (ini 에 한글 주석이 있음)
+    cfg = Config()
     cfg.set_main_option("script_location", os.path.join(BASE_DIR, "alembic"))
+    cfg.set_main_option("path_separator", "os")
     cfg.set_main_option("sqlalchemy.url", _sync_url().replace("%", "%%"))
     cfg.attributes["skip_logging"] = True     # alembic.ini 의 로그 설정이 서버 로그를 덮어쓰지 않게
 

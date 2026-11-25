@@ -1,4 +1,6 @@
 @echo off
+rem Python UTF-8 mode: read/write files as UTF-8 even on Korean Windows (cp949) - avoids cp949 decode errors
+set PYTHONUTF8=1
 rem TraderOS server launcher.
 rem NOTE: keep this file ASCII-only. cmd.exe misreads batch files that contain
 rem multi-byte (Korean) text after a long-running command, so messages are English.
