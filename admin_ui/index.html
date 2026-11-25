@@ -154,6 +154,10 @@
   .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 14px; flex-wrap: wrap; }
 
   /* 문구 */
+  .gdw { display: flex; align-items: center; gap: 10px; padding: 6px 0; border-top: 1px solid var(--line); }
+  .gdw .st { white-space: nowrap; cursor: pointer; font-size: 16px; letter-spacing: 1px; user-select: none; }
+  .gdw .st span { color: var(--line); } .gdw .st span.on { color: #f5b301; }
+  .gdw .tx { flex: 1; font-size: 13px; } .gdw .pc { color: var(--muted); font-size: 12px; min-width: 44px; text-align: right; }
   .phrase { display: flex; align-items: center; gap: 10px; padding: 9px 0; border-top: 1px solid var(--line); }
   .phrase:first-child { border-top: 0; }
   .phrase span { flex: 1; word-break: keep-all; }
@@ -380,6 +384,9 @@
       <p class="hint">한 줄에 하나씩. '그날 첫 진입' 알림은 여기서 무작위로 고릅니다.
         <b>정기 재확인 문구로 추가</b>를 누르면 재확인 잠금이 걸릴 때 이 지침 중 하나를 그대로 입력해야 풀립니다.</p>
       <textarea id="gdItems" rows="12" style="width:100%;font:inherit;line-height:1.6"></textarea>
+      <h3 style="margin:14px 0 4px;font-size:14px">중요도</h3>
+      <p class="hint">★ 가 많을수록 '무작위 지침' · '그날 첫 진입'에서 자주 나옵니다 (★5 = ★1 의 5배). 한 바퀴 안에서 고르게 흩어서 보냅니다. 저장해야 적용.</p>
+      <div id="gdWeights"></div>
       <div class="actions"><button class="btn" id="gdDefItems" title="지침 목록을 처음 목록으로 (저장해야 적용)">목록 기본값</button><button class="btn" id="gdToPhrases">정기 재확인 문구로 추가</button><button class="btn primary" id="gdSave2">저장</button></div>
     </div>
   </section>
@@ -1482,6 +1489,8 @@ function renderGuides() {
   const { settings: g, rules } = guides;
   $('gdOn').checked = g.enabled; $('gdCooldown').value = g.cooldown_min; $('gdGap').value = g.entry_gap_sec ?? 60; refreshDefChips();
   $('gdItems').value = (g.items || []).join('\n');
+  gdW = { ...(g.item_weights || {}) };
+  renderWeights();
   $('gdRules').innerHTML = rules.map((m) => {
     const r = g.rules[m.key] || {};
     const params = m.params.map((p) => {
@@ -1511,8 +1520,28 @@ function collectGuides() {
     rules[el.dataset.key] = r;
   });
   return { enabled: $('gdOn').checked, cooldown_min: Number($('gdCooldown').value) || 30, entry_gap_sec: Number($('gdGap').value) || 60,
-           items: $('gdItems').value.split('\n').map((x) => x.trim()).filter(Boolean), rules };
+           items: gdLines(), item_weights: Object.fromEntries(gdLines().map((t) => [t, gdW[t] || 1])), rules };
 }
+// 지침 중요도 ★1~5 - 한 바퀴에 나오는 횟수 (services/guidelines.py item_weight)
+let gdW = {};
+function gdLines() { return [...new Set($('gdItems').value.split('\n').map((x) => x.trim()).filter(Boolean))]; }
+function renderWeights() {
+  const lines = gdLines();
+  const total = lines.reduce((a, t) => a + (gdW[t] || 1), 0) || 1;
+  $('gdWeights').innerHTML = lines.length ? lines.map((t, i) => {
+    const w = gdW[t] || 1;
+    return `<div class="gdw" data-i="${i}"><span class="st" title="눌러서 중요도 정하기">${[1, 2, 3, 4, 5].map((k) => `<span data-w="${k}" class="${k <= w ? 'on' : ''}">★</span>`).join('')}</span>
+      <span class="tx">${esc(t)}</span><span class="pc">${Math.round(w / total * 100)}%</span></div>`;
+  }).join('') : '<div class="empty" style="padding:8px 0;text-align:left">지침이 없습니다</div>';
+}
+$('gdWeights').addEventListener('click', (e) => {
+  const st = e.target.closest('[data-w]'), row = e.target.closest('.gdw'); if (!st || !row) return;
+  const t = gdLines()[Number(row.dataset.i)]; if (!t) return;
+  gdW[t] = Number(st.dataset.w);
+  renderWeights();
+});
+let gdWT = null;
+$('gdItems').addEventListener('input', () => { clearTimeout(gdWT); gdWT = setTimeout(renderWeights, 300); });
 async function loadGuides() {
   try { guides = await api('guidelines'); renderGuides(); } catch (e) { toast(e.message, true); }
 }

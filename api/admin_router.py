@@ -578,6 +578,11 @@ async def read_guidelines():
 async def write_guidelines(body: dict):
     from services import guidelines
     patch = {k: body[k] for k in ("enabled", "cooldown_min", "entry_gap_sec", "items", "rules") if k in body}
+    if "item_weights" in body:                     # 통째로 바꿈 (합치면 지운 ★가 남음)
+        from services.settings_service import get_settings as _gs
+        cur = _gs()["guidelines"]
+        cur_w = cur.get("item_weights") or {}
+        patch["item_weights"] = {**{k: 1 for k in cur_w}, **(body.get("item_weights") or {})}
     try:
         update_settings({"guidelines": patch})
     except SettingsError as e:

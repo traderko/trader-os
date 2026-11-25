@@ -454,6 +454,17 @@ def _validate_guidelines(g: dict) -> None:
     if len(items) > 100:
         raise SettingsError("지침은 100개까지 넣을 수 있습니다.")
     g["items"] = items
+    w = g.get("item_weights") or {}                     # 지침 중요도 ★1~5 (1 은 저장 안 함)
+    out_w = {}
+    if isinstance(w, dict):
+        for t in items:
+            try:
+                v = max(1, min(5, int(w.get(t, 1))))
+            except (TypeError, ValueError):
+                v = 1
+            if v != 1:
+                out_w[t] = v
+    g["item_weights"] = out_w
     rules = g.get("rules") or {}
     defaults = DEFAULTS["guidelines"]["rules"]
     for key, r in list(rules.items()):

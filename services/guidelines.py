@@ -159,7 +159,8 @@ def _opened_at(p: dict, fallback: float) -> float:
     return fallback
 _hold_count: dict[tuple, int] = {}    # (계좌, 지표·장|시각) → 보낸 횟수 (event_hold 반복)
 _rand_next: dict = {"at": None, "sig": None}   # 무작위 지침: 다음에 보낼 시각 (설정이 바뀌면 다시 잡음)
-_rand_bag: list[str] = []                       # 아직 안 보낸 지침 (다 쓰면 섞어서 다시)
+_rand_bag: list[str] = []                       # 아직 안 보낸 지침 (한 바퀴 - 다 쓰면 다시 만듦)
+_rand_sig: tuple = ()                           # 한 바퀴를 만들 때의 목록·중요도 (바뀌면 새로 만듦)
 _margin_lvl: dict[int, tuple] = {}    # 계좌 → (알린 단계 %, 마지막으로 보낸 시각) (margin_use)
 MARGIN_HYST = 1.0                     # 단계 아래로 이만큼(%p) 더 내려가야 '내려갔다'로 봄 (경계에서 왔다갔다 할 때 알림 폭주 방지)
 
@@ -323,8 +324,7 @@ async def _on_open(account_id, account_number, symbol, side, volume, now):
             if n <= 1:
                 text = (r.get("text") or "").strip()
                 if not text:
-                    items = cfg().get("items") or []
-                    pick = random.sample(items, min(int(r.get("count", 2)), len(items))) if items else []
+                    pick = _pick_items(int(r.get("count", 2)))       # 중요도(★)가 높을수록 자주
                     text = "\n".join(f"□ {x}" for x in pick)
                 if text:
                     fire("first_entry", account_id, start.date().isoformat(), f"{acc} · 오늘 첫 진입 ({symbol} {side})", text)
@@ -523,17 +523,50 @@ def _next_slot(after: datetime, r: dict) -> datetime:
     return t
 
 
+def item_weight(text: str) -> int:
+    """지침 중요도 ★1~5 = 한 바퀴에 나오는 횟수 (관리 화면 지침 목록에서 정함, 없으면 1)"""
+    try:
+        return max(1, min(5, int((cfg().get("item_weights") or {}).get(text, 1))))
+    except (TypeError, ValueError):
+        return 1
+
+
+def _cycle(items: list[str]) -> list[str]:
+    """한 바퀴 순서 - 지침마다 중요도만큼 넣고, 같은 지침이 몰리지 않게 고르게 흩음 (smooth weighted round-robin).
+    ★5·★3·★1·★1·★1 이면 11번 중 5·3·1·1·1번. 처음 순서는 매 바퀴 섞어서 늘 같은 순서가 되지 않게"""
+    order = random.sample(items, len(items))
+    w = {x: item_weight(x) for x in order}
+    total = sum(w.values())
+    cur = {x: random.random() for x in order}        # 동점일 때 매번 다르게
+    seq = []
+    for _ in range(total):
+        for x in order:
+            cur[x] += w[x]
+        pick = max(order, key=lambda x: cur[x])
+        cur[pick] -= total
+        seq.append(pick)
+    return seq
+
+
 def _pick_items(n: int) -> list[str]:
+    """지침 n개 - 중요도가 높을수록 자주. 한 메시지 안에서는 겹치지 않음"""
     items = [x for x in (cfg().get("items") or []) if x.strip()]
-    global _rand_bag
-    _rand_bag = [x for x in _rand_bag if x in items]        # 목록에서 지운 지침은 빼기
+    global _rand_bag, _rand_sig
+    sig = tuple((x, item_weight(x)) for x in items)
+    if sig != _rand_sig:                                     # 목록·중요도가 바뀌면 바퀴를 새로
+        _rand_bag, _rand_sig = [], sig
     out = []
-    while len(out) < min(n, len(items)):
+    n = min(n, len(items))
+    tries = 0
+    while len(out) < n and tries < 1000:
+        tries += 1
         if not _rand_bag:
-            _rand_bag = random.sample(items, len(items))
-        x = _rand_bag.pop()
-        if x not in out:
-            out.append(x)
+            _rand_bag = _cycle(items)
+        x = _rand_bag.pop(0)
+        if x in out:                                         # 같은 메시지에 두 번은 안 넣음 - 바퀴 뒤로 미룸
+            _rand_bag.append(x)
+            continue
+        out.append(x)
     return out
 
 
