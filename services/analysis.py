@@ -280,6 +280,13 @@ def usage_table(eps: list[dict]) -> list[dict]:
 async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) -> dict:
     """trades: 청산된 Trade 행들. 결과는 웹 '분석' 탭 그대로. progress(문자열): 진행 상황 (웹에 보여 줌)"""
     progress = progress or (lambda _m: None)
+    tm: dict[str, float] = {}                 # 단계별 걸린 시간 (초) - 화면 아래 · 서버 로그
+    mark = [time.perf_counter()]
+
+    def lap(name: str) -> None:
+        now = time.perf_counter()
+        tm[name] = tm.get(name, 0.0) + (now - mark[0])
+        mark[0] = now
     tf = tf if tf in TFS else "5m"
     rows = [t for t in trades if t.close_time is not None and t.open_time is not None and t.price_open]
     notes: list[str] = []
@@ -303,6 +310,7 @@ async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) 
             mt5_ok = False
             notes.append(f"{sym}: MT5 에서 봉을 받지 못했어요 ({getattr(e, 'detail', e) or type(e).__name__}). 저장된 봉으로만 계산해요.")
 
+    lap("bars")
     # 2) 종목 정보 (1랏 1포인트 손익 · 1랏 증거금) - 역행 금액 · 증거금 사용률용
     info_of: dict[str, dict | None] = {}
     for sym in {t.symbol for t in rows}:
@@ -311,6 +319,7 @@ async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) 
         info_of[sym] = await _sym_info(account_id, sym, ref) if (ref and mt5_ok) else None
         if info_of[sym] is None:
             notes.append(f"{sym}: 1랏 증거금 · 손익을 MT5 에서 받지 못해 증거금 사용률은 빼고 계산했어요.")
+    lap("sym")
     # 3) 거래마다 MAE · MFE
     progress("거래마다 역행 · 순행 재는 중 (KTR 받는 중)")
     out_trades, bars_of = [], {}
@@ -319,7 +328,9 @@ async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) 
         b = _bars(t.symbol, o // 60 * 60 - 240, c)            # 5분봉이면 진입 봉이 최대 4분 앞에서 시작
         b = [x for x in b if x[0] + 60 > o or (prec.get((t.symbol, _day_key(t.open_time))) == "M5" and x[0] + 300 > o)]
         ex = excursion(t.position, t.price_open, b)
+        lap("mae")
         ktr = await _ktr(account_id, t.symbol, tf, t.open_time) if mt5_ok else None
+        lap("ktr")
         p = prec.get((t.symbol, _day_key(t.open_time)))
         net = (t.profit or 0) + (t.commission or 0)
         r = {"id": t.id, "ticket": t.ticket, "symbol": t.symbol, "side": t.position, "volume": t.volume,
@@ -358,6 +369,7 @@ async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) 
         "m5_days": sum(1 for v in prec.values() if v == "M5"), "no_bar_days": sum(1 for v in prec.values() if v == ""),
     }
 
+    lap("mae")
     # 4) 증거금 사용률 - 구간마다
     progress("증거금 사용률 계산 중")
     for sym in days_of:
@@ -373,6 +385,7 @@ async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) 
             else:
                 bm[t] = (h, l, c)
         bars_of[sym] = bm
+    lap("usage")
     # 강제청산: 거래 기록의 청산 이유, 없으면 MT5 체결 기록에서 (워커 /close-reasons)
     reasons: dict[int, str] = {}
     if mt5_ok and rows:
@@ -384,15 +397,19 @@ async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) 
             reasons = {int(k): v for k, v in (rr or {}).items()}
         except Exception:
             pass
+    lap("stopout")
     eps = episodes([{
         "id": t.id, "symbol": t.symbol, "side": t.position, "volume": t.volume or 0, "price_open": t.price_open,
         "open_ts": int(t.open_time.timestamp()), "close_ts": int(t.close_time.timestamp()),
         "net": (t.profit or 0) + (t.commission or 0), "balance_before": getattr(t, "balance_before", None),
         "close_reason": getattr(t, "close_reason", None) or reasons.get(int(t.ticket or 0))} for t in rows], bars_of, info_of)
+    lap("usage")
     missing_bal = sum(1 for e in eps if not e["balance"])
     if missing_bal:
         notes.append(f"청산 직전 잔고가 아직 없는 구간 {missing_bal}개는 사용률을 못 구했어요 (서버가 채우는 중이면 잠시 뒤 다시).")
 
-    return {"tf": tf, "mt5_ok": mt5_ok and all(v is not None for v in info_of.values()), "summary": summary, "trades": out_trades, "episodes": eps,
+    timings = {k: round(v, 2) for k, v in tm.items()}
+    print(f"[analysis] account={account_id} 거래 {len(rows)}건 · 구간 {len(eps)}개 · 걸린 시간 {timings}")
+    return {"tf": tf, "timings": timings, "mt5_ok": mt5_ok and all(v is not None for v in info_of.values()), "summary": summary, "trades": out_trades, "episodes": eps,
             "usage_table": usage_table(eps), "notes": notes,
             "has_usage": any(e["max_usage"] is not None for e in eps)}

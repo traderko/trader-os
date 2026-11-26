@@ -3893,6 +3893,9 @@ function renderAna() {
         <td class="num">${k(r.mae_k, r.mae)}</td><td class="num">${k(r.mfe_k, r.mfe)}</td><td class="num">${k(r.move_k, r.move)}</td><td class="num">${r.ktr != null ? afmt(r.ktr) : '-'}</td></tr>`; }).join('')}
   </table>${list.length > aShowN ? `<button class="btn small ghost" id="aMore" style="margin-top:8px">더 보기 (${list.length - aShowN}건)</button>` : ''}
   <p class="hint2" style="margin:8px 0 0">역행 · 순행 · 챙김은 KTR 단위, 괄호 안은 가격 폭</p></section>`;
+  const TM = { bars: '1분봉', sym: '종목 정보', mae: '역행·순행', ktr: 'KTR', stopout: '강제청산 찾기', usage: '증거금 사용률' };
+  if (d.timings) { const tot = Object.values(d.timings).reduce((a, b) => a + b, 0);
+    h += `<p class="hint2" style="margin:4px 2px 12px">계산 시간 ${fmt(Math.max(0, tot) + 0, 1)}초 · ${Object.entries(d.timings).map(([k, v]) => `${TM[k] || k} ${fmt(Math.max(0, v) + 0, 1)}초`).join(' · ')}</p>`; }
   $('aBody').innerHTML = h;
   const more = $('aMore'); if (more) more.onclick = () => { aShowN += 100; renderAna(); };
 }
