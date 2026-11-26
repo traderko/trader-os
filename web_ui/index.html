@@ -431,6 +431,19 @@
   .kgrid em { display: block; font-style: normal; font-size: 11.5px; color: var(--muted); }
   .kgrid .big span { font-size: 20px; }
   h3.sec { font-size: 14px; margin: 18px 2px 8px; }
+  /* 분석 */
+  .ains { display: grid; gap: 8px; font-size: 14px; line-height: 1.55; }
+  .ains b { font-size: 15.5px; }
+  .ains .sub { display: block; font-size: 12px; color: var(--muted); }
+  .adist { display: grid; grid-template-columns: 70px 1fr 1fr; gap: 4px 8px; align-items: center; font-size: 12.5px; }
+  .adist .h { font-size: 11.5px; color: var(--muted); }
+  .adist .bar { display: flex; align-items: center; gap: 6px; }
+  .adist .bar i { display: block; height: 10px; border-radius: 3px; min-width: 1px; }
+  .adist .w i { background: var(--up); opacity: .75; } .adist .l i { background: var(--down); opacity: .75; }
+  .wtable.atbl td, .wtable.atbl th { white-space: nowrap; padding-left: 6px; }
+  .awrap { overflow-x: auto; }
+  .abadge { display: inline-block; font-size: 11px; padding: 0 5px; border-radius: 4px; background: var(--bad-weak); color: var(--down); margin-left: 4px; }
+  .atrow td { font-size: 13px; }
   .brow { display: grid; grid-template-columns: minmax(64px, auto) 1fr auto; gap: 2px 10px; align-items: center; padding: 8px 0; border-bottom: 1px solid var(--line); }
   .brow:last-child { border-bottom: 0; }
   .brow .l { font-weight: 600; font-size: 13.5px; }
@@ -805,6 +818,18 @@
     <p class="hint2" style="margin-top:8px">고영향 USD 지표 · 한국 시간 · 하루 = 브로커 거래일. ⭐ = 관리 화면에서 정한 강조 단어가 들어간 지표. 🔒 = 지표일이라 잠기는 집중 구간.</p>
   </section>
 </section>
+<!-- 거래 분석: MAE·MFE (얼마나 흔들렸고 얼마나 갔나) · 증거금 사용률별 위험 (services/analysis.py) -->
+<section class="tab" id="tab-ana">
+  <div class="seg" id="aPeriod">
+    <button data-d="7">1주</button><button data-d="30">1개월</button><button data-d="90">3개월</button><button data-d="180">6개월</button>
+  </div>
+  <div class="opts">
+    <span>KTR 기준</span>
+    <span class="seg" id="aTf" style="margin:0"><button data-tf="2m">2분</button><button data-tf="5m">5분</button><button data-tf="10m">10분</button><button data-tf="1h">1시간</button></span>
+  </div>
+  <p class="hint2" id="aNote" hidden></p>
+  <div id="aBody"><div class="empty">불러오는 중…</div></div>
+</section>
 </main>
 
 <nav class="tabs" id="tabs">
@@ -812,6 +837,7 @@
   <button data-tab="trades"><span class="i">🧾</span>거래내역</button>
   <button data-tab="pnl"><span class="i">📅</span>손익</button>
   <button data-tab="stats"><span class="i">📊</span>통계</button>
+  <button data-tab="ana"><span class="i">🔬</span>분석</button>
   <button data-tab="grid"><span class="i">🧱</span>구간</button>
   <button data-tab="events"><span class="i">📰</span>지표</button>
 </nav>
@@ -1698,7 +1724,7 @@ $('tpGo').onclick = () => applyLevel('tp');
 
 // ── 주기적 갱신: 화면이 보일 때만, 대화상자가 열려 있으면 쉼 ──
 const busy = () => document.hidden || !$('unlockModal').hidden || !$('askModal').hidden || tab !== 'pos';
-function refreshAll() { if (tab === 'trades') return loadTrades(); if (tab === 'pnl') return loadPnl(); if (tab === 'stats') return loadStats(); if (tab === 'grid') return gridEnter(); if (tab === 'events') return loadEvents(); loadLock(); loadRisk(); loadPositions(); }
+function refreshAll() { if (tab === 'trades') return loadTrades(); if (tab === 'pnl') return loadPnl(); if (tab === 'stats') return loadStats(); if (tab === 'ana') return loadAna(); if (tab === 'grid') return gridEnter(); if (tab === 'events') return loadEvents(); loadLock(); loadRisk(); loadPositions(); }
 setInterval(() => { if (!busy()) loadLock(); }, 3000);
 setInterval(() => { if (!busy()) { loadPositions(); loadRisk(); } }, 5000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAll(); });
@@ -3748,6 +3774,120 @@ function drawSeq(el, vals, labelAt) {
   hit.addEventListener('touchstart', move, { passive: true }); hit.addEventListener('mouseleave', out); hit.addEventListener('touchend', out);
 }
 
+// ══════════════ 거래 분석 (MAE·MFE · 증거금 사용률) ══════════════
+// 서버가 1분봉으로 거래마다 최대 역행(MAE)·최대 순행(MFE)을 재고, 포지션을 들고 있던 구간마다 증거금 사용률 · 평가금 낙폭을 다시 계산
+let aDays = Number(lsGet('traderos:adays', '30')), aTf = lsGet('traderos:atf', '5m'), aData = null, aShowN = 50;
+const afmt = (v) => v == null ? '-' : fmt(v, 2);
+function aPath() {
+  const d0 = new Date(); d0.setHours(0, 0, 0, 0);
+  const from = new Date(d0.getTime() - (aDays - 1) * 86400000), to = new Date(d0.getTime() + 86400000);   // 날짜 단위 - 캐시가 하루 동안 같은 주소
+  return `/analysis/${encodeURIComponent(acc.account_number)}?from_ts=${Math.floor(from / 1000)}&to_ts=${Math.floor(to / 1000)}&tf=${aTf}`;
+}
+function aSegs() {
+  document.querySelectorAll('#aPeriod button').forEach((b) => b.classList.toggle('on', Number(b.dataset.d) === aDays));
+  document.querySelectorAll('#aTf button').forEach((b) => b.classList.toggle('on', b.dataset.tf === aTf));
+}
+$('aPeriod').onclick = (e) => { const b = e.target.closest('button[data-d]'); if (!b) return; aDays = Number(b.dataset.d); lsSet('traderos:adays', String(aDays)); loadAna(); };
+$('aTf').onclick = (e) => { const b = e.target.closest('button[data-tf]'); if (!b) return; aTf = b.dataset.tf; lsSet('traderos:atf', aTf); loadAna(); };
+async function loadAna() {
+  if (!acc) return;
+  aSegs();
+  const path = aPath(), want = path;
+  const hit = cacheGet(path);
+  aShowN = 50;
+  if (hit) { aData = hit.d; renderAna(); }
+  else $('aBody').innerHTML = '<div class="empty">분석 중…<br><small class="muted">처음엔 1분봉을 MT5에서 받느라 1~2분 걸릴 수 있어요. 받은 봉은 서버에 저장돼서 다음부터 빨라요.</small></div>';
+  try {
+    const r = await apiRaw(path);
+    if (aPath() !== want) return;
+    cacheSet(path, r.text, r.data);
+    if (!hit || hit.text !== r.text) { aData = r.data; renderAna(); }
+  } catch (e) {
+    if (aPath() !== want) return;
+    if (!hit) $('aBody').innerHTML = `<div class="empty">분석 실패: ${esc(e.message)}</div>`;
+  }
+}
+function aDist(wins, loss, key) {
+  // KTR 단위 분포 - 이긴 거래 · 진 거래를 나란히
+  const edges = [0, 0.5, 1, 1.5, 2, 3, 5, Infinity];
+  const cnt = (rows) => edges.slice(0, -1).map((lo, i) => rows.filter((r) => r[key] != null && r[key] >= lo && r[key] < edges[i + 1]).length);
+  const cw = cnt(wins), cl = cnt(loss), mx = Math.max(1, ...cw, ...cl);
+  let h = '<div class="adist"><span class="h">KTR</span><span class="h">이긴 거래</span><span class="h">진 거래</span>';
+  edges.slice(0, -1).forEach((lo, i) => {
+    const hi = edges[i + 1], lab = hi === Infinity ? `${lo} 이상` : `${lo}~${hi}`;
+    h += `<span class="num">${lab}</span><span class="bar w"><i style="width:${cw[i] / mx * 100}%"></i>${cw[i] || ''}</span><span class="bar l"><i style="width:${cl[i] / mx * 100}%"></i>${cl[i] || ''}</span>`;
+  });
+  return h + '</div>';
+}
+function renderAna() {
+  const d = aData;
+  if (!d) return;
+  const S = d.summary, rows = d.trades || [];
+  const notes = [...(d.notes || [])];
+  if (S.m5_days) notes.push(`1분봉이 없는 ${S.m5_days}일은 5분봉으로 계산했어요 (정밀도 낮음).`);
+  if (S.no_bar_days) notes.push(`봉을 받지 못한 날 ${S.no_bar_days}일의 거래는 빠졌어요.`);
+  $('aNote').hidden = !notes.length; $('aNote').innerHTML = notes.map(esc).join('<br>');
+  if (!rows.length) { $('aBody').innerHTML = '<div class="empty">이 기간에 청산된 거래가 없어요.</div>'; return; }
+  const wins = rows.filter((r) => r.net > 0 && r.mae_k != null), loss = rows.filter((r) => r.net <= 0 && r.mae_k != null);
+  const W = S.win, L = S.loss;
+  let h = '';
+  // 1) 한눈에
+  const ins = [];
+  if (W.mae_k.p90 != null) ins.push(`이긴 거래의 90%는 진입 뒤 <b class="num">${afmt(W.mae_k.p90)} KTR</b> 안에서 버텼어요.<span class="sub">버틸 폭(손절)을 이보다 좁게 잡으면 이긴 거래 일부도 털려요. 중간값 ${afmt(W.mae_k.p50)} · 최대 ${afmt(W.mae_k.max)} KTR</span>`);
+  if (W.mfe_k.p50 != null) ins.push(`이긴 거래는 보통 <b class="num">${afmt(W.mfe_k.p50)} KTR</b>까지 갔고, 실제로 챙긴 건 <b class="num">${afmt(W.move_k.p50)} KTR</b>이에요.<span class="sub">중간값 기준. 버틸 폭 대비 갈 폭이 충분해야 비중을 줄여도 남아요.</span>`);
+  if (L.n) ins.push(`진 거래 ${L.n}건 중 <b class="num">${L.gave_back_1k}건</b>은 한때 1 KTR 넘게 이익이었어요.<span class="sub">진 거래의 역행 중간값 ${afmt(L.mae_k.p50)} KTR · 순행 중간값 ${afmt(L.mfe_k.p50)} KTR</span>`);
+  if (S.win_mae_bal_pct && S.win_mae_bal_pct.p90 != null) ins.push(`이긴 거래가 가장 밀렸을 때 평가손은 보통 잔고의 <b class="num">${afmt(S.win_mae_bal_pct.p50)}%</b>, 90%가 <b class="num">${afmt(S.win_mae_bal_pct.p90)}%</b> 안이었어요.<span class="sub">거래 하나 기준 (같이 들고 있던 다른 포지션은 아래 증거금 사용률에서)</span>`);
+  h += `<section class="panel"><div class="ains">${ins.map((x) => `<div>${x}</div>`).join('') || '<div class="muted">KTR을 구하지 못해 KTR 단위 분석을 못 했어요.</div>'}</div>
+    <p class="hint2" style="margin:10px 0 0">MAE = 진입 뒤 가장 불리하게 간 폭 · MFE = 가장 유리하게 간 폭. KTR = 그 거래가 진입한 장의 ${esc(TF_KR[d.tf] || d.tf)} KTR. 거래 ${S.n}건 중 봉으로 잰 것 ${S.n_measured}건, KTR로 잰 것 ${S.n_ktr}건.</p></section>`;
+  // 2) 백분위 표
+  const pr = (o) => `<td class="num">${afmt(o.p50)}</td><td class="num">${afmt(o.p75)}</td><td class="num">${afmt(o.p90)}</td><td class="num">${afmt(o.max)}</td>`;
+  h += `<h3 class="sec">KTR 단위로 본 흔들림 · 간 폭</h3><section class="panel awrap"><table class="wtable atbl">
+    <tr><th></th><th>중간</th><th>75%</th><th>90%</th><th>최대</th></tr>
+    <tr><td>이긴 거래 최대 역행</td>${pr(W.mae_k)}</tr>
+    <tr><td>이긴 거래 최고점 전 역행</td>${pr(W.mae_pre_k)}</tr>
+    <tr><td>이긴 거래 최대 순행</td>${pr(W.mfe_k)}</tr>
+    <tr><td>이긴 거래 실제 챙긴 폭</td>${pr(W.move_k)}</tr>
+    <tr><td>진 거래 최대 역행</td>${pr(L.mae_k)}</tr>
+    <tr><td>진 거래 최대 순행</td>${pr(L.mfe_k)}</tr>
+  </table><p class="hint2" style="margin:8px 0 0">최고점 전 역행 = 가장 많이 간 순간 전까지 밀린 폭 ("얼마나 버텼다가 갔나")</p></section>`;
+  h += `<h3 class="sec">최대 역행 분포 (KTR)</h3><section class="panel">${aDist(wins, loss, 'mae_k')}</section>`;
+  // 3) 증거금 사용률
+  if (d.has_usage) {
+    const T = d.usage_table.filter((r) => r.n);
+    const lab = (r) => r.hi == null ? `${r.lo}% 이상` : `${r.lo}~${r.hi}%`;
+    const safe = d.usage_table.filter((r) => r.hi != null && r.hi <= 10 && r.n), worstSafe = Math.max(0, ...safe.map((r) => r.dd_max || 0));
+    const risky = d.usage_table.filter((r) => r.lo >= 10 && r.n);
+    let line = '';
+    if (safe.length) line += `사용률 10% 미만이었던 구간에서 평가금 최대 낙폭은 <b class="num">${afmt(worstSafe)}%</b>였어요.`;
+    if (risky.length) {
+      const n = risky.reduce((a, r) => a + r.n, 0), d20 = risky.reduce((a, r) => a + r.dd20, 0), d50 = risky.reduce((a, r) => a + r.dd50, 0), so = risky.reduce((a, r) => a + r.stopout, 0);
+      line += ` 10% 이상 들어간 구간은 ${n}번, 그중 20% 넘게 빠진 게 <b class="num">${d20}번</b>, 반토막(50%↑) <b class="num">${d50}번</b>, 강제청산 <b class="num">${so}번</b>이에요.`;
+    }
+    h += `<h3 class="sec">증거금 사용률별 위험</h3><section class="panel">${line ? `<div class="ains" style="margin-bottom:10px"><div>${line}</div></div>` : ''}
+      <div class="awrap"><table class="wtable atbl"><tr><th>최대 사용률</th><th>구간</th><th>낙폭 중간</th><th>최악 낙폭</th><th>20%↑</th><th>50%↑</th><th>강제청산</th><th>손익</th></tr>
+      ${T.map((r) => `<tr><td>${lab(r)}</td><td class="num">${r.n}</td><td class="num">${afmt(r.dd_p50)}%</td><td class="num">${afmt(r.dd_max)}%</td><td class="num">${r.dd20 || ''}</td><td class="num">${r.dd50 || ''}</td><td class="num">${r.stopout || ''}</td><td class="num ${cls(r.net)}">${signed(r.net)}</td></tr>`).join('')}
+      </table></div>
+      <p class="hint2" style="margin:8px 0 0">구간 = 포지션을 하나라도 들고 있던 연속된 시간. 사용률 = 증거금 ÷ 평가금 (MT5 증거금 레벨의 역수 - 10% = 레벨 1000%). 낙폭 = 구간 시작 잔고 대비 평가금이 가장 낮았을 때 (그 분의 가장 불리한 가격). 증거금은 지금 레버리지로 계산해서, 레버리지가 바뀐 기간은 어긋날 수 있어요.</p></section>`;
+    const top = d.episodes.filter((e) => e.dd_pct != null).sort((a, b) => b.dd_pct - a.dd_pct).slice(0, 10);
+    if (top.length) h += `<h3 class="sec">가장 위험했던 순간</h3><section class="panel awrap"><table class="wtable atbl">
+      <tr><th>시작</th><th>거래</th><th>최대 사용률</th><th>최대 랏</th><th>최악 낙폭</th><th>손익</th></tr>
+      ${top.map((e) => { const t = new Date(e.start * 1000); return `<tr><td class="num">${pad2(t.getMonth() + 1)}/${pad2(t.getDate())} ${pad2(t.getHours())}:${pad2(t.getMinutes())}${e.stopout ? '<span class="abadge">강제청산</span>' : ''}</td><td class="num">${e.n}건</td><td class="num">${afmt(e.max_usage)}%</td><td class="num">${afmt(e.max_lots)}</td><td class="num down">-${afmt(e.dd_pct)}%</td><td class="num ${cls(e.net)}">${signed(e.net)}</td></tr>`; }).join('')}
+      </table></section>`;
+  }
+  // 4) 거래마다
+  const list = rows.slice().sort((a, b) => dt(b.open_time) - dt(a.open_time));
+  h += `<h3 class="sec">거래마다</h3><section class="panel awrap"><table class="wtable atbl">
+    <tr><th>진입</th><th>종목</th><th>손익</th><th>역행</th><th>순행</th><th>챙김</th><th>KTR</th></tr>
+    ${list.slice(0, aShowN).map((r) => { const o = dt(r.open_time); const k = (v, p) => v == null ? '-' : `${afmt(v)}${p != null ? `<small class="muted"> (${afmt(p)})</small>` : ''}`;
+      return `<tr class="atrow"><td class="num">${pad2(o.getMonth() + 1)}/${pad2(o.getDate())} ${pad2(o.getHours())}:${pad2(o.getMinutes())}${r.precision === 'M5' ? ' <small class="muted" title="5분봉으로 계산">5분</small>' : ''}</td>
+        <td>${esc(r.symbol)} <small class="muted">${esc(r.side)} ${fmt(r.volume)}</small></td><td class="num ${cls(r.net)}">${signed(r.net)}</td>
+        <td class="num">${k(r.mae_k, r.mae)}</td><td class="num">${k(r.mfe_k, r.mfe)}</td><td class="num">${k(r.move_k, r.move)}</td><td class="num">${r.ktr != null ? afmt(r.ktr) : '-'}</td></tr>`; }).join('')}
+  </table>${list.length > aShowN ? `<button class="btn small ghost" id="aMore" style="margin-top:8px">더 보기 (${list.length - aShowN}건)</button>` : ''}
+  <p class="hint2" style="margin:8px 0 0">역행 · 순행 · 챙김은 KTR 단위, 괄호 안은 가격 폭</p></section>`;
+  $('aBody').innerHTML = h;
+  const more = $('aMore'); if (more) more.onclick = () => { aShowN += 100; renderAna(); };
+}
+
 // ══════════════ 구간매매 ══════════════
 // KTR(장 시작 봉 크기) 간격으로 시장가 1개 + 리밋 N-1개, 손절은 모두 같은 가격. 계산·주문은 서버 (services/grid.py)
 const G = {
@@ -4138,7 +4278,7 @@ function gridEnter() {
 
 (async () => {
   renderSyms(); renderTSyms();
-  const h = location.hash.slice(1); if (h === 'trades' || h === 'pnl' || h === 'stats' || h === 'grid' || h === 'events') { tab = h; document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab)); document.querySelectorAll('main .tab').forEach((s) => s.classList.toggle('on', s.id === 'tab-' + tab)); }
+  const h = location.hash.slice(1); if (h === 'trades' || h === 'pnl' || h === 'stats' || h === 'ana' || h === 'grid' || h === 'events') { tab = h; document.querySelectorAll('#tabs button').forEach((b) => b.classList.toggle('on', b.dataset.tab === tab)); document.querySelectorAll('main .tab').forEach((s) => s.classList.toggle('on', s.id === 'tab-' + tab)); }
   try {
     await loadAccounts();
     if (!acc) { $('posList').innerHTML = '<div class="empty">등록된 계좌가 없습니다. 이 PC의 관리 화면에서 계좌를 추가하세요.</div>'; return; }

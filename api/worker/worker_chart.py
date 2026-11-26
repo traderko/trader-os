@@ -111,3 +111,26 @@ async def get_rates(
         return _fetch_rates(mt5, name, tf_const, from_utc, to_utc)
 
     return await asyncio.to_thread(run)
+
+
+@router.get("/close-reasons")
+async def get_close_reasons(request: Request, from_ts: str, to_ts: str, is_kst: bool = False):
+    """이 기간에 청산된 포지션마다 청산 이유 {포지션 티켓: reason} - 거래 분석(강제청산 찾기)용
+    reason: sl · tp · manual · auto · stopout (api/worker/worker_account_router.py 의 _REASON 과 같음)"""
+    mt5 = getattr(request.app.state, "mt5", None)
+    if mt5 is None:
+        raise HTTPException(503, "MT5 연결 안 됨")
+    from api.worker.worker_account_router import _REASON
+    from_utc, to_utc = _parse_ts(from_ts, is_kst), _parse_ts(to_ts, is_kst)
+
+    def run():
+        deals = mt5.history_deals_get(_utc_to_broker(from_utc), _utc_to_broker(to_utc)) or []
+        out = {}
+        for d in deals:
+            if d.entry in (mt5.DEAL_ENTRY_OUT, mt5.DEAL_ENTRY_OUT_BY, mt5.DEAL_ENTRY_INOUT) and d.position_id:
+                r = _REASON.get(int(d.reason))
+                if r and (out.get(d.position_id) != "stopout"):
+                    out[d.position_id] = r
+        return out
+
+    return await asyncio.to_thread(run)

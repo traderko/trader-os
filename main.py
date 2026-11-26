@@ -498,6 +498,8 @@ app.include_router(trade_tag.router)
 app.include_router(trade_group.router)
 app.include_router(account_router.router)
 app.include_router(grid_router.router)
+from api import analysis_router as _analysis_router  # 거래 분석 (웹 '분석' 탭) - MAE·MFE · 증거금 사용률
+app.include_router(_analysis_router.router)
 app.include_router(rates.router)
 from api import hook_router as _hook_router      # 폰 알림 받기 (토스뱅크 잔액) - /hook/bank
 app.include_router(_hook_router.router)
