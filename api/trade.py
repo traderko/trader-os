@@ -871,13 +871,9 @@ async def get_balance_before(
 ):
     """이 달(진입 기준) 청산된 거래마다 청산 직전 잔고 - 웹 거래내역의 손익 % (잔고 대비)
     {"balances": {거래 id: 잔고}, "source": "stored" | "mt5" | "equity" | null}
-      stored : 거래 기록에 저장된 값 (청산 때 워커에게 받아 둠 - _save_close_info). 다 있으면 MT5 에 묻지 않음
-      없는 거래만 아래로 구하고, mt5 로 구한 값은 거래 기록에 저장해 둠 (다음부터는 stored)
-      mt5    : 달 시작 잔고(MT5) + 그 뒤 입출금 + 먼저 청산된 거래 손익(수수료 포함)을 청산 순서대로 더함
-      equity : MT5 가 안 붙어 있으면 1분 평가금 기록(data/equity.db)에서 청산 직전 분의 잔고 (기록 시작 뒤 거래만)
-    스왑은 거래 기록에 없어서 빠짐 - 거의 차이 없음"""
+      stored : 거래 기록에 저장된 값 (청산 때 저장 · 서버가 10분마다 미리 채움 - services/trade_balance.py)
+      빈 게 있으면 trade_balance.fill 로 지금 채워 저장, MT5 가 없으면 1분 평가금 기록에서 (저장 안 함)"""
     import asyncio
-    from api.account_router import _parse_time, _drop_failed_withdrawals
     account = await get_account_or_default(db, account_number)
     if account is None:
         raise HTTPException(404, f"account not found: {account_number}")
@@ -895,43 +891,23 @@ async def get_balance_before(
     stored = {r.id: r.balance_before for r in rows if r.id in want and r.balance_before}
     if len(stored) == len(want):
         return {"balances": stored, "source": "stored"}
-    last = max(r.close_time for r in rows if r.id in want)
-
-    out: dict[int, float] = {}
+    # 빈 게 있으면 지금 채움 (보통은 서버가 미리 채워 둠 - services/trade_balance.py)
     try:
-        b0 = await asyncio.wait_for(worker_get(account.id, "/balance-at", {"before_time": start.isoformat()}), 8)
-        fl = await asyncio.wait_for(worker_get(account.id, "/balances", {
-            "start_time": start.isoformat(), "end_time": (last + timedelta(minutes=1)).isoformat()}), 8)
-        deps, wds, _ = _drop_failed_withdrawals(fl.get("deposits") or [], fl.get("withdrawals") or [])
-        ev = sorted([(t, abs(f.get("amount") or 0)) for f in deps if (t := _parse_time(f.get("time")))] +
-                    [(t, -abs(f.get("amount") or 0)) for f in wds if (t := _parse_time(f.get("time")))])
-        bal, fi = float(b0["balance"]), 0
-        for r in rows:
-            if r.close_time > last:
-                break
-            while fi < len(ev) and ev[fi][0] <= r.close_time:
-                bal += ev[fi][1]
-                fi += 1
-            if r.id in want and bal > 0:
-                out[r.id] = round(bal, 2)
-            bal += (r.profit or 0) + (r.commission or 0)
-        new = {k: v for k, v in out.items() if k not in stored}
-        if new:                                   # 다음부터는 저장된 값으로 (청산 때 받은 값은 그대로 둠)
-            try:
-                from sqlalchemy import update
-                for tid, v in new.items():
-                    await db.execute(update(Trade).where(Trade.id == tid, Trade.balance_before == None).values(balance_before=v))
-                await db.commit()
-            except Exception as e:
-                print(f"[trade] 청산 직전 잔고 저장 실패: {e}")
-        return {"balances": {**out, **stored}, "source": "mt5"}
+        from services import trade_balance
+        await db.commit()                         # 읽기 끝 - 아래에서 새로 저장된 값을 읽게
+        await asyncio.wait_for(trade_balance.fill(account.id), 30)
+        rows2 = (await db.execute(select(Trade.id, Trade.balance_before).where(Trade.id.in_(want)))).all()
+        stored = {r.id: r.balance_before for r in rows2 if r.balance_before}
+        if stored:
+            return {"balances": stored, "source": "mt5"}
     except Exception as e:
-        if not isinstance(e, HTTPException) or e.status_code != 503:
-            print(f"[trade] 청산 직전 잔고 (MT5) 실패: {getattr(e, 'detail', e)}")
-    try:
+        if getattr(e, "status_code", None) != 503:
+            print(f"[trade] 청산 직전 잔고 채우기 실패: {getattr(e, 'detail', e)}")
+    out: dict[int, float] = {}
+    try:                                          # MT5 가 없으면 1분 평가금 기록에서 (저장은 안 함)
         from services import equity_log
         for r in rows:
-            if r.id in want:
+            if r.id in want and r.id not in stored:
                 b = equity_log.balance_before(account.id, int(r.close_time.timestamp()))
                 if b:
                     out[r.id] = round(b, 2)

@@ -441,6 +441,9 @@ async def lifespan(app: FastAPI):
     # 9) 평가금 1분 기록 - 평가금 기준 최대 낙폭 (services/equity_log.py, data/equity.db)
     from services import equity_log
     equity_task = asyncio.create_task(equity_log.loop())
+    # 10) 거래별 청산 직전 잔고 미리 채우기 - 웹 거래내역 손익 % (services/trade_balance.py)
+    from services import trade_balance
+    balance_task = asyncio.create_task(trade_balance.loop())
  
     yield
  
@@ -451,6 +454,7 @@ async def lifespan(app: FastAPI):
     addon_task.cancel()
     reason_task.cancel()
     equity_task.cancel()
+    balance_task.cancel()
     await admin_app.stop_admin_server(admin_server, admin_task)
     watchdog_task.cancel()
     
