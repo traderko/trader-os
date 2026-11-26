@@ -1,5 +1,6 @@
 """평가금 기록 - 계좌마다 1분에 한 줄 (잔고 · 평가금 마지막/최저/최고 · 증거금 · 평가손익 %) → 평가금 기준 최대 낙폭
    평가손익 % = (평가금 - 잔고) ÷ 잔고 × 100 - pct(마지막) · pct_min(최저) · pct_max(최고)
+   증거금 대비 % = (평가금 - 잔고) ÷ 사용 증거금 × 100 - mpct · mpct_min · mpct_max (포지션 없으면 비어 있음)
 
 왜: 통계의 최대 낙폭은 청산된 거래로만 셈 - 들고 있다가 크게 마이너스였다가 살아나서 청산한 건 안 잡힘.
     MT5 는 지난 평가금을 알려주지 않아서 TraderOS 가 직접 적어 둠 (기록을 시작한 뒤부터만 볼 수 있음)
@@ -56,6 +57,14 @@ def _db() -> sqlite3.Connection:
                 pct_min = ROUND((COALESCE(equity_min, equity) - balance) / balance * 100, 4),
                 pct_max = ROUND((COALESCE(equity_max, equity) - balance) / balance * 100, 4)
                 WHERE balance > 0""")
+        if "mpct" not in cols:          # 증거금 대비 손익 % - 포지션이 없으면(증거금 0) 비움
+            for c in ("mpct", "mpct_min", "mpct_max"):
+                _conn.execute(f"ALTER TABLE equity ADD COLUMN {c} REAL")
+            _conn.execute("""UPDATE equity SET
+                mpct = ROUND((equity - balance) / margin * 100, 4),
+                mpct_min = ROUND((COALESCE(equity_min, equity) - balance) / margin * 100, 4),
+                mpct_max = ROUND((COALESCE(equity_max, equity) - balance) / margin * 100, 4)
+                WHERE margin > 0""")
         _conn.commit()
     return _conn
 
@@ -64,8 +73,8 @@ def _write(rows: list[tuple]) -> None:
     with _lock:
         c = _db()
         c.executemany("""INSERT OR REPLACE INTO equity
-            (account_id, ts, balance, equity, equity_min, equity_max, margin, pct, pct_min, pct_max)
-            VALUES (?,?,?,?,?,?,?,?,?,?)""", rows)
+            (account_id, ts, balance, equity, equity_min, equity_max, margin, pct, pct_min, pct_max, mpct, mpct_min, mpct_max)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""", rows)
         c.commit()
 
 
@@ -74,11 +83,17 @@ def _pct(eq: float, bal: float) -> float | None:
     return round((eq - bal) / bal * 100, 4) if bal > 0 else None
 
 
+def _mpct(eq: float, bal: float, margin: float) -> float | None:
+    """평가손익 % (사용 증거금 대비) - 포지션이 없으면(증거금 0) None. 텔레그램 실시간 현황의 '증거금 ±%' 와 같은 계산"""
+    return round((eq - bal) / margin * 100, 4) if margin and margin > 0 else None
+
+
 def _flush(aid: int, b: dict) -> None:
     try:
-        bal = b["bal"]
-        _write([(aid, b["ts"], bal, b["eq"], b["lo"], b["hi"], b["margin"],
-                 _pct(b["eq"], bal), _pct(b["lo"], bal), _pct(b["hi"], bal))])
+        bal, m = b["bal"], b["margin"]
+        _write([(aid, b["ts"], bal, b["eq"], b["lo"], b["hi"], m,
+                 _pct(b["eq"], bal), _pct(b["lo"], bal), _pct(b["hi"], bal),
+                 _mpct(b["eq"], bal, m), _mpct(b["lo"], bal, m), _mpct(b["hi"], bal, m))])
     except Exception as e:
         print(f"[equity_log] 저장 실패: {e}")
     prev = _last_bal.get(aid)
