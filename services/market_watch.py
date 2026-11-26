@@ -12,6 +12,13 @@
   EA 거래 시간이 없는 계좌는 미국 휴일(추수감사절 · 크리스마스 등)을 날짜로 계산해
   그날 아침(한국 09시) "조기 종료될 수 있음" 정도로만 알림 - 정확한 시각은 브로커마다 달라서 적지 않음
 
+── 2-1) CME 휴일 시간표 · 실제 멈춘 시각 기억 ─────────────────────
+  브로커 CFD(지수 · 금 · 유가)는 CME 선물 휴장 시간을 따라감 (2026 추수감사절 NAS100+: 03:00 멈춤 · 08:00 재개 = CME 그대로).
+  휴일 유형별 CME 시간(중부 시간, 여러 자료로 확인한 것만 - 아래 cme_schedule)으로 종료 · 재개를 미리 계산해
+  EA 거래 시간처럼 미리 알림 · 60분 · 15분 전 알림에 씀 ("CME 기준 예상").
+  휴일에 실제로 멈췄다 재개한 시각을 계좌 · 종목 · 휴일별로 data/market_learned.json 에 기억 → 다음 해 같은 휴일엔 그 시각 ("지난번 실제").
+  시간을 확인 못 한 휴일(성금요일 · 준틴스 · 독립기념일 등 해마다 다름)은 날짜 알림만.
+
 ── 3) 시세 멈춤 · 재개 (보유 종목) ───────────────────────────────
   20초마다 보유 종목의 마지막 시세 시각(워커 /ticks)을 봄.
     - 거래 시간인데 5분 넘게 시세가 없으면 "시세 멈춤" (예정된 종료 · 매일 쉬는 시간 · 주말이면 알리지 않음)
@@ -31,9 +38,11 @@ from db.session import DATA_DIR
 
 KST = ZoneInfo("Asia/Seoul")
 NY = ZoneInfo("America/New_York")
+CT = ZoneInfo("America/Chicago")
 POLL_SEC = 20
 STALE_SEC = 300                 # 거래 시간인데 이만큼 시세가 없으면 멈춤
 SESSIONS_FILE = os.path.join(DATA_DIR, "market_sessions.json")
+LEARNED_FILE = os.path.join(DATA_DIR, "market_learned.json")
 
 _sessions: dict[str, dict] = {}       # "계좌번호|종목" → {"w": [[시작, 끝], ...] UTC epoch, "at": 받은 시각}
 _state: dict[tuple, dict] = {}        # (계좌 id, 종목) → {"t": 마지막 시세 시각, "mid": 가격, "halt": {...} | None}
@@ -119,8 +128,8 @@ def closes(w: list[list[int]], now: float, ahead: float) -> list[dict]:
         if b < now or b > now + ahead:
             continue
         nxt = w[i + 1][0] if i + 1 < len(w) else None
-        if b >= w[-1][1] and nxt is None:        # 가진 데이터의 마지막 끝 - 다음 시작을 몰라 판단 안 함
-            continue
+        if b >= w[-1][1] and nxt is None and _ny(b).weekday() != 4:
+            continue                             # 가진 데이터의 마지막 끝 - 다음 시작을 몰라 판단 안 함 (금요일 끝은 주말 앞이라 봄)
         out.append({"end": b, "reopen": nxt, "kind": close_kind(b, nxt)})
     return out
 
@@ -208,6 +217,132 @@ def us_holidays(year: int) -> dict[date, str]:
     return hd
 
 
+# ── CME 휴일 시간표 ──
+_CLASS_WORDS = {
+    "index": ("NAS", "US100", "USTEC", "NDX", "NQ", "US500", "SPX", "SP500", "ES", "US30", "DJ", "WS30", "US2000", "RUSSELL"),
+    "metal": ("XAU", "XAG", "GOLD", "SILVER", "XPT", "XPD"),
+    "energy": ("USO", "WTI", "XTI", "CRUDE", "CL", "NGAS", "XNG", "NATGAS"),
+}
+
+
+def asset_class(symbol: str) -> str | None:
+    """종목 → 'index' · 'metal' · 'energy' (CME 시간을 따르는 것). 외환 · 코인 · 브렌트 등은 None"""
+    s = symbol.upper()
+    if any(w in s for w in ("BRENT", "UKO", "XBR", "BTC", "ETH")):
+        return None
+    for cls, words in _CLASS_WORDS.items():
+        if any(s.startswith(w) or w in s for w in words if len(w) >= 3) or any(s.startswith(w) for w in words if len(w) < 3):
+            return cls
+    return None
+
+
+def _ct(d: date, h: int, m: int = 0) -> int:
+    return int(datetime(d.year, d.month, d.day, h, m, tzinfo=CT).timestamp())
+
+
+def _reopen_after(d: date) -> int:
+    """d 날 저녁 CME 재개 (중부 17:00). 금요일이면 일요일 17:00"""
+    return _ct(d + timedelta(days=2), 17) if d.weekday() == 4 else _ct(d, 17)
+
+
+_MONDAY_HOLIDAYS = ("마틴 루터 킹 데이", "대통령의 날", "메모리얼 데이", "노동절")
+
+
+def cme_schedule(d: date, cls: str) -> dict | None:
+    """미국 날짜 d 가 휴일 · 조기 종료일이면 그 종목군의 {end, reopen, name} (UTC epoch). 시간을 모르면 None
+    여러 자료로 확인한 CME 휴일 시간 (중부 시간):
+      월요일 휴일 · 추수감사절 : 지수 12:00 멈춤 · 금 · 유가 13:30 멈춤 → 17:00 재개
+      추수감사절 다음 날      : 지수 12:15 · 금 · 유가 13:45 종료 → 일요일 17:00
+      크리스마스 이브          : 지수 12:15 · 금 · 유가 12:45 종료 → 크리스마스 저녁 17:00 (크리스마스가 금요일이면 일요일)
+      크리스마스 · 새해 (종일 휴장): 전날 16:00 평소 마감 뒤 저녁장 없음 → 휴일 저녁 17:00 (금요일이면 일요일)"""
+    name = us_holidays(d.year).get(d)
+    if not name or cls not in ("index", "metal", "energy"):
+        return None
+    idx = cls == "index"
+    if name in _MONDAY_HOLIDAYS or name == "추수감사절":
+        end, reopen = (_ct(d, 12) if idx else _ct(d, 13, 30)), _ct(d, 17)
+    elif name.startswith("추수감사절 다음 날"):
+        end, reopen = (_ct(d, 12, 15) if idx else _ct(d, 13, 45)), _reopen_after(d)
+    elif name.startswith("크리스마스 이브"):
+        xmas = _observed(date(d.year, 12, 25))
+        end, reopen = (_ct(d, 12, 15) if idx else _ct(d, 12, 45)), _reopen_after(xmas)
+    elif name in ("크리스마스", "새해"):
+        prev = d - timedelta(days=3 if d.weekday() == 0 else 1)
+        if name == "크리스마스" and us_holidays(prev.year).get(prev, "").startswith("크리스마스 이브"):
+            return None                              # 이브 조기 종료가 이미 이 휴장을 덮음
+        end, reopen = _ct(prev, 16), _reopen_after(d)
+    else:
+        return None                                  # 성금요일 · 준틴스 · 독립기념일 등 - 해마다 달라 시간 없이 날짜 알림만
+    return {"end": end, "reopen": reopen, "name": name}
+
+
+# ── 실제로 멈춘 시각 기억 (계좌 · 종목 · 휴일) ──
+_learned: dict[str, dict] | None = None
+
+
+def _learned_db() -> dict:
+    global _learned
+    if _learned is None:
+        try:
+            _learned = json.load(open(LEARNED_FILE, encoding="utf-8"))
+        except (OSError, ValueError):
+            _learned = {}
+    return _learned
+
+
+def learn(an: str, symbol: str, halt_ts: int, reopen_ts: int) -> str | None:
+    """휴일에 실제로 멈췄다 재개한 시각을 기억 (미국 동부 시각 · 걸린 분). 휴일이 아니면 기억 안 함. 기억한 휴일 이름"""
+    d = _ny(halt_ts).date()
+    name = us_holidays(d.year).get(d)
+    cls = asset_class(symbol)
+    if not name and cls:                              # 크리스마스 · 새해 전날 마감처럼 휴일 전날 멈춘 경우
+        for dd in (d + timedelta(days=1), d + timedelta(days=3)):
+            sch = cme_schedule(dd, cls)
+            if sch and abs(sch["end"] - halt_ts) <= 3 * 3600:
+                name = sch["name"]
+                break
+    if not name:
+        return None
+    h0, r0 = round(halt_ts / 60) * 60, round(reopen_ts / 60) * 60   # 마지막 시세 12:59:59 → 13:00
+    e = _ny(h0)
+    _learned_db()[f"{an}|{symbol}|{name}"] = {"halt": f"{e.hour:02d}:{e.minute:02d}",
+                                              "minutes": int((r0 - h0) // 60), "year": e.year}
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = LEARNED_FILE + ".tmp"
+        json.dump(_learned_db(), open(tmp, "w", encoding="utf-8"), ensure_ascii=False, indent=1)
+        os.replace(tmp, LEARNED_FILE)
+    except OSError as ex:
+        print(f"[market_watch] 기억 저장 실패: {ex}")
+    return name
+
+
+def predicted_closes(an: str, symbol: str, now: float, ahead: float) -> list[dict]:
+    """앞으로 ahead 초 안 휴일 종료 예상 [{end, reopen, kind: 'unusual', source: 'cme' | 'learned', name}]"""
+    cls = asset_class(symbol)
+    if not cls:
+        return []
+    out, seen = [], set()
+    today = _ny(now).date()
+    for k in range(0, 5):
+        d = today + timedelta(days=k)
+        sch = cme_schedule(d, cls)
+        name = us_holidays(d.year).get(d)
+        lr = _learned_db().get(f"{an}|{symbol}|{name}") if name else None
+        c = None
+        if lr:
+            base = _ny(sch["end"]).date() if sch else d
+            hh, mm = map(int, lr["halt"].split(":"))
+            end = int(datetime(base.year, base.month, base.day, hh, mm, tzinfo=NY).timestamp())
+            c = {"end": end, "reopen": end + lr["minutes"] * 60, "source": "learned", "name": name}
+        elif sch:
+            c = {**sch, "source": "cme"}
+        if c and now <= c["end"] <= now + ahead and c["end"] not in seen:
+            seen.add(c["end"])
+            out.append({**c, "kind": "unusual"})
+    return out
+
+
 # ── 알림 ──
 def _send(key: str, title: str, body: str) -> None:
     if key in _sent:
@@ -267,15 +402,23 @@ async def _check_account(aid: int, an: str, now: float) -> None:
         have_sessions = True
         for c in closes(s["w"], now, 18 * 3600):
             if c["kind"] == "unusual" and (sym in held or _recent_symbol(aid, sym)):
+                upcoming.append((sym, {**c, "source": "ea"}))
+    # 1-1) CME 휴일 시간표 · 지난번 실제 시각 (브로커가 MT5 거래 시간에 휴장을 표시하지 않을 때)
+    for sym in set(held) | (_recent.get(aid, (0, set()))[1]):
+        for c in predicted_closes(an, sym, now, 18 * 3600):
+            if not any(x == sym and abs(y["end"] - c["end"]) <= 1800 for x, y in upcoming):
                 upcoming.append((sym, c))
     fresh = [(sym, c) for sym, c in upcoming if f"plan|{an}|{sym}|{c['end']}" not in _sent]   # 종료마다 한 번만
     if fresh:
         for sym, c in fresh:
             _sent[f"plan|{an}|{sym}|{c['end']}"] = now
+        src = {"ea": "", "cme": " · CME 기준 예상", "learned": " · 지난번 실제 시각"}
         lines = [f"· {sym} {_hm(c['end'])} 종료 → {_hm(c['reopen']) if c['reopen'] else '?'} 재개"
-                 + (f"  (보유: {_pos_line(held[sym])})" if sym in held else "") for sym, c in fresh]
-        _send(f"planmsg|{an}|{now}", f"📅 휴장 · 조기 종료 예정 (계좌 {an})",
-              "\n".join(lines) + "\n브로커 MT5 거래 시간 기준 (한국 시간)")
+                 + (f" ({c['name']}{src.get(c.get('source'), '')})" if c.get("name") else src.get(c.get("source"), ""))
+                 + (f"\n   보유: {_pos_line(held[sym])}" if sym in held else "") for sym, c in fresh]
+        foot = "한국 시간 · " + ("브로커 MT5 거래 시간 기준" if all(c.get("source") == "ea" for _, c in fresh)
+                                 else "CME 예상은 브로커와 몇 분 다를 수 있어요")
+        _send(f"planmsg|{an}|{now}", f"📅 휴장 · 조기 종료 예정 (계좌 {an})", "\n".join(lines) + "\n" + foot)
     for sym, c in upcoming:
         if sym not in held:
             continue
@@ -288,19 +431,22 @@ async def _check_account(aid: int, an: str, now: float) -> None:
                       f"재개 때 가격이 튈 수 있어요 (손절도 재개 가격으로 체결될 수 있음)")
                 break
 
-    # 2) 미국 휴일 - EA 거래 시간이 없는 계좌만 (한국 09시 이후, 미국 날짜로 오늘 · 내일)
-    if not have_sessions:
-        kst = datetime.fromtimestamp(now, KST)
-        if kst.hour >= 9:
-            ny_today = datetime.fromtimestamp(now, NY).date()
-            for d in (ny_today, ny_today + timedelta(days=1)):
-                name = us_holidays(d.year).get(d)
-                if name:
-                    _send(f"hol|{an}|{d}", f"📅 미국 휴일: {name} ({d:%m/%d}, 미국 날짜)",
-                          f"계좌 {an} · 지수 · 금 · 유가가 평소보다 일찍 멈추거나 쉴 수 있어요. 정확한 시간은 브로커 공지를 확인하세요."
-                          + (f"\n보유: " + ", ".join(f"{s} {_pos_line(ps)}" for s, ps in held.items()) if held else "")
-                          + "\n(MT5에 SessionReporter EA를 붙이면 브로커 거래 시간으로 정확히 알려 드려요)")
-                    break
+    # 2) 미국 휴일 (한국 09시 이후, 미국 날짜로 오늘 · 내일)
+    #    브로커가 MT5 거래 시간에 휴장을 표시하지 않는 경우가 많음 (2026-11 추수감사절: 한텍 NAS100+ 가 03:00 에 멈췄는데
+    #    MT5 거래 시간은 평소대로) → EA 가 있어도 보냄. 그 날짜에 EA 거래 시간으로 찾은 조기 종료가 있으면 그쪽 알림으로 충분해서 생략
+    plan_days = {_ny(c["end"]).date() for _, c in upcoming}
+    kst = datetime.fromtimestamp(now, KST)
+    if kst.hour >= 9:
+        ny_today = datetime.fromtimestamp(now, NY).date()
+        for d in (ny_today, ny_today + timedelta(days=1)):
+            name = us_holidays(d.year).get(d)
+            if name and d not in plan_days:
+                _send(f"hol|{an}|{d}", f"📅 미국 휴일: {name} ({d:%m/%d}, 미국 날짜)",
+                      f"계좌 {an} · 지수 · 금 · 유가가 평소보다 일찍 멈추거나 쉴 수 있어요. 정확한 시간은 브로커 공지를 확인하세요."
+                      + (f"\n보유: " + ", ".join(f"{s} {_pos_line(ps)}" for s, ps in held.items()) if held else "")
+                      + ("\n(브로커 MT5 거래 시간에는 이 날 휴장 표시가 없어요 - 멈추면 시세 멈춤 알림이 가요)" if have_sessions
+                         else "\n(MT5에 SessionReporter EA를 붙이면 브로커 거래 시간으로 정확히 알려 드려요)"))
+                break
 
     # 3) 시세 멈춤 · 재개 (보유 종목)
     if not held:
@@ -320,6 +466,10 @@ async def _check_account(aid: int, an: str, now: float) -> None:
         w = sessions_for(an, sym)
         if t > st["t"] and now - t < STALE_SEC:         # 새 시세 (방금 들어온 것)
             h = st["halt"]
+            if h and h["kind"] in ("unusual", "unexpected") and now - h["since"] > 10 * 60:
+                learned = learn(an, sym, h["since"], t)   # 휴일이면 다음 해를 위해 실제 시각 기억
+                if learned:
+                    print(f"[market_watch] {an} {sym} {learned} 실제 멈춤 {_hm(h['since'])} ~ {_hm(t)} 기억")
             if h and (h["kind"] != "daily") and now - h["since"] > 10 * 60:
                 gap = mid - h["price"]
                 pct = gap / h["price"] * 100 if h["price"] else 0
@@ -333,8 +483,11 @@ async def _check_account(aid: int, an: str, now: float) -> None:
             st.update({"t": t, "mid": mid})
         if now - t < STALE_SEC or st["halt"]:
             continue
-        # 시세가 STALE_SEC 넘게 없음 → 멈춤. 예정된 것인지 판단
+        # 시세가 STALE_SEC 넘게 없음 → 멈춤. 예정된 것인지 판단 (CME 휴일 시간표 · 지난번 실제 시각도)
         kind = halt_kind(w, t, now)
+        if kind == "unexpected" and any(abs(c["end"] - t) <= STALE_SEC + 600
+                                        for c in predicted_closes(an, sym, t - 3600, 2 * 3600)):
+            kind = "unusual"
         st["halt"] = {"since": t, "price": st["mid"] or mid, "kind": kind}
         if kind == "unexpected":
             _send(f"halt|{an}|{sym}|{t}", f"⏸ {sym} 시세 멈춤 ({int((now - t) // 60)}분째, 계좌 {an})",
