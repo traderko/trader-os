@@ -1725,6 +1725,7 @@ const TF = { 1: '1m', 2: '2m', 5: '5m', 10: '10m', 60: '1h', 120: '2h', 240: '4h
 const TAG_TYPES = [['entry', '진입'], ['exit', '청산'], ['loss', '손실']];
 let trades = [];
 var tBalRep = null;         // 그 달 리포트 (시작 잔고 · 입출금) - 거래마다 잔고 대비 % (renderTrades)
+var tBalAlt = {};           // 리포트로 못 구할 때: 서버가 구한 거래별 청산 직전 잔고 (/trades/balance-before - MT5 · 1분 평가금 기록)
 let tSel = null;   // 거래 선택 모드 (아래 '거래 골라서 랏 배수 시뮬레이션')
 const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
@@ -1792,7 +1793,13 @@ async function loadTrades() {
   // 그 달 시작 잔고 · 입출금 (거래마다 잔고 대비 % 계산용) - 실패해도 거래내역은 그대로
   const rp = `/accounts/${encodeURIComponent(acc.account_number)}/monthly-report?year=${tYm.y}&month=${tYm.m}`;
   tBalRep = (cacheGet(rp) || {}).d || null;
-  apiRaw(rp).then((f) => { cacheSet(rp, f.text, f.data); if (!cur()) return; tBalRep = f.data; if (trades.length) renderTrades(); }).catch(() => {});
+  const alt = () => api(`/trades/balance-before?year=${tYm.y}&month=${tYm.m}&account_number=${encodeURIComponent(acc.account_number)}`)
+    .then((r) => { if (!cur() || !r || !r.balances) return; Object.assign(tBalAlt, r.balances); if (trades.length) renderTrades(); }).catch(() => {});
+  apiRaw(rp).then((f) => {
+    cacheSet(rp, f.text, f.data); if (!cur()) return; tBalRep = f.data;
+    if (!(f.data && f.data.starting_balance > 0)) alt();      // MT5 를 안 띄운 계좌 등 - 시작 잔고가 없으면 다른 길로
+    if (trades.length) renderTrades();
+  }).catch(() => { if (cur()) alt(); });
   try {
     await swr([path], ([list]) => { if (!cur()) return; trades = list; renderTrades(); }, cur);
   } catch (e) {
@@ -1857,7 +1864,11 @@ let grpCount = new Map();   // 묶음 번호 → 이 달 거래 중 건수 (📦
 // 거래마다 청산 직전 잔고 대비 % - 그 달 시작 잔고에서 입출금 · 청산 손익을 시간 순으로 더해 감 (스왑은 빠져 약간 다를 수 있음)
 function tradePcts(list) {
   const r = tBalRep;
-  if (!r || !(r.starting_balance > 0)) return null;
+  if (!r || !(r.starting_balance > 0)) {               // 리포트가 없으면 서버가 구한 청산 직전 잔고로
+    const out = new Map();
+    for (const t of list) { const b = tBalAlt[t.id]; if (t.close_time && b > 0) out.set(t.id, { pct: net(t) / b, before: b }); }
+    return out.size ? out : null;
+  }
   const ev = [
     ...(r.deposits || []).map((f) => ({ t: dt(f.time), a: Math.abs(f.amount) })),
     ...(r.withdrawals || []).map((f) => ({ t: dt(f.time), a: -Math.abs(f.amount) })),

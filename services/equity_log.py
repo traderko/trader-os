@@ -206,3 +206,11 @@ def drawdown(aid: int, start: datetime, end: datetime) -> dict | None:
     out = {"since": rows[0][0], "minutes": len(rows), "float_min": fl_min, "float_min_at": fl_at, "float_min_pct": fl_pct}
     out.update(worst or {"amount": 0.0, "pct": 0.0, "peak": None, "trough": None, "peak_at": None, "trough_at": None})
     return out
+
+
+def balance_before(aid: int, ts: int, within_sec: int = 600) -> float | None:
+    """ts(초) 직전에 끝난 분의 잔고 - 거래 손익 % 의 기준 (MT5 가 안 붙어 있을 때). within_sec 안에 기록이 없으면 None"""
+    with _lock:
+        r = _db().execute("SELECT balance FROM equity WHERE account_id=? AND ts<=? AND ts>=? ORDER BY ts DESC LIMIT 1",
+                          (aid, ts - 60, ts - 60 - within_sec)).fetchone()
+    return r[0] if r and r[0] and r[0] > 0 else None

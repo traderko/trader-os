@@ -849,6 +849,70 @@ async def collect(
         "updated": updated,
     }
  
+@router.get("/balance-before")
+async def get_balance_before(
+    year: int,
+    month: int,
+    account_number: int,
+    db: AsyncSession = Depends(get_db)
+):
+    """이 달(진입 기준) 청산된 거래마다 청산 직전 잔고 - 웹 거래내역의 손익 % (잔고 대비)
+    {"balances": {거래 id: 잔고}, "source": "mt5" | "equity" | null}
+      mt5    : 달 시작 잔고(MT5) + 그 뒤 입출금 + 먼저 청산된 거래 손익(수수료 포함)을 청산 순서대로 더함
+      equity : MT5 가 안 붙어 있으면 1분 평가금 기록(data/equity.db)에서 청산 직전 분의 잔고 (기록 시작 뒤 거래만)
+    스왑은 거래 기록에 없어서 빠짐 - 거의 차이 없음"""
+    import asyncio
+    from api.account_router import _parse_time, _drop_failed_withdrawals
+    account = await get_account_or_default(db, account_number)
+    if account is None:
+        raise HTTPException(404, f"account not found: {account_number}")
+    kst = ZoneInfo(Mt5Client.KOREA_TIMEZONE_STR)
+    start = datetime(year, month, 1, tzinfo=kst)
+    end = datetime(year + 1, 1, 1, tzinfo=kst) if month == 12 else datetime(year, month + 1, 1, tzinfo=kst)
+    rows = (await db.execute(
+        select(Trade.id, Trade.open_time, Trade.close_time, Trade.profit, Trade.commission)
+        .where(Trade.account_id == account.id, Trade.close_time != None, Trade.close_time >= start)
+        .order_by(Trade.close_time, Trade.ticket)
+    )).all()
+    want = {r.id for r in rows if r.open_time is not None and start <= r.open_time < end}
+    if not want:
+        return {"balances": {}, "source": None}
+    last = max(r.close_time for r in rows if r.id in want)
+
+    out: dict[int, float] = {}
+    try:
+        b0 = await asyncio.wait_for(worker_get(account.id, "/balance-at", {"before_time": start.isoformat()}), 8)
+        fl = await asyncio.wait_for(worker_get(account.id, "/balances", {
+            "start_time": start.isoformat(), "end_time": (last + timedelta(minutes=1)).isoformat()}), 8)
+        deps, wds, _ = _drop_failed_withdrawals(fl.get("deposits") or [], fl.get("withdrawals") or [])
+        ev = sorted([(t, abs(f.get("amount") or 0)) for f in deps if (t := _parse_time(f.get("time")))] +
+                    [(t, -abs(f.get("amount") or 0)) for f in wds if (t := _parse_time(f.get("time")))])
+        bal, fi = float(b0["balance"]), 0
+        for r in rows:
+            if r.close_time > last:
+                break
+            while fi < len(ev) and ev[fi][0] <= r.close_time:
+                bal += ev[fi][1]
+                fi += 1
+            if r.id in want and bal > 0:
+                out[r.id] = round(bal, 2)
+            bal += (r.profit or 0) + (r.commission or 0)
+        return {"balances": out, "source": "mt5"}
+    except Exception as e:
+        if not isinstance(e, HTTPException) or e.status_code != 503:
+            print(f"[trade] 청산 직전 잔고 (MT5) 실패: {getattr(e, 'detail', e)}")
+    try:
+        from services import equity_log
+        for r in rows:
+            if r.id in want:
+                b = equity_log.balance_before(account.id, int(r.close_time.timestamp()))
+                if b:
+                    out[r.id] = round(b, 2)
+    except Exception as e:
+        print(f"[trade] 청산 직전 잔고 (평가금 기록) 실패: {e}")
+    return {"balances": out, "source": "equity" if out else None}
+
+
 @router.get("/{trade_id}")
 async def get_trades(
     trade_id: int,
