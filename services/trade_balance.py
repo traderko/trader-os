@@ -15,7 +15,35 @@ from datetime import timedelta
 
 FIRST_DELAY_SEC = 60
 EVERY_SEC = 600
+MT5_TIMEOUT_SEC = 180       # 거래가 많은 계좌는 MT5 가 전체 기록을 읽는 데 오래 걸림 - 넉넉히
+RETRY_SEC = 300             # 실패하면 웹에서 다시 부르지 않고 이만큼 쉼 (10분 루프는 그대로)
 _locks: dict[int, asyncio.Lock] = {}
+_tasks: dict[int, asyncio.Task] = {}
+_fail_until: dict[int, float] = {}
+status: dict[int, dict] = {}   # 계좌 → {"ok": 마지막 성공 시각, "filled": 채운 개수, "error": 마지막 오류, "sec": 걸린 시간}
+
+
+def busy(account_id: int) -> bool:
+    t = _tasks.get(account_id)
+    return t is not None and not t.done()
+
+
+def kick(account_id: int) -> bool:
+    """뒤에서 채우기 시작 (기다리지 않음). 이미 채우는 중이면 True, 막 실패해서 쉬는 중이면 False"""
+    import time
+    if busy(account_id):
+        return True
+    if time.time() < _fail_until.get(account_id, 0):
+        return False
+    _tasks[account_id] = asyncio.create_task(_safe_fill(account_id))
+    return True
+
+
+async def _safe_fill(account_id: int) -> None:
+    try:
+        await fill(account_id)
+    except Exception:
+        pass
 
 
 async def fill(account_id: int) -> int:
@@ -24,8 +52,21 @@ async def fill(account_id: int) -> int:
     if lock.locked():                     # 이미 채우는 중이면 그게 끝나길 기다리기만
         async with lock:
             return 0
+    import time
     async with lock:
-        return await _fill(account_id)
+        t0 = time.time()
+        try:
+            n = await _fill(account_id)
+        except Exception as e:
+            err = getattr(e, "detail", None) or str(e) or type(e).__name__    # 시간 초과는 메시지가 비어 있음
+            status[account_id] = {**status.get(account_id, {}), "error": err, "sec": round(time.time() - t0, 1)}
+            _fail_until[account_id] = time.time() + RETRY_SEC
+            if getattr(e, "status_code", None) != 503:      # 503 = MT5 를 안 띄운 계좌
+                print(f"[trade_balance] account={account_id} 실패 ({time.time() - t0:.0f}초): {err}")
+            raise
+        status[account_id] = {"ok": time.time(), "filled": n, "error": None, "sec": round(time.time() - t0, 1)}
+        _fail_until.pop(account_id, None)
+        return n
 
 
 async def _fill(account_id: int) -> int:
@@ -48,9 +89,10 @@ async def _fill(account_id: int) -> int:
             .order_by(Trade.close_time, Trade.ticket))).all()
         last = rows[-1].close_time
         start = first - timedelta(seconds=1)
-        b0 = await asyncio.wait_for(worker_get(account_id, "/balance-at", {"before_time": start.isoformat()}), 20)
+        b0 = await asyncio.wait_for(worker_get(account_id, "/balance-at", {"before_time": start.isoformat()},
+                                               timeout=MT5_TIMEOUT_SEC), MT5_TIMEOUT_SEC + 5)
         fl = await asyncio.wait_for(worker_get(account_id, "/balances", {
-            "start_time": start.isoformat(), "end_time": (last + timedelta(minutes=1)).isoformat()}), 20)
+            "start_time": start.isoformat(), "end_time": (last + timedelta(minutes=1)).isoformat()}, timeout=MT5_TIMEOUT_SEC), MT5_TIMEOUT_SEC + 5)
         deps, wds, _ = _drop_failed_withdrawals(fl.get("deposits") or [], fl.get("withdrawals") or [])
         ev = sorted([(t, abs(f.get("amount") or 0)) for f in deps if (t := _parse_time(f.get("time")))] +
                     [(t, -abs(f.get("amount") or 0)) for f in wds if (t := _parse_time(f.get("time")))])
@@ -86,11 +128,9 @@ async def loop() -> None:
         try:
             for aid in await _account_ids():
                 try:
-                    await fill(aid)
-                except Exception as e:
-                    detail = getattr(e, "detail", e)
-                    if getattr(e, "status_code", None) != 503:      # 503 = MT5 를 안 띄운 계좌 - 조용히 건너뜀
-                        print(f"[trade_balance] account={aid} 실패: {detail}")
+                    await fill(aid)                 # 실패는 fill 이 로그에 남김
+                except Exception:
+                    pass
         except Exception as e:
             print(f"[trade_balance] 확인 실패: {e}")
         await asyncio.sleep(EVERY_SEC)

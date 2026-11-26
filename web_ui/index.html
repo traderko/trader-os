@@ -1794,9 +1794,13 @@ async function loadTrades() {
   //   없는 거래가 있을 때만 서버에 한 번 물어봄 → 서버가 MT5 로 구해서 저장 (다음부터는 바로)
   tBalRep = null;
   let altAsked = false;
-  const alt = () => { if (altAsked) return; altAsked = true;
-    api(`/trades/balance-before?year=${tYm.y}&month=${tYm.m}&account_number=${encodeURIComponent(acc.account_number)}`)
-      .then((r) => { if (!cur() || !r || !r.balances) return; Object.assign(tBalAlt, r.balances); if (trades.length) renderTrades(); }).catch(() => {}); };
+  const altGet = (n) => api(`/trades/balance-before?year=${tYm.y}&month=${tYm.m}&account_number=${encodeURIComponent(acc.account_number)}`)
+    .then((r) => {
+      if (!cur() || !r || !r.balances) return;
+      Object.assign(tBalAlt, r.balances); if (trades.length) renderTrades();
+      if (r.pending && n < 12) setTimeout(() => { if (cur()) altGet(n + 1); }, 10000);   // 서버가 뒤에서 채우는 중 - 10초마다 (최대 2분)
+    }).catch(() => {});
+  const alt = () => { if (altAsked) return; altAsked = true; altGet(0); };
   try {
     await swr([path], ([list]) => { if (!cur()) return; trades = list; renderTrades(); }, cur);
     if (cur() && trades.some((t) => t.close_time && !(t.balance_before > 0) && !(tBalAlt[t.id] > 0))) alt();

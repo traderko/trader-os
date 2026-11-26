@@ -18,8 +18,9 @@ def worker_base_url(account_id: int) -> str:
     return f"http://127.0.0.1:{worker_port_for(account_id)}"
 
 
-async def worker_get(account_id: int, path: str, params: dict | None = None):
-    async with httpx.AsyncClient(timeout=10.0) as client:
+async def worker_get(account_id: int, path: str, params: dict | None = None, timeout: float = 10.0):
+    """timeout: 기본 10초. MT5 전체 기록을 읽는 요청(청산 직전 잔고 채우기 등)은 길게 줌"""
+    async with httpx.AsyncClient(timeout=timeout) as client:
         try:
             res = await client.get(f"{worker_base_url(account_id)}{path}", params=params)
         except httpx.ConnectError:
@@ -53,4 +54,4 @@ async def worker_post(account_id: int, path: str, json: dict, timeout: float = 1
             raise HTTPException(503, f"워커(account_id={account_id})에 연결할 수 없습니다.")
     if res.status_code != 200:
         raise HTTPException(res.status_code, res.text)
-    return res.json()
+    return res.json()
