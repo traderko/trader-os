@@ -3776,7 +3776,7 @@ function drawSeq(el, vals, labelAt) {
 
 // ══════════════ 거래 분석 (MAE·MFE · 증거금 사용률) ══════════════
 // 서버가 1분봉으로 거래마다 최대 역행(MAE)·최대 순행(MFE)을 재고, 포지션을 들고 있던 구간마다 증거금 사용률 · 평가금 낙폭을 다시 계산
-let aDays = Number(lsGet('traderos:adays', '30')), aTf = lsGet('traderos:atf', '5m'), aData = null, aShowN = 50;
+let aDays = Number(lsGet('traderos:adays', '30')), aTf = lsGet('traderos:atf', '5m'), aData = null, aShowN = 50, aPoll = null;
 const afmt = (v) => v == null ? '-' : fmt(v, 2);
 function aPath() {
   const d0 = new Date(); d0.setHours(0, 0, 0, 0);
@@ -3799,12 +3799,17 @@ async function loadAna() {
   else $('aBody').innerHTML = '<div class="empty">분석 중…<br><small class="muted">처음엔 1분봉을 MT5에서 받느라 1~2분 걸릴 수 있어요. 받은 봉은 서버에 저장돼서 다음부터 빨라요.</small></div>';
   try {
     const r = await apiRaw(path);
-    if (aPath() !== want) return;
+    if (aPath() !== want || tab !== 'ana') return;
+    if (r.data && r.data.pending) {          // 서버가 뒤에서 계산 중 - 3초 뒤 다시 (결과가 나오면 그때 저장)
+      if (!hit) $('aBody').innerHTML = `<div class="empty">분석 중… ${esc(r.data.progress || '')}<br><small class="muted">처음엔 1분봉을 MT5에서 받느라 몇 분 걸릴 수 있어요. 다른 탭에 갔다 와도 서버는 계속 계산해요.</small></div>`;
+      clearTimeout(aPoll); aPoll = setTimeout(() => { if (aPath() === want && tab === 'ana') loadAna(); }, 3000);
+      return;
+    }
     cacheSet(path, r.text, r.data);
     if (!hit || hit.text !== r.text) { aData = r.data; renderAna(); }
   } catch (e) {
     if (aPath() !== want) return;
-    if (!hit) $('aBody').innerHTML = `<div class="empty">분석 실패: ${esc(e.message)}</div>`;
+    if (!hit) $('aBody').innerHTML = `<div class="empty">분석 실패: ${esc(String(e.message).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').slice(0, 200))}</div>`;
   }
 }
 function aDist(wins, loss, key) {

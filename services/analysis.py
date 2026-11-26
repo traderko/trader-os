@@ -64,7 +64,7 @@ def _day_key(d: datetime) -> str:
     return d.astimezone(timezone.utc).strftime("%Y-%m-%d")
 
 
-async def _ensure_days(account_id: int, symbol: str, days: list[str]) -> dict[str, str]:
+async def _ensure_days(account_id: int, symbol: str, days: list[str], progress=None) -> dict[str, str]:
     """이 날짜들의 봉을 저장소에 채움. {날짜: 'M1' | 'M5' | ''} (''= 봉 없음)"""
     from services.worker_client import worker_get
     today = _day_key(datetime.now(timezone.utc))
@@ -76,7 +76,9 @@ async def _ensure_days(account_id: int, symbol: str, days: list[str]) -> dict[st
             out[d] = have[d]
         else:
             todo.append(d)
-    for d in todo[:MAX_DAYS]:
+    for i, d in enumerate(todo[:MAX_DAYS]):
+        if progress:
+            progress(f"{symbol} 1분봉 받는 중 {i + 1}/{min(len(todo), MAX_DAYS)}일")
         start = datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=timezone.utc)
         got, tf_used = [], ""
         for tf in ("M1", "M5"):
@@ -275,8 +277,9 @@ def usage_table(eps: list[dict]) -> list[dict]:
     return rows
 
 
-async def analyze(account_id: int, trades: list, tf: str = "5m") -> dict:
-    """trades: 청산된 Trade 행들. 결과는 웹 '분석' 탭 그대로"""
+async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) -> dict:
+    """trades: 청산된 Trade 행들. 결과는 웹 '분석' 탭 그대로. progress(문자열): 진행 상황 (웹에 보여 줌)"""
+    progress = progress or (lambda _m: None)
     tf = tf if tf in TFS else "5m"
     rows = [t for t in trades if t.close_time is not None and t.open_time is not None and t.price_open]
     notes: list[str] = []
@@ -291,7 +294,7 @@ async def analyze(account_id: int, trades: list, tf: str = "5m") -> dict:
     mt5_ok = True
     for sym, days in days_of.items():
         try:
-            got = await _ensure_days(account_id, sym, sorted(days))
+            got = await _ensure_days(account_id, sym, sorted(days), progress)
             for d, tfu in got.items():
                 prec[(sym, d)] = tfu
             if len(days) > MAX_DAYS:
@@ -309,6 +312,7 @@ async def analyze(account_id: int, trades: list, tf: str = "5m") -> dict:
         if info_of[sym] is None:
             notes.append(f"{sym}: 1랏 증거금 · 손익을 MT5 에서 받지 못해 증거금 사용률은 빼고 계산했어요.")
     # 3) 거래마다 MAE · MFE
+    progress("거래마다 역행 · 순행 재는 중 (KTR 받는 중)")
     out_trades, bars_of = [], {}
     for t in rows:
         o, c = int(t.open_time.timestamp()), int(t.close_time.timestamp())
@@ -355,6 +359,7 @@ async def analyze(account_id: int, trades: list, tf: str = "5m") -> dict:
     }
 
     # 4) 증거금 사용률 - 구간마다
+    progress("증거금 사용률 계산 중")
     for sym in days_of:
         if info_of.get(sym) is None:
             continue
