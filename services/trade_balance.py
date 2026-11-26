@@ -28,22 +28,32 @@ def busy(account_id: int) -> bool:
     return t is not None and not t.done()
 
 
-def kick(account_id: int) -> bool:
-    """뒤에서 채우기 시작 (기다리지 않음). 이미 채우는 중이면 True, 막 실패해서 쉬는 중이면 False"""
+def kick(account_id: int, force: bool = False) -> bool:
+    """뒤에서 채우기 시작 (기다리지 않음). 이미 채우는 중이면 True, 막 실패해서 쉬는 중이면 False
+    force: 쉬는 중이어도 시작 (MT5 모으기 직후 - 방금 MT5 가 응답했으니). 채우는 중이면 끝난 뒤 한 번 더"""
     import time
     if busy(account_id):
+        if force:
+            _again.add(account_id)
         return True
-    if time.time() < _fail_until.get(account_id, 0):
+    if not force and time.time() < _fail_until.get(account_id, 0):
         return False
     _tasks[account_id] = asyncio.create_task(_safe_fill(account_id))
     return True
 
 
+_again: set[int] = set()
+
+
 async def _safe_fill(account_id: int) -> None:
-    try:
-        await fill(account_id)
-    except Exception:
-        pass
+    while True:
+        _again.discard(account_id)
+        try:
+            await fill(account_id)
+        except Exception:
+            pass
+        if account_id not in _again:
+            break
 
 
 async def fill(account_id: int) -> int:

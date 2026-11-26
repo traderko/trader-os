@@ -784,6 +784,28 @@ async def get_trades(
 
     return [_trade_json(t) for t in result.scalars().all()]
 
+def _collect_changed_since(before: dict, trades: list[dict]):
+    """모으기로 새로 들어왔거나 청산 시각 · 손익 · 수수료가 바뀐 청산 거래 중 가장 이른 청산 시각 (없으면 None)"""
+    def same(a, b):
+        return (a is None and b is None) or (a is not None and b is not None and abs(a - b) < 0.005)
+    out = None
+    for t in trades:
+        ct = t.get("close_time")
+        if ct is None:
+            continue
+        old = before.get(t["ticket"])
+        if old is not None and old[0] is not None and same(old[1], t.get("profit")) and same(old[2], t.get("commission")):
+            continue
+        times = [x for x in (ct, old[0] if old else None) if x is not None]
+        try:
+            m = min(times)
+        except TypeError:                         # 시간대 있는 것 · 없는 것이 섞이면 새 값만
+            m = ct
+        if out is None or m < out:
+            out = m
+    return out
+
+
 @router.get("/collect")
 async def collect(
     account_number: int,
@@ -828,6 +850,9 @@ async def collect(
 
     inserted = 0
     updated = 0
+    # 모으기 전 상태 (티켓 → 청산 시각 · 손익 · 수수료) - 뭐가 새로 들어오거나 바뀌었는지 보려고
+    _before = {r.ticket: (r.close_time, r.profit, r.commission) for r in (await db.execute(
+        select(Trade.ticket, Trade.close_time, Trade.profit, Trade.commission).where(Trade.account_id == account.id))).all()}
 
     for i in range(0, len(trades), BATCH_SIZE):
         batch = trades[i:i + BATCH_SIZE]
@@ -859,6 +884,20 @@ async def collect(
         await db.execute(stmt)
 
     await db.commit()
+
+    # 청산 직전 잔고 다시 맞추기 (services/trade_balance.py) - 빠져 있던 거래가 들어오거나 손익이 바뀌면
+    # 그 뒤 거래들의 잔고는 그 손익 없이 계산된 값이라 틀림 → 가장 이른 그 거래부터 비우고 뒤에서 다시 채움
+    try:
+        changed = _collect_changed_since(_before, trades)
+        if changed is not None:
+            from sqlalchemy import update
+            await db.execute(update(Trade).where(Trade.account_id == account.id, Trade.close_time != None,
+                                                 Trade.close_time >= changed).values(balance_before=None))
+            await db.commit()
+        from services import trade_balance
+        trade_balance.kick(account.id, force=True)
+    except Exception as e:
+        print(f"[trade] 모으기 뒤 청산 직전 잔고 다시 맞추기 실패: {e}")
 
     return {
         "trades": trades,
