@@ -1373,6 +1373,9 @@ class TelegramLive:
                             await ktr_brief.cmd(self, client, token, cid, _a)
                         else:
                             await telegram_grid.cmd_ktr(self, client, token, cid, _a)
+                    elif mine and (text.startswith("/봉") or text.startswith("/bars")):
+                        from services import bar_export          # 과거 봉 zip 으로 받기 (연구용)
+                        await bar_export.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                     elif mine and (text.startswith("/근거") or text.startswith("/reasons")):
                         from services import telegram_tags
                         await telegram_tags.cmd_reasons(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
@@ -1683,6 +1686,7 @@ class TelegramLive:
                             {"command": "grid", "description": "구간매매 - 버튼으로 하나씩 설정 (또는 한 줄로)"},
                             {"command": "grids", "description": "진행 중인 구간매매·청산"},
                             {"command": "ktr", "description": "KTR 표 (장 × 시간봉) · /ktr 최근 (7거래일) · /ktr 브리핑"},
+                            {"command": "bars", "description": "과거 봉 파일로 받기 (/bars 90 · /bars 90 gold)"},
                             {"command": "reasons", "description": "근거 없는 거래 모아 보기 (/근거 3일)"},
                             {"command": "events", "description": "이번 주 지표 발표·지표일 잠금 (/지표)"},
                             {"command": "phrases", "description": "잠금 풀기 확인 문구 보기·추가·수정 (/문구)"},
