@@ -19,6 +19,11 @@
   휴일에 실제로 멈췄다 재개한 시각을 계좌 · 종목 · 휴일별로 data/market_learned.json 에 기억 → 다음 해 같은 휴일엔 그 시각 ("지난번 실제").
   시간을 확인 못 한 휴일(성금요일 · 준틴스 · 독립기념일 등 해마다 다름)은 날짜 알림만.
 
+── 0) MT5 연결 끊김 · 다시 연결 ────────────────────────────────────
+  20초마다 계좌 워커에 포지션을 물을 때, 한 번이라도 연결됐던 계좌가 DOWN_SEC 넘게 응답이 없으면
+  "⚠️ MT5 응답 없음" (명령어 · 알림이 안 될 수 있음), 다시 응답하면 "✅ 다시 연결됨 (n분 끊김)".
+  서버를 처음 켰을 때 아직 안 붙은 계좌 · 원래 안 쓰는 계좌는 알리지 않음 (한 번 연결된 뒤부터)
+
 ── 3) 시세 멈춤 · 재개 (보유 종목) ───────────────────────────────
   20초마다 보유 종목의 마지막 시세 시각(워커 /ticks)을 봄.
     - 거래 시간인데 5분 넘게 시세가 없으면 "시세 멈춤" (예정된 종료 · 매일 쉬는 시간 · 주말이면 알리지 않음)
@@ -40,6 +45,7 @@ KST = ZoneInfo("Asia/Seoul")
 NY = ZoneInfo("America/New_York")
 CT = ZoneInfo("America/Chicago")
 POLL_SEC = 20
+DOWN_SEC = 120                  # MT5 가 이만큼 응답이 없으면 끊김 알림
 STALE_SEC = 300                 # 거래 시간인데 이만큼 시세가 없으면 멈춤
 SESSIONS_FILE = os.path.join(DATA_DIR, "market_sessions.json")
 LEARNED_FILE = os.path.join(DATA_DIR, "market_learned.json")
@@ -47,6 +53,7 @@ LEARNED_FILE = os.path.join(DATA_DIR, "market_learned.json")
 _sessions: dict[str, dict] = {}       # "계좌번호|종목" → {"w": [[시작, 끝], ...] UTC epoch, "at": 받은 시각}
 _state: dict[tuple, dict] = {}        # (계좌 id, 종목) → {"t": 마지막 시세 시각, "mid": 가격, "halt": {...} | None}
 _sent: dict[str, float] = {}          # 보낸 알림 키 → 시각 (중복 방지)
+_health: dict[int, dict] = {}         # 계좌 id → {"ok": 마지막 응답 시각, "down": 처음 실패 시각, "alerted": bool, "err": 마지막 오류}
 _loaded = False
 
 
@@ -383,10 +390,24 @@ async def _accounts() -> list[tuple[int, str]]:
 
 async def _check_account(aid: int, an: str, now: float) -> None:
     from services.worker_client import worker_get
+    hl = _health.setdefault(aid, {"ok": None, "down": None, "alerted": False, "err": ""})
     try:
         positions = await asyncio.wait_for(worker_get(aid, "/positions"), 8) or []
-    except Exception:
+    except Exception as e:
+        if hl["ok"] is not None:                     # 한 번이라도 연결됐던 계좌만
+            hl["down"] = hl["down"] or now
+            hl["err"] = str(getattr(e, "detail", "") or e or type(e).__name__)[:120]
+            if not hl["alerted"] and now - hl["down"] >= DOWN_SEC:
+                hl["alerted"] = True
+                _send(f"down|{an}|{int(hl['down'])}", f"⚠️ 계좌 {an} MT5 응답 없음 ({int((now - hl['down']) // 60)}분째)",
+                      f"MT5가 꺼졌거나 다시 켜지는 중이에요. 그동안 텔레그램 명령어 · 체결 · 잠금 알림이 안 될 수 있어요.\n"
+                      f"({hl['err']})\n다시 연결되면 알려 드릴게요.")
         return                                       # MT5 가 안 붙은 계좌
+    if hl["alerted"]:
+        mins = int((now - hl["down"]) // 60) if hl["down"] else 0
+        _send(f"up|{an}|{int(hl['down'] or now)}", f"✅ 계좌 {an} MT5 다시 연결됨",
+              f"약 {mins}분 동안 응답이 없었어요. 그동안 보낸 명령어는 다시 보내 주세요.")
+    hl.update({"ok": now, "down": None, "alerted": False})
     held: dict[str, list[dict]] = {}
     for p in positions:
         held.setdefault(p["symbol"], []).append(p)

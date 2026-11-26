@@ -56,6 +56,19 @@ recent_chats: list[dict] = []      # 관리 화면 [chat id 찾기] 용
 latest_message: dict[str, int] = {}
 
 
+def command_error_text(e: Exception) -> str:
+    """명령 처리 실패 답장 - MT5 워커가 꺼졌거나 다시 켜지는 중이면 그렇게 알려 줌"""
+    import html as _h
+    detail = str(getattr(e, "detail", "") or e or type(e).__name__)
+    code = getattr(e, "status_code", None)
+    name = type(e).__name__
+    if code == 503 or "워커" in detail or "MT5 연결" in detail or name in (
+            "ConnectError", "ConnectTimeout", "ReadTimeout", "TimeoutError", "RemoteProtocolError", "ReadError"):
+        return ("⚠️ <b>MT5가 꺼져 있거나 다시 켜지는 중이에요</b>\n"
+                f"<i>{_h.escape(detail[:150])}</i>\n1~2분 뒤 다시 보내 주세요. (서버 업데이트 · MT5 재시작 직후면 보통 금방 돌아와요)")
+    return f"⚠️ 명령을 처리하지 못했어요: <i>{_h.escape(detail[:200])}</i>"
+
+
 def note_message(chat_id, message_id) -> None:
     """이 대화방에 새 메시지가 올라왔다고 알림 (알림 전송·사용자 메시지 등에서 호출)"""
     try:
@@ -1326,115 +1339,124 @@ class TelegramLive:
                 offsets[key] = seen + 1
                 changed = True
             msg = u.get("message")
-            if msg and msg.get("chat"):
-                chat = msg["chat"]
-                if not msg.get("pinned_message"):          # 고정 안내 줄은 무시
-                    note_message(chat["id"], msg.get("message_id"))
-                name = chat.get("title") or " ".join(x for x in (chat.get("first_name"), chat.get("last_name")) if x) or chat.get("username") or ""
-                recent_chats[:] = [c for c in recent_chats if c["chat_id"] != str(chat["id"])][-4:]
-                recent_chats.append({"chat_id": str(chat["id"]), "name": name, "at": time.time()})
-                raw = (msg.get("text") or "").strip()
-                text = raw.lower()
-                cid = str(chat["id"])
-                mine = cid == str(telegram_cfg()["chat_id"] or "")
-                if mine and text.startswith("/unlock"):
-                    await self.start_unlock(client, token, cid, None)
-                elif mine and text.startswith("/update"):
-                    await self.show_update(client, token, cid)
-                elif mine and text.startswith("/sim"):
-                    await self.sim(client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
-                elif mine and text.startswith("/calc"):
-                    await self.calc(client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
-                elif mine and text.startswith("/grids"):
-                    from services import telegram_grid
-                    await telegram_grid.cmd_grids(self, client, token, cid)
-                elif mine and text.startswith("/grid"):
-                    from services import telegram_grid
-                    await telegram_grid.cmd_grid(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
-                elif mine and text.startswith("/ktr"):
-                    from services import telegram_grid
-                    _a = raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else ""
-                    if any(w in _a for w in ("최근", "7일", "일주일", "브리핑", "brief", "recent")):
-                        from services import ktr_brief      # 최근 7거래일 KTR · 장 시작 브리핑 켜기·끄기
-                        await ktr_brief.cmd(self, client, token, cid, _a)
-                    else:
-                        await telegram_grid.cmd_ktr(self, client, token, cid, _a)
-                elif mine and (text.startswith("/근거") or text.startswith("/reasons")):
-                    from services import telegram_tags
-                    await telegram_tags.cmd_reasons(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
-                elif mine and (text.startswith("/지표") or text.startswith("/events")):
-                    from services import telegram_events
-                    await telegram_events.cmd_events(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
-                elif mine and (text.startswith("/문구") or text.startswith("/phrases")):
-                    from services import telegram_phrases
-                    await telegram_phrases.cmd_phrases(self, client, token, cid)
-                elif mine and (text.startswith("/돌파") or text.lower().startswith("/bob") or text.startswith("/breakout")):
-                    from services import breakout
-                    await breakout.cmd(self, client, token, cid)
-                elif mine and (text.startswith("/잔고") or text.startswith("/wallet")):
-                    from services import wallets
-                    await wallets.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
-                elif mine and (text.startswith("/출금") or text.startswith("/withdraw")):
-                    from services import withdraw_notice
-                    await withdraw_notice.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
-                elif mine and (text.startswith("/서버") or text.startswith("/server")):
-                    from services import telegram_server
-                    await telegram_server.cmd(self, client, token, cid)
-                elif mine and (text.startswith("/무작위") or text.startswith("/random")):
-                    from services import telegram_guides
-                    await telegram_guides.cmd_random(self, client, token, cid)
-                elif mine and (text.startswith("/지침") or text.startswith("/guide")):
-                    from services import telegram_guides
-                    await telegram_guides.cmd(self, client, token, cid)
-                elif mine and (text.startswith("/계좌") or text.startswith("/accounts")):
-                    from services import telegram_accounts
-                    await telegram_accounts.cmd(self, client, token, cid)
-                elif mine and (text.startswith("/잠금") or text.startswith("/lock")):
-                    from services import self_lock
-                    await self_lock.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
-                elif mine and (text.startswith("/표시") or text.startswith("/show")):
-                    await self.show_button(client, token, cid, "lv:menu", None)
-                elif mine and (text.startswith("/원웨이") or text.startswith("/oneway")):
-                    from services import oneway
-                    await oneway.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
-                elif mine and (text.startswith("/손익") or text.startswith("/pnl")):
-                    from services import telegram_report
-                    await telegram_report.cmd(self, client, token, cid, "p", raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
-                elif mine and (text.startswith("/통계") or text.startswith("/stats")):
-                    from services import telegram_report
-                    await telegram_report.cmd(self, client, token, cid, "s", raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
-                elif mine and text.startswith("/pos"):
-                    await self.show_positions(client, token, cid)
-                elif mine and text.startswith("/cancel"):
-                    p = self.pending.pop(cid, None)
-                    if p:
-                        await self._send(client, token, cid, {"pos": "SL/TP 설정을 그만뒀습니다.", "grid": "직접 입력을 그만뒀습니다. 설정 메시지의 버튼은 그대로 쓸 수 있습니다.",
-                                          "tag": "입력을 그만뒀습니다. 근거 메시지의 버튼은 그대로 쓸 수 있습니다.",
-                                          "phr": "문구 입력을 그만뒀습니다."}
-                                         .get(p.get("type"), "잠금 풀기를 그만뒀습니다."))
-                elif mine and raw and not raw.startswith("/") and cid in self.pending:
-                    if self.pending[cid].get("type") == "pos":
-                        await self.try_pos(client, token, cid, raw)
-                    elif self.pending[cid].get("type") == "grid":
+            try:
+                if msg and msg.get("chat"):
+                    chat = msg["chat"]
+                    if not msg.get("pinned_message"):          # 고정 안내 줄은 무시
+                        note_message(chat["id"], msg.get("message_id"))
+                    name = chat.get("title") or " ".join(x for x in (chat.get("first_name"), chat.get("last_name")) if x) or chat.get("username") or ""
+                    recent_chats[:] = [c for c in recent_chats if c["chat_id"] != str(chat["id"])][-4:]
+                    recent_chats.append({"chat_id": str(chat["id"]), "name": name, "at": time.time()})
+                    raw = (msg.get("text") or "").strip()
+                    text = raw.lower()
+                    cid = str(chat["id"])
+                    mine = cid == str(telegram_cfg()["chat_id"] or "")
+                    if mine and text.startswith("/unlock"):
+                        await self.start_unlock(client, token, cid, None)
+                    elif mine and text.startswith("/update"):
+                        await self.show_update(client, token, cid)
+                    elif mine and text.startswith("/sim"):
+                        await self.sim(client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                    elif mine and text.startswith("/calc"):
+                        await self.calc(client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                    elif mine and text.startswith("/grids"):
                         from services import telegram_grid
-                        await telegram_grid.wiz_text(self, client, token, cid, raw)
-                    elif self.pending[cid].get("type") == "tag":
+                        await telegram_grid.cmd_grids(self, client, token, cid)
+                    elif mine and text.startswith("/grid"):
+                        from services import telegram_grid
+                        await telegram_grid.cmd_grid(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                    elif mine and text.startswith("/ktr"):
+                        from services import telegram_grid
+                        _a = raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else ""
+                        if any(w in _a for w in ("최근", "7일", "일주일", "브리핑", "brief", "recent")):
+                            from services import ktr_brief      # 최근 7거래일 KTR · 장 시작 브리핑 켜기·끄기
+                            await ktr_brief.cmd(self, client, token, cid, _a)
+                        else:
+                            await telegram_grid.cmd_ktr(self, client, token, cid, _a)
+                    elif mine and (text.startswith("/근거") or text.startswith("/reasons")):
                         from services import telegram_tags
-                        await telegram_tags.text_input(self, client, token, cid, raw)
-                    elif self.pending[cid].get("type") == "phr":
+                        await telegram_tags.cmd_reasons(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                    elif mine and (text.startswith("/지표") or text.startswith("/events")):
+                        from services import telegram_events
+                        await telegram_events.cmd_events(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                    elif mine and (text.startswith("/문구") or text.startswith("/phrases")):
                         from services import telegram_phrases
-                        await telegram_phrases.text_input(self, client, token, cid, raw)
-                    else:
-                        await self.try_unlock(client, token, cid, raw, int(msg.get("date") or time.time()))
-                elif text.startswith("/start") or text.startswith("/id"):
-                    a = await self._call(client, token, "sendMessage", chat_id=chat["id"],
-                                         text=f"이 대화의 chat id: {chat['id']}\n관리 화면 텔레그램 탭의 chat id 칸에 넣으세요.")
-                    if a.get("ok"):
-                        note_message(chat["id"], a["result"]["message_id"])
-                    if not a.get("ok"):
-                        print(f"[telegram-live] /start 답장 실패: {a.get('description')}")
-                    else:
-                        print(f"[telegram-live] /start 받음 - chat id {chat['id']} ({name})")
+                        await telegram_phrases.cmd_phrases(self, client, token, cid)
+                    elif mine and (text.startswith("/돌파") or text.lower().startswith("/bob") or text.startswith("/breakout")):
+                        from services import breakout
+                        await breakout.cmd(self, client, token, cid)
+                    elif mine and (text.startswith("/잔고") or text.startswith("/wallet")):
+                        from services import wallets
+                        await wallets.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                    elif mine and (text.startswith("/출금") or text.startswith("/withdraw")):
+                        from services import withdraw_notice
+                        await withdraw_notice.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                    elif mine and (text.startswith("/서버") or text.startswith("/server")):
+                        from services import telegram_server
+                        await telegram_server.cmd(self, client, token, cid)
+                    elif mine and (text.startswith("/무작위") or text.startswith("/random")):
+                        from services import telegram_guides
+                        await telegram_guides.cmd_random(self, client, token, cid)
+                    elif mine and (text.startswith("/지침") or text.startswith("/guide")):
+                        from services import telegram_guides
+                        await telegram_guides.cmd(self, client, token, cid)
+                    elif mine and (text.startswith("/계좌") or text.startswith("/accounts")):
+                        from services import telegram_accounts
+                        await telegram_accounts.cmd(self, client, token, cid)
+                    elif mine and (text.startswith("/잠금") or text.startswith("/lock")):
+                        from services import self_lock
+                        await self_lock.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                    elif mine and (text.startswith("/표시") or text.startswith("/show")):
+                        await self.show_button(client, token, cid, "lv:menu", None)
+                    elif mine and (text.startswith("/원웨이") or text.startswith("/oneway")):
+                        from services import oneway
+                        await oneway.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                    elif mine and (text.startswith("/손익") or text.startswith("/pnl")):
+                        from services import telegram_report
+                        await telegram_report.cmd(self, client, token, cid, "p", raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                    elif mine and (text.startswith("/통계") or text.startswith("/stats")):
+                        from services import telegram_report
+                        await telegram_report.cmd(self, client, token, cid, "s", raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                    elif mine and text.startswith("/pos"):
+                        await self.show_positions(client, token, cid)
+                    elif mine and text.startswith("/cancel"):
+                        p = self.pending.pop(cid, None)
+                        if p:
+                            await self._send(client, token, cid, {"pos": "SL/TP 설정을 그만뒀습니다.", "grid": "직접 입력을 그만뒀습니다. 설정 메시지의 버튼은 그대로 쓸 수 있습니다.",
+                                              "tag": "입력을 그만뒀습니다. 근거 메시지의 버튼은 그대로 쓸 수 있습니다.",
+                                              "phr": "문구 입력을 그만뒀습니다."}
+                                             .get(p.get("type"), "잠금 풀기를 그만뒀습니다."))
+                    elif mine and raw and not raw.startswith("/") and cid in self.pending:
+                        if self.pending[cid].get("type") == "pos":
+                            await self.try_pos(client, token, cid, raw)
+                        elif self.pending[cid].get("type") == "grid":
+                            from services import telegram_grid
+                            await telegram_grid.wiz_text(self, client, token, cid, raw)
+                        elif self.pending[cid].get("type") == "tag":
+                            from services import telegram_tags
+                            await telegram_tags.text_input(self, client, token, cid, raw)
+                        elif self.pending[cid].get("type") == "phr":
+                            from services import telegram_phrases
+                            await telegram_phrases.text_input(self, client, token, cid, raw)
+                        else:
+                            await self.try_unlock(client, token, cid, raw, int(msg.get("date") or time.time()))
+                    elif text.startswith("/start") or text.startswith("/id"):
+                        a = await self._call(client, token, "sendMessage", chat_id=chat["id"],
+                                             text=f"이 대화의 chat id: {chat['id']}\n관리 화면 텔레그램 탭의 chat id 칸에 넣으세요.")
+                        if a.get("ok"):
+                            note_message(chat["id"], a["result"]["message_id"])
+                        if not a.get("ok"):
+                            print(f"[telegram-live] /start 답장 실패: {a.get('description')}")
+                        else:
+                            print(f"[telegram-live] /start 받음 - chat id {chat['id']} ({name})")
+            except Exception as e:                 # 명령 처리 중 오류 - 아무 반응 없이 끝나지 않게 이유를 답장
+                print(f"[telegram-live] 명령 처리 실패: {e!r}")
+                try:
+                    ch = (msg or {}).get("chat") or {}
+                    if ch.get("id") is not None and str(ch["id"]) == str(telegram_cfg()["chat_id"] or ""):
+                        await self._send(client, token, str(ch["id"]), command_error_text(e))
+                except Exception:
+                    pass
             cb = u.get("callback_query")
             if cb:
                 data = cb.get("data") or ""
