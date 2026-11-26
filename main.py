@@ -453,6 +453,9 @@ async def lifespan(app: FastAPI):
     # 11) 휴장 · 조기 종료 · 시세 멈춤 알림 (services/market_watch.py)
     from services import market_watch
     market_task = asyncio.create_task(market_watch.loop())
+    # 12) 장 시작 KTR 브리핑 (services/ktr_brief.py - 나스닥 · 금, 시간봉 5개, 평소 대비)
+    from services import ktr_brief
+    ktr_brief_task = asyncio.create_task(ktr_brief.loop())
  
     yield
  
@@ -465,6 +468,7 @@ async def lifespan(app: FastAPI):
     equity_task.cancel()
     balance_task.cancel()
     market_task.cancel()
+    ktr_brief_task.cancel()
     await admin_app.stop_admin_server(admin_server, admin_task)
     watchdog_task.cancel()
     

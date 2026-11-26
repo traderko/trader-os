@@ -1353,7 +1353,12 @@ class TelegramLive:
                     await telegram_grid.cmd_grid(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                 elif mine and text.startswith("/ktr"):
                     from services import telegram_grid
-                    await telegram_grid.cmd_ktr(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                    _a = raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else ""
+                    if any(w in _a for w in ("최근", "7일", "일주일", "브리핑", "brief", "recent")):
+                        from services import ktr_brief      # 최근 7거래일 KTR · 장 시작 브리핑 켜기·끄기
+                        await ktr_brief.cmd(self, client, token, cid, _a)
+                    else:
+                        await telegram_grid.cmd_ktr(self, client, token, cid, _a)
                 elif mine and (text.startswith("/근거") or text.startswith("/reasons")):
                     from services import telegram_tags
                     await telegram_tags.cmd_reasons(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
@@ -1464,6 +1469,15 @@ class TelegramLive:
                         try:
                             fn = telegram_grid.wiz_button if data.startswith("gw:") else telegram_grid.button
                             answer = await fn(self, client, token, cid, data, (cb.get("message") or {}).get("message_id"))
+                        except Exception as e:
+                            answer = f"실패: {e}"[:190]
+                elif data.startswith("ktr7:"):        # 최근 7거래일 KTR (services/ktr_brief.py)
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        from services import ktr_brief
+                        try:
+                            answer = await ktr_brief.button(self, client, token, cid, data, (cb.get("message") or {}).get("message_id"))
                         except Exception as e:
                             answer = f"실패: {e}"[:190]
                 elif data.startswith("tg:"):          # 체결 알림의 진입·청산 근거 (services/telegram_tags.py)
@@ -1646,7 +1660,7 @@ class TelegramLive:
                             {"command": "calc", "description": "SL·TP 예상 손익 계산"},
                             {"command": "grid", "description": "구간매매 - 버튼으로 하나씩 설정 (또는 한 줄로)"},
                             {"command": "grids", "description": "진행 중인 구간매매·청산"},
-                            {"command": "ktr", "description": "KTR 표 (장 × 시간봉)"},
+                            {"command": "ktr", "description": "KTR 표 (장 × 시간봉) · /ktr 최근 (7거래일) · /ktr 브리핑"},
                             {"command": "reasons", "description": "근거 없는 거래 모아 보기 (/근거 3일)"},
                             {"command": "events", "description": "이번 주 지표 발표·지표일 잠금 (/지표)"},
                             {"command": "phrases", "description": "잠금 풀기 확인 문구 보기·추가·수정 (/문구)"},

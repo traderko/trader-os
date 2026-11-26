@@ -277,6 +277,7 @@ def _table_markup(sym: str, src: str) -> dict:
            for g in symbols.groups()][:5]
     other = "oanda" if src == "mt5" else "mt5"
     return {"inline_keyboard": [row, [{"text": f"시세: {'OANDA' if other == 'oanda' else 'MT5'}로 보기", "callback_data": f"ktr:{sym}:{other}"},
+                                      {"text": "📅 최근 7일", "callback_data": f"ktr7:{sym}:"},
                                       {"text": "🔄", "callback_data": f"ktr:{sym}:{src}"}]]}
 
 
