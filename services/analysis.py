@@ -55,6 +55,12 @@ def _db() -> sqlite3.Connection:
             symbol TEXT, day TEXT, tf TEXT, PRIMARY KEY (symbol, day))""")
         _conn.execute("""CREATE TABLE IF NOT EXISTS ktr (
             symbol TEXT, tf TEXT, open_ts INTEGER, ktr REAL, PRIMARY KEY (symbol, tf, open_ts))""")
+        # 1랏 1포인트 손익 · 1랏 증거금 (하루 동안 다시 묻지 않음 - 서버를 다시 켜도)
+        _conn.execute("""CREATE TABLE IF NOT EXISTS syminfo (
+            account_id INTEGER, symbol TEXT, pv REAL, margin REAL, ref REAL, at REAL, PRIMARY KEY (account_id, symbol))""")
+        # 청산 이유 (MT5 체결 기록 - 지난 거래는 바뀌지 않아 한 번만 물음). reason '' = 물어봤는데 없음
+        _conn.execute("""CREATE TABLE IF NOT EXISTS reasons (
+            account_id INTEGER, ticket INTEGER, reason TEXT, PRIMARY KEY (account_id, ticket))""")
         _conn.commit()
     return _conn
 
@@ -115,8 +121,14 @@ async def _sym_info(account_id: int, symbol: str, price: float) -> dict | None:
     from services.worker_client import worker_get
     k = (account_id, symbol)
     hit = _sym_cache.get(k)
-    if hit and time.time() - hit[0] < 6 * 3600:
+    if hit and time.time() - hit[0] < 24 * 3600:
         return hit[1]
+    with _lock:
+        row = _db().execute("SELECT pv, margin, ref, at FROM syminfo WHERE account_id=? AND symbol=?", k).fetchone()
+    if row and time.time() - row[3] < 24 * 3600:
+        info = {"pv": row[0], "margin": row[1], "ref": row[2]}
+        _sym_cache[k] = (row[3], info)
+        return info
     try:
         r = await worker_get(account_id, "/calc", {"symbol": symbol, "side": "BUY", "volume": 1,
                                                    "price_open": price, "price_close": price + 1}, timeout=20)
@@ -126,6 +138,9 @@ async def _sym_info(account_id: int, symbol: str, price: float) -> dict | None:
     except Exception:
         return None
     _sym_cache[k] = (time.time(), info)
+    with _lock:
+        _db().execute("INSERT OR REPLACE INTO syminfo VALUES (?,?,?,?,?,?)", (*k, info["pv"], info["margin"], info["ref"], time.time()))
+        _db().commit()
     return info
 
 
@@ -352,56 +367,69 @@ async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) 
     lap("bars")
     # 2) 종목 정보 (1랏 1포인트 손익 · 1랏 증거금) - 역행 금액 · 증거금 사용률용
     info_of: dict[str, dict | None] = {}
-    for sym in {t.symbol for t in rows}:
-        ref = next((t.price_close or t.price_open for t in sorted(rows, key=lambda x: x.close_time, reverse=True)
-                    if t.symbol == sym), None)
-        info_of[sym] = await _sym_info(account_id, sym, ref) if (ref and mt5_ok) else None
+    syms = sorted({t.symbol for t in rows})
+    refs = {sym: next((t.price_close or t.price_open for t in sorted(rows, key=lambda x: x.close_time, reverse=True)
+                       if t.symbol == sym), None) for sym in syms}
+    got = await asyncio.gather(*[_sym_info(account_id, sym, refs[sym]) if (refs[sym] and mt5_ok) else asyncio.sleep(0)
+                                 for sym in syms])          # 종목들을 한꺼번에 물음
+    for sym, inf in zip(syms, got):
+        info_of[sym] = inf or None
         if info_of[sym] is None:
             notes.append(f"{sym}: 1랏 증거금 · 손익을 MT5 에서 받지 못해 증거금 사용률은 빼고 계산했어요.")
     lap("sym")
     # 3) 거래마다 MAE · MFE
     progress("거래마다 역행 · 순행 재는 중 (KTR 받는 중)")
-    out_trades, bars_of = [], {}
-    import bisect
-    arr: dict[str, tuple[list, list, list]] = {}       # 종목 → (시각, 고가, 저가) 한 번에 읽어 둠
-    for sym in {t.symbol for t in rows}:
-        t0 = min(int(t.open_time.timestamp()) for t in rows if t.symbol == sym) // 60 * 60 - 300
-        t1 = max(int(t.close_time.timestamp()) for t in rows if t.symbol == sym)
-        b = _bars(sym, t0, t1)
-        arr[sym] = ([x[0] for x in b], [x[1] for x in b], [x[2] for x in b])
-    for t in rows:
-        o, c = int(t.open_time.timestamp()), int(t.close_time.timestamp())
-        T, H, L = arr[t.symbol]
-        span = 300 if prec.get((t.symbol, _day_key(t.open_time))) == "M5" else 60
-        i = bisect.bisect_right(T, o - span)              # 끝(시작 + span)이 진입 뒤인 첫 봉 = 진입 봉
-        j = bisect.bisect_right(T, c)                     # 청산 시각까지 시작한 봉
-        ex = excursion_fast(t.position, t.price_open, H[i:j], L[i:j])
-        lap("mae")
-        ktr = await _ktr(account_id, t.symbol, tf, t.open_time) if mt5_ok else None
-        lap("ktr")
-        p = prec.get((t.symbol, _day_key(t.open_time)))
-        net = (t.profit or 0) + (t.commission or 0)
-        r = {"id": t.id, "ticket": t.ticket, "symbol": t.symbol, "side": t.position, "volume": t.volume,
-             "open_time": t.open_time.isoformat(), "close_time": t.close_time.isoformat(),
-             "price_open": t.price_open, "price_close": t.price_close, "net": round(net, 2),
-             "precision": p or None, "ktr": round(ktr, 5) if ktr else None,
-             "mae": None, "mfe": None, "mae_pre": None, "mae_k": None, "mfe_k": None, "mae_pre_k": None,
-             "move": None, "move_k": None}
-        if ex:
-            d = 1 if str(t.position).upper().startswith("B") else -1
-            mv = ((t.price_close - t.price_open) * d) if t.price_close else None
-            r.update({k: round(ex[k], 5) for k in ("mae", "mfe", "mae_pre")})
-            r["move"] = round(mv, 5) if mv is not None else None
-            if ktr:
-                r.update({"mae_k": round(ex["mae"] / ktr, 2), "mfe_k": round(ex["mfe"] / ktr, 2),
-                          "mae_pre_k": round(ex["mae_pre"] / ktr, 2),
-                          "move_k": round(mv / ktr, 2) if mv is not None else None})
-        inf = info_of.get(t.symbol)
-        if ex and inf:                       # 최대 역행 때 이 거래의 평가손 (금액 · 청산 직전 잔고 대비 %)
-            r["mae_usd"] = round(ex["mae"] * inf["pv"] * (t.volume or 0), 2)
-            bb = getattr(t, "balance_before", None)
-            r["mae_bal_pct"] = round(r["mae_usd"] / bb * 100, 2) if bb else None
-        out_trades.append(r)
+    bars_of: dict[str, dict] = {}
+    ktr_of: dict[int, float | None] = {}
+    for t in rows:                                        # KTR (저장된 건 바로, 없는 장만 MT5 에)
+        ktr_of[t.id] = await _ktr(account_id, t.symbol, tf, t.open_time) if mt5_ok else None
+    lap("ktr")
+
+    def measure() -> list[dict]:
+        """역행 · 순행 (계산만 - 서버가 멈추지 않게 스레드에서)"""
+        import bisect
+        arr: dict[str, tuple[list, list, list]] = {}       # 종목 → (시각, 고가, 저가) 한 번에 읽어 둠
+        for sym in {t.symbol for t in rows}:
+            t0 = min(int(t.open_time.timestamp()) for t in rows if t.symbol == sym) // 60 * 60 - 300
+            t1 = max(int(t.close_time.timestamp()) for t in rows if t.symbol == sym)
+            b = _bars(sym, t0, t1)
+            arr[sym] = ([x[0] for x in b], [x[1] for x in b], [x[2] for x in b])
+        out = []
+        for t in rows:
+            o, c = int(t.open_time.timestamp()), int(t.close_time.timestamp())
+            T, H, L = arr[t.symbol]
+            span = 300 if prec.get((t.symbol, _day_key(t.open_time))) == "M5" else 60
+            i = bisect.bisect_right(T, o - span)              # 끝(시작 + span)이 진입 뒤인 첫 봉 = 진입 봉
+            j = bisect.bisect_right(T, c)                     # 청산 시각까지 시작한 봉
+            ex = excursion_fast(t.position, t.price_open, H[i:j], L[i:j])
+            ktr = ktr_of.get(t.id)
+            p = prec.get((t.symbol, _day_key(t.open_time)))
+            net = (t.profit or 0) + (t.commission or 0)
+            r = {"id": t.id, "ticket": t.ticket, "symbol": t.symbol, "side": t.position, "volume": t.volume,
+                 "open_time": t.open_time.isoformat(), "close_time": t.close_time.isoformat(),
+                 "price_open": t.price_open, "price_close": t.price_close, "net": round(net, 2),
+                 "precision": p or None, "ktr": round(ktr, 5) if ktr else None,
+                 "mae": None, "mfe": None, "mae_pre": None, "mae_k": None, "mfe_k": None, "mae_pre_k": None,
+                 "move": None, "move_k": None}
+            if ex:
+                d = 1 if str(t.position).upper().startswith("B") else -1
+                mv = ((t.price_close - t.price_open) * d) if t.price_close else None
+                r.update({k: round(ex[k], 5) for k in ("mae", "mfe", "mae_pre")})
+                r["move"] = round(mv, 5) if mv is not None else None
+                if ktr:
+                    r.update({"mae_k": round(ex["mae"] / ktr, 2), "mfe_k": round(ex["mfe"] / ktr, 2),
+                              "mae_pre_k": round(ex["mae_pre"] / ktr, 2),
+                              "move_k": round(mv / ktr, 2) if mv is not None else None})
+            inf = info_of.get(t.symbol)
+            if ex and inf:                       # 최대 역행 때 이 거래의 평가손 (금액 · 청산 직전 잔고 대비 %)
+                r["mae_usd"] = round(ex["mae"] * inf["pv"] * (t.volume or 0), 2)
+                bb = getattr(t, "balance_before", None)
+                r["mae_bal_pct"] = round(r["mae_usd"] / bb * 100, 2) if bb else None
+            out.append(r)
+        return out
+
+    out_trades = await asyncio.to_thread(measure)
+    lap("mae")
 
     wins = [r for r in out_trades if r["net"] > 0]
     loss = [r for r in out_trades if r["net"] <= 0]
@@ -420,37 +448,53 @@ async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) 
     lap("mae")
     # 4) 증거금 사용률 - 구간마다
     progress("증거금 사용률 계산 중")
-    for sym in days_of:
-        if info_of.get(sym) is None:
-            continue
-        t0 = min(int(t.open_time.timestamp()) for t in rows if t.symbol == sym) // 60 * 60 - 300
-        t1 = max(int(t.close_time.timestamp()) for t in rows if t.symbol == sym)
-        bm: dict[int, tuple] = {}
-        for t, h, l, c in _bars(sym, t0, t1):
-            if prec.get((sym, _day_key(datetime.fromtimestamp(t, timezone.utc)))) == "M5":    # 5분봉은 5분 모두에
-                for k in range(5):
-                    bm[t + k * 60] = (h, l, c)
-            else:
-                bm[t] = (h, l, c)
-        bars_of[sym] = bm
-    lap("usage")
-    # 강제청산: 거래 기록의 청산 이유, 없으면 MT5 체결 기록에서 (워커 /close-reasons)
+    # 강제청산: 거래 기록의 청산 이유, 없으면 MT5 체결 기록에서 (워커 /close-reasons) - 한 번 물은 거래는 저장해 둠
     reasons: dict[int, str] = {}
-    if mt5_ok and rows:
+    with _lock:
+        reasons = {tk: rs for tk, rs in _db().execute("SELECT ticket, reason FROM reasons WHERE account_id=?",
+                                                       (account_id,)).fetchall()}
+    need = [t for t in rows if not getattr(t, "close_reason", None) and int(t.ticket or 0) not in reasons]
+    if mt5_ok and need:
         try:
             from services.worker_client import worker_get
             rr = await worker_get(account_id, "/close-reasons", {
-                "from_ts": (min(t.open_time for t in rows) - timedelta(hours=1)).isoformat(),
-                "to_ts": (max(t.close_time for t in rows) + timedelta(hours=1)).isoformat()}, timeout=40)
-            reasons = {int(k): v for k, v in (rr or {}).items()}
+                "from_ts": (min(t.open_time for t in need) - timedelta(hours=1)).isoformat(),
+                "to_ts": (max(t.close_time for t in need) + timedelta(hours=1)).isoformat()}, timeout=40)
+            got = {int(k): v for k, v in (rr or {}).items()}
+            now_ts = time.time()
+            with _lock:                      # 물어본 거래는 없음('')도 저장 - 하루 지난 거래만 (방금 청산은 다음에 다시)
+                _db().executemany("INSERT OR REPLACE INTO reasons VALUES (?,?,?)",
+                                  [(account_id, int(t.ticket or 0), got.get(int(t.ticket or 0), "")) for t in need
+                                   if now_ts - t.close_time.timestamp() > 86400 or int(t.ticket or 0) in got])
+                _db().commit()
+            reasons.update(got)
         except Exception:
             pass
     lap("stopout")
-    eps = episodes([{
-        "id": t.id, "symbol": t.symbol, "side": t.position, "volume": t.volume or 0, "price_open": t.price_open,
-        "open_ts": int(t.open_time.timestamp()), "close_ts": int(t.close_time.timestamp()),
-        "net": (t.profit or 0) + (t.commission or 0), "balance_before": getattr(t, "balance_before", None),
-        "close_reason": getattr(t, "close_reason", None) or reasons.get(int(t.ticket or 0))} for t in rows], bars_of, info_of)
+
+    def usage() -> list[dict]:
+        """증거금 사용률 (계산만 - 스레드에서)"""
+        for sym in days_of:
+            if info_of.get(sym) is None:
+                continue
+            t0 = min(int(t.open_time.timestamp()) for t in rows if t.symbol == sym) // 60 * 60 - 300
+            t1 = max(int(t.close_time.timestamp()) for t in rows if t.symbol == sym)
+            bm: dict[int, tuple] = {}
+            for t, h, l, c in _bars(sym, t0, t1):
+                if prec.get((sym, _day_key(datetime.fromtimestamp(t, timezone.utc)))) == "M5":    # 5분봉은 5분 모두에
+                    for k in range(5):
+                        bm[t + k * 60] = (h, l, c)
+                else:
+                    bm[t] = (h, l, c)
+            bars_of[sym] = bm
+        return episodes([{
+            "id": t.id, "symbol": t.symbol, "side": t.position, "volume": t.volume or 0, "price_open": t.price_open,
+            "open_ts": int(t.open_time.timestamp()), "close_ts": int(t.close_time.timestamp()),
+            "net": (t.profit or 0) + (t.commission or 0), "balance_before": getattr(t, "balance_before", None),
+            "close_reason": getattr(t, "close_reason", None) or reasons.get(int(t.ticket or 0)) or None} for t in rows],
+            bars_of, info_of)
+
+    eps = await asyncio.to_thread(usage)
     lap("usage")
     missing_bal = sum(1 for e in eps if not e["balance"])
     if missing_bal:
