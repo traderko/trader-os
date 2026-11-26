@@ -182,6 +182,23 @@ def excursion(side: str, po: float, bars: list[tuple]) -> dict | None:
     return {"mae": max(mae, 0.0), "mfe": max(mfe, 0.0), "mae_pre": max(mae_pre, 0.0)}
 
 
+def excursion_fast(side: str, po: float, H: list[float], L: list[float]) -> dict | None:
+    """excursion 과 같은 결과 - 고가 · 저가 리스트로 (max/min/index 가 C 로 돌아서 빠름)"""
+    if not H or po is None:
+        return None
+    if str(side).upper().startswith("B"):
+        hi = max(H)
+        i = H.index(hi)                                   # 순행 최고점이 처음 나온 봉
+        mfe, mae = hi - po, po - min(L)
+        mae_pre = (po - min(L[:i])) if i > 0 and mfe > 0 else 0.0    # 한 번도 유리하게 안 갔으면 0 (excursion 과 같게)
+    else:
+        lo = min(L)
+        i = L.index(lo)
+        mfe, mae = po - lo, max(H) - po
+        mae_pre = (max(H[:i]) - po) if i > 0 and mfe > 0 else 0.0
+    return {"mae": max(mae, 0.0), "mfe": max(mfe, 0.0), "mae_pre": max(mae_pre, 0.0)}
+
+
 def _summary(rows: list[dict], key: str) -> dict:
     vals = [r[key] for r in rows if r.get(key) is not None]
     return {"n": len(vals), "p50": _pct(vals, 50), "p75": _pct(vals, 75), "p90": _pct(vals, 90), "max": max(vals) if vals else None}
@@ -189,7 +206,10 @@ def _summary(rows: list[dict], key: str) -> dict:
 
 def episodes(trades: list[dict], bars_of: dict, info_of: dict) -> list[dict]:
     """포지션을 들고 있던 구간마다 분 단위로 사용률 · 평가금 계산.
-    trades: {id, symbol, side, volume, price_open, open_ts, close_ts, net, balance_before, close_reason}"""
+    trades: {id, symbol, side, volume, price_open, open_ts, close_ts, net, balance_before, close_reason}
+    분마다 거래를 다 훑지 않고, 종목 · 방향별 합계(랏 × 1포인트 손익, 랏 × 1포인트 손익 × 진입가, 랏)를
+    진입 · 청산 때만 바꿔 둠 → 분마다는 종목 수만큼만 계산
+      평가손익(가장 불리한 가격) = Σ매수 pv·랏·(저가 - 진입가) + Σ매도 pv·랏·(진입가 - 고가)"""
     ts = sorted((t for t in trades if t["open_ts"] and t["close_ts"]), key=lambda t: t["open_ts"])
     groups, cur, end = [], [], None
     for t in ts:
@@ -215,39 +235,58 @@ def episodes(trades: list[dict], bars_of: dict, info_of: dict) -> list[dict]:
         if not bal0 or any(info_of.get(t["symbol"]) is None for t in g):
             out.append(e)
             continue
-        # 분마다 (구간 시작 분 ~ 끝 분)
         m0, m1 = e["start"] // 60 * 60, e["end"] // 60 * 60
         if (m1 - m0) // 60 > 60 * 24 * 14:          # 2주 넘게 들고 있던 구간은 건너뜀 (계산이 너무 큼)
             out.append(e)
             continue
+        # 이벤트: 분 m 에 열려 있는 거래 = open_ts < m + 60 and close_ts > m
+        #   → 분 (open_ts - 59) // 60 * 60 ... 부터 포함, 분 m >= close_ts 부터 빠짐
+        adds, rems = {}, {}
+        for t in g:
+            ma = max(m0, ((t["open_ts"] - 60) // 60 + 1) * 60)    # open_ts < m + 60 인 첫 분
+            mr = ((t["close_ts"] - 1) // 60 + 1) * 60             # close_ts <= m 인 첫 분 (= close_ts > m 이 끝나는 분)
+            if mr <= ma:
+                continue
+            adds.setdefault(ma, []).append(t)
+            rems.setdefault(mr, []).append(t)
+        agg: dict[str, list[float]] = {}     # 종목 → [매수 A, 매수 B, 매도 A, 매도 B, 랏, 종가용 A, 종가용 B]
         closes = sorted((t["close_ts"], t["net"]) for t in g)
-        last_bar = {}
-        bal, ci = bal0, 0
+        last_bar: dict[str, tuple] = {}
+        bal, ci, n_open = bal0, 0, 0
         mx_u = mx_m = mx_l = 0.0
         mn_eq = None
         for m in range(m0, m1 + 60, 60):
             while ci < len(closes) and closes[ci][0] <= m:          # 이 분이 시작하기 전에 청산된 손익은 잔고로
                 bal += closes[ci][1]
                 ci += 1
-            open_now = [t for t in g if t["open_ts"] < m + 60 and t["close_ts"] > m]
-            if not open_now:
+            for t, sgn in [(x, -1) for x in rems.get(m, ())] + [(x, 1) for x in adds.get(m, ())]:
+                inf = info_of[t["symbol"]]
+                a = agg.setdefault(t["symbol"], [0.0] * 7)
+                k = inf["pv"] * t["volume"] * sgn
+                if str(t["side"]).upper().startswith("B"):
+                    a[0] += k; a[1] += k * t["price_open"]; a[5] += k; a[6] += k * t["price_open"]
+                else:
+                    a[2] += k; a[3] += k * t["price_open"]; a[5] -= k; a[6] -= k * t["price_open"]
+                a[4] += t["volume"] * sgn
+                n_open += sgn
+            if n_open <= 0:
                 continue
             fl_worst = fl_close = margin = lots = 0.0
             ok = True
-            for t in open_now:
-                b = bars_of.get(t["symbol"], {}).get(m) or last_bar.get(t["symbol"])
+            for sym, a in agg.items():
+                if abs(a[4]) < 1e-9:
+                    continue
+                b = bars_of.get(sym, {}).get(m) or last_bar.get(sym)
                 if b is None:
                     ok = False
                     break
-                last_bar[t["symbol"]] = b
+                last_bar[sym] = b
                 h, l, c = b
-                inf = info_of[t["symbol"]]
-                d = 1 if str(t["side"]).upper().startswith("B") else -1
-                worst = l if d == 1 else h
-                fl_worst += (worst - t["price_open"]) * d * inf["pv"] * t["volume"]
-                fl_close += (c - t["price_open"]) * d * inf["pv"] * t["volume"]
-                margin += inf["margin"] * (c / inf["ref"]) * t["volume"]
-                lots += t["volume"]
+                fl_worst += (a[0] * l - a[1]) + (a[3] - a[2] * h)
+                fl_close += a[5] * c - a[6]
+                inf = info_of[sym]
+                margin += inf["margin"] * (c / inf["ref"]) * a[4]
+                lots += a[4]
             if not ok:
                 continue
             eq_c, eq_w = bal + fl_close, bal + fl_worst
@@ -323,11 +362,20 @@ async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) 
     # 3) 거래마다 MAE · MFE
     progress("거래마다 역행 · 순행 재는 중 (KTR 받는 중)")
     out_trades, bars_of = [], {}
+    import bisect
+    arr: dict[str, tuple[list, list, list]] = {}       # 종목 → (시각, 고가, 저가) 한 번에 읽어 둠
+    for sym in {t.symbol for t in rows}:
+        t0 = min(int(t.open_time.timestamp()) for t in rows if t.symbol == sym) // 60 * 60 - 300
+        t1 = max(int(t.close_time.timestamp()) for t in rows if t.symbol == sym)
+        b = _bars(sym, t0, t1)
+        arr[sym] = ([x[0] for x in b], [x[1] for x in b], [x[2] for x in b])
     for t in rows:
         o, c = int(t.open_time.timestamp()), int(t.close_time.timestamp())
-        b = _bars(t.symbol, o // 60 * 60 - 240, c)            # 5분봉이면 진입 봉이 최대 4분 앞에서 시작
-        b = [x for x in b if x[0] + 60 > o or (prec.get((t.symbol, _day_key(t.open_time))) == "M5" and x[0] + 300 > o)]
-        ex = excursion(t.position, t.price_open, b)
+        T, H, L = arr[t.symbol]
+        span = 300 if prec.get((t.symbol, _day_key(t.open_time))) == "M5" else 60
+        i = bisect.bisect_right(T, o - span)              # 끝(시작 + span)이 진입 뒤인 첫 봉 = 진입 봉
+        j = bisect.bisect_right(T, c)                     # 청산 시각까지 시작한 봉
+        ex = excursion_fast(t.position, t.price_open, H[i:j], L[i:j])
         lap("mae")
         ktr = await _ktr(account_id, t.symbol, tf, t.open_time) if mt5_ok else None
         lap("ktr")
