@@ -191,7 +191,13 @@ def live_show() -> dict:
     return {k: bool(saved.get(k, True)) for k, _ in LIVE_PARTS}
 
 
-def _positions_block(positions: list[dict], show: dict | None = None) -> list[str]:
+def _pct(v: float, base: float) -> str:
+    """잔고 대비 % (손익 옆에 붙임)"""
+    return f" ({v / base * 100:+.1f}%)" if base and base > 0 else ""
+
+
+def _positions_block(positions: list[dict], show: dict | None = None, bal: float = 0) -> list[str]:
+    """bal: 잔고 - 손익 옆에 잔고 대비 % """
     show = show or {}
     if not positions:
         return ["포지션 없음"]
@@ -217,7 +223,7 @@ def _positions_block(positions: list[dict], show: dict | None = None) -> list[st
                 sides.append(f"{label} {vol:g}lot @ {_f(avg)}{pts}")
         if out:
             out.append("")                       # 종목 사이 한 줄 띄움
-        out.append(f"<b>{html.escape(sym)}</b>  <b>{_money(profit)}</b>")
+        out.append(f"<b>{html.escape(sym)}</b>  <b>{_money(profit)}</b>{_pct(profit, bal)}")
         out += [f"   {x}" for x in sides]
         # 구간매매로 넣은 포지션은 따로 (직접 거래와 구분)
         from services.grid import kind_of, MODE_KR
@@ -257,7 +263,7 @@ def _positions_block(positions: list[dict], show: dict | None = None) -> list[st
                     if cur:
                         pts += f" · 지금 {(lv - cur) * sg:+,.{nd}f}pt"
                     cnt = f" ({len(w)}/{len(side)})" if len(w) != len(side) else ""
-                    out.append(f"   {side_label + ' ' if both else ''}{name} {'' if same else '평균 '}{_f(lv)} ({pts}) → {_s(total)}{cnt}")
+                    out.append(f"   {side_label + ' ' if both else ''}{name} {'' if same else '평균 '}{_f(lv)} ({pts}) → {_s(total)}{_pct(total, bal)}{cnt}")
     return out
 
 
@@ -367,8 +373,15 @@ class TelegramLive:
                 return lines
             eq, margin = info.get("equity") or 0, info.get("margin") or 0
             util = (margin / eq * 100) if eq > 0 else 0
-            if show["equity"]:
-                lines.append(f"평가금 {_f(eq)} · 손익 <b>{_s(info.get('profit') or 0)}</b>")
+            bal = info.get("balance") or 0
+            if show["equity"]:              # 손익 옆 % = 잔고 대비 · 사용 증거금 대비
+                pl = info.get("profit") or 0
+                pc = []
+                if bal > 0:
+                    pc.append(f"잔고 {pl / bal * 100:+.1f}%")
+                if margin > 0 and pl:
+                    pc.append(f"증거금 {pl / margin * 100:+.0f}%")
+                lines.append(f"평가금 {_f(eq)} · 손익 <b>{_s(pl)}</b>" + (f" ({' · '.join(pc)})" if pc else ""))
             if show["margin"]:
                 lines.append(_margin_line(util, info))
             wd = await self._withdraw_line(a) if show["withdraw"] else ""
@@ -388,7 +401,7 @@ class TelegramLive:
                 pass
             if show["positions"]:
                 lines.append("")
-                lines += _positions_block(positions, show)
+                lines += _positions_block(positions, show, bal)
             allpos.extend(positions)
             # 종목·방향 묶음마다 SL/TP 버튼 (/pos 안 쓰고 바로) - 대표 티켓 + 'a'(같은 종목·방향 전체)
             seen: dict[tuple, list] = {}
