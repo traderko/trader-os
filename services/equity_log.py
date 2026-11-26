@@ -162,7 +162,7 @@ def drawdown(aid: int, start: datetime, end: datetime) -> dict | None:
     peak = peak_raw = None
     peak_at = None
     worst = None
-    fl_min, fl_at = 0.0, None
+    fl_min, fl_at, fl_pct = 0.0, None, None
     for ts, bal, eq, lo, hi in rows:
         while fi < len(flows) and flows[fi][0] < ts + 60:
             cum += flows[fi][1]
@@ -172,8 +172,9 @@ def drawdown(aid: int, start: datetime, end: datetime) -> dict | None:
         hi = hi if hi is not None else eq
         if ts <= skip_until:
             continue
-        if lo - bal < fl_min:                         # 가장 큰 평가손 (열린 포지션 합)
+        if lo - bal < fl_min:                         # 가장 큰 평가손 (열린 포지션 합) · 그때 잔고 대비 %
             fl_min, fl_at = lo - bal, ts
+            fl_pct = (lo - bal) / bal if bal and bal > 0 else None
         a_hi, a_lo = hi - cum, lo - cum
         if peak is None or a_hi > peak:
             peak, peak_raw, peak_at = a_hi, hi, ts
@@ -182,6 +183,6 @@ def drawdown(aid: int, start: datetime, end: datetime) -> dict | None:
             base = peak_raw if peak_raw and peak_raw > 0 else None
             worst = {"amount": d, "pct": d / base if base else None, "peak": peak_raw, "trough": lo,
                      "peak_at": peak_at, "trough_at": ts}
-    out = {"since": rows[0][0], "minutes": len(rows), "float_min": fl_min, "float_min_at": fl_at}
+    out = {"since": rows[0][0], "minutes": len(rows), "float_min": fl_min, "float_min_at": fl_at, "float_min_pct": fl_pct}
     out.update(worst or {"amount": 0.0, "pct": 0.0, "peak": None, "trough": None, "peak_at": None, "trough_at": None})
     return out

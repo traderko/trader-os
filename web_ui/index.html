@@ -1721,6 +1721,7 @@ $('tabs').onclick = (e) => { const b = e.target.closest('button[data-tab]'); if 
 const TF = { 1: '1m', 2: '2m', 5: '5m', 10: '10m', 60: '1h', 120: '2h', 240: '4h', 1440: 'D' };
 const TAG_TYPES = [['entry', '진입'], ['exit', '청산'], ['loss', '손실']];
 let trades = [];
+var tBalRep = null;         // 그 달 리포트 (시작 잔고 · 입출금) - 거래마다 잔고 대비 % (renderTrades)
 let tSel = null;   // 거래 선택 모드 (아래 '거래 골라서 랏 배수 시뮬레이션')
 const lsGet = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
 const lsSet = (k, v) => { try { localStorage.setItem(k, v); } catch {} };
@@ -1779,6 +1780,10 @@ async function loadTrades() {
   const cur = () => want === `${acc.account_number}|${tYm.y}|${tYm.m}`;
   const path = `/trades?year=${tYm.y}&month=${tYm.m}&account_number=${encodeURIComponent(acc.account_number)}`;
   if (!cacheGet(path)) $('tList').innerHTML = '<div class="empty">불러오는 중…</div>';
+  // 그 달 시작 잔고 · 입출금 (거래마다 잔고 대비 % 계산용) - 실패해도 거래내역은 그대로
+  const rp = `/accounts/${encodeURIComponent(acc.account_number)}/monthly-report?year=${tYm.y}&month=${tYm.m}`;
+  tBalRep = (cacheGet(rp) || {}).d || null;
+  apiRaw(rp).then((f) => { cacheSet(rp, f.text, f.data); if (!cur()) return; tBalRep = f.data; if (trades.length) renderTrades(); }).catch(() => {});
   try {
     await swr([path], ([list]) => { if (!cur()) return; trades = list; renderTrades(); }, cur);
   } catch (e) {
@@ -1840,6 +1845,24 @@ $('jDate').onchange = () => { if ($('jDate').value) jumpTo($('jDate').value); };
 $('jToday').onclick = () => { const t = tdDate(new Date()); jumpTo(`${t.getFullYear()}-${pad2(t.getMonth() + 1)}-${pad2(t.getDate())}`); };
 
 let grpCount = new Map();   // 묶음 번호 → 이 달 거래 중 건수 (📦 표시)
+// 거래마다 청산 직전 잔고 대비 % - 그 달 시작 잔고에서 입출금 · 청산 손익을 시간 순으로 더해 감 (스왑은 빠져 약간 다를 수 있음)
+function tradePcts(list) {
+  const r = tBalRep;
+  if (!r || !(r.starting_balance > 0)) return null;
+  const ev = [
+    ...(r.deposits || []).map((f) => ({ t: dt(f.time), a: Math.abs(f.amount) })),
+    ...(r.withdrawals || []).map((f) => ({ t: dt(f.time), a: -Math.abs(f.amount) })),
+    ...list.filter((t) => t.close_time).map((t) => ({ t: dt(t.close_time), a: net(t), id: t.id })),
+  ].sort((a, b) => a.t - b.t || (a.id == null ? -1 : 1));
+  let bal = r.starting_balance;
+  const out = new Map();
+  for (const e of ev) {
+    if (e.id != null && bal > 0) out.set(e.id, { pct: e.a / bal, before: bal });
+    bal += e.a;
+  }
+  return out;
+}
+const pctTxt = (v) => `${v >= 0 ? '+' : ''}${(v * 100).toFixed(Math.abs(v) < 0.001 ? 2 : 1)}%`;
 // 청산 직전 SL/TP·청산 이유 (서버가 청산 때 기록 - 예전 거래는 없음)
 const CLOSE_REASON = { sl: '🛑SL', tp: '🎯TP', manual: '✋직접', auto: '🤖자동', stopout: '💥강제', lock: '🔒잠금', loss_limit: '🧯한도' };
 const CLOSE_REASON_LONG = { sl: 'SL에 걸려 청산', tp: 'TP에 걸려 청산', manual: '직접 청산', auto: 'EA·서버가 청산', stopout: '증거금 부족 강제청산', lock: '잠금 중 진입이라 강제청산', loss_limit: '일일 손실 한도로 청산' };
@@ -1871,9 +1894,13 @@ function renderTrades() {
     groups.get(k).push(t);
   }
   let html = '';
+  const pm = tradePcts(trades);
   for (const [k, items] of groups) {
     const d = tdDate(dt(items[0].open_time)), sum = items.filter((t) => t.close_time).reduce((s, t) => s + net(t), 0);
-    html += `<div class="day" data-day="${k}"><span><b>${k.slice(5)}</b> (${WEEK[d.getDay()]}) · ${items.length}건</span><span class="num ${cls(sum)}">${signed(sum)}</span></div>`;
+    // 그날 합계 % = 그날 첫 청산 직전 잔고 대비
+    const firstC = pm && items.filter((t) => t.close_time && pm.has(t.id)).sort((a, b) => dt(a.close_time) - dt(b.close_time))[0];
+    const dayPct = firstC ? ` <small class="num">${pctTxt(sum / pm.get(firstC.id).before)}</small>` : '';
+    html += `<div class="day" data-day="${k}"><span><b>${k.slice(5)}</b> (${WEEK[d.getDay()]}) · ${items.length}건</span><span class="num ${cls(sum)}">${signed(sum)}${dayPct}</span></div>`;
     for (const t of items) {
       const o = dt(t.open_time), c = dt(t.close_time), n = t.note || {};
       const mr = tNoReasonOnly ? missReason(t) : null;
@@ -1884,7 +1911,7 @@ function renderTrades() {
       html += `<div class="trade${tSel ? (canSel ? (isSel ? ' sel' : '') + (tAnchor === t.id ? ' anchor' : '') : ' nosel') : ''}" data-id="${t.id}">
         <div class="t1">${tSel && canSel ? `<input type="checkbox" class="ck" ${isSel ? 'checked' : ''} tabindex="-1" aria-label="선택">` : ''}<span class="side ${t.position === 'BUY' ? 'buy' : 'sell'}" style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:${t.position === 'BUY' ? 'var(--accent-weak)' : 'var(--bad-weak)'};color:${t.position === 'BUY' ? 'var(--up)' : 'var(--down)'}">${esc(t.position)}</span>
           <span>${esc(t.symbol)}</span><span class="num muted" style="font-weight:400">${fmt(t.volume)} lot</span>${kindOfMagic(t.magic) ? `<span class="gbadge" data-gm="${t.magic}" style="cursor:pointer" title="구간매매 ${GRID_KR[kindOfMagic(t.magic)]} #${t.magic % 100000} - 눌러서 묶음 상세">🧱${GRID_SHORT[kindOfMagic(t.magic)]}</span>` : ''}${t.group_id ? `<span class="grp" data-grp="${t.group_id}" title="묶음 - 눌러서 근거를 한꺼번에">📦${grpCount.get(t.group_id) || ''}</span>` : ch && ch.length > 1 ? `<span class="chain" title="이어서 들어간 거래 묶음">🔗${ch.length}</span>` : ''}${n.time_frame ? `<span class="chip">${TF[n.time_frame] || ''}</span>` : ''}</div>
-        <div class="pl">${c ? `<strong class="num ${cls(t.profit)}">${signed(t.profit)}</strong><small class="num">수수료 ${fmt(t.commission)}</small>` : '<strong class="muted" style="font-size:13px">보유 중</strong>'}</div>
+        <div class="pl">${c ? `<strong class="num ${cls(t.profit)}">${signed(t.profit)}</strong><small class="num">${pm && pm.has(t.id) ? `<span class="${cls(net(t))}" title="청산 직전 잔고 ${fmt(pm.get(t.id).before)} 대비">${pctTxt(pm.get(t.id).pct)}</span> · ` : ''}수수료 ${fmt(t.commission)}</small>` : '<strong class="muted" style="font-size:13px">보유 중</strong>'}</div>
         <div class="t2 num">${dayKey(o) !== k ? dayKey(o).slice(5) + ' ' : ''}${hmOf(o)}${c ? ' → ' + (dayKey(c) !== dayKey(o) ? dayKey(c).slice(5) + ' ' : '') + hmOf(c) : ''} · ${fmt(t.price_open)}${c ? ' → ' + fmt(t.price_close) : ''}${sltpLine(t)}</div>
         ${tags || snip || (t.images || []).length ? `<div class="t3">${tags}${(t.images || []).length ? `<span>📷 ${t.images.length}</span>` : ''}${snip ? `<span class="snip">${esc(snip)}</span>` : ''}</div>` : ''}
       </div>`;
@@ -3376,7 +3403,7 @@ function eqDDHtml(r) {
   const hm = (s) => { const d = new Date(s * 1000); return `${pad2(d.getMonth() + 1)}/${pad2(d.getDate())} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`; };
   const since = `${hm(r.since)} 기록부터`;
   return `<div><small>최대 낙폭 (평가금)</small><span class="num down">${r.pct ? `-${(r.pct * 100).toFixed(1)}%` : fmt(-r.amount)}</span><em>${r.pct ? fmt(-r.amount) + ' · ' : ''}${r.trough_at ? hm(r.peak_at) + ' → ' + hm(r.trough_at) : since}</em></div>
-      <div><small>최대 평가손</small><span class="num down">${fmt(r.float_min)}</span><em>${r.float_min_at ? hm(r.float_min_at) + ' · ' : ''}${since}</em></div>`;
+      <div><small>최대 평가손</small><span class="num down">${r.float_min_pct != null ? `${(r.float_min_pct * 100).toFixed(1)}%` : fmt(r.float_min)}</span><em>${r.float_min_pct != null ? fmt(r.float_min) + ' · ' : ''}${r.float_min_at ? hm(r.float_min_at) + ' · ' : ''}${since}</em></div>`;
 }
 
 function balanceDrawdown(report, ts) {

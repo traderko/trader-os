@@ -323,7 +323,8 @@ def _equity_dd_lines(accs: list[Account], acc: int, d0: date, d1: date) -> list[
         pct = f" ({r['pct'] * 100:.1f}%)" if r.get("pct") else ""
         line = f"{who}평가금 기준 최대 낙폭 -{_m(r['amount'])}{pct}"
         if r["float_min"] < 0:
-            line += f" · 최대 평가손 -{_m(-r['float_min'])} ({hm(r['float_min_at'])})"
+            fp = f" {r['float_min_pct'] * 100:.1f}%" if r.get("float_min_pct") is not None else ""
+            line += f" · 최대 평가손 -{_m(-r['float_min'])}{fp} ({hm(r['float_min_at'])})"
         since = datetime.fromtimestamp(r["since"], KST)
         if since > start + timedelta(hours=1):
             line += f" · {since.strftime('%m/%d %H:%M')} 기록부터"
