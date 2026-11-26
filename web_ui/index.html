@@ -326,6 +326,9 @@
   #tGap[hidden] { display: none; }
   .trade .chain { font-size: 11px; color: var(--accent); font-weight: 600; }
   .trade.anchor { outline: 2px dashed var(--accent); outline-offset: -2px; }
+  .trade.bundle .bn { font-size: 11px; color: var(--accent); font-weight: 600; }
+  .trade.bundle .fold { font-size: 11px; color: var(--muted); width: 10px; display: inline-block; }
+  .trade.sub { padding-left: 30px; background: var(--code); border-left: 3px solid var(--accent-weak); }
   @media (min-width: 900px) { #tSelBar { bottom: 0; } }
   body.tsel { padding-bottom: calc(190px + env(safe-area-inset-bottom)); }
   .simtbl { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 8px; }
@@ -685,7 +688,7 @@
     </div>
   </div>
   <div class="seg" id="tSyms"></div>
-  <div class="seg mini2" id="tOrigin"><button data-o="all" class="on">전체</button><button data-o="manual">✋ 직접 거래</button><button data-o="grid">🧱 구간매매</button><button id="tNoReason" title="진입 근거가 없거나, 청산했는데 청산·손실 근거가 없는 거래만">🏷 근거 없음</button></div>
+  <div class="seg mini2" id="tOrigin"><button data-o="all" class="on">전체</button><button data-o="manual">✋ 직접 거래</button><button data-o="grid">🧱 구간매매</button><button id="tNoReason" title="진입 근거가 없거나, 청산했는데 청산·손실 근거가 없는 거래만">🏷 근거 없음</button><button id="tBundle" title="묶음 거래를 한 줄로 - 📦 직접 묶은 것 · 🧱 구간매매 주문 묶음 · 🔗 같은 종목·방향으로 이어서 들어간 거래 (간격은 거래 선택의 묶음 시간). 누르면 펼침">📦 묶음으로</button></div>
   </div>
   <section class="panel tsumP">
     <div class="tsum">
@@ -1734,6 +1737,7 @@ const hasTagType = (t, ...types) => (t.tags || []).some((g) => types.includes(g.
 const missReason = (t) => ({ entry: !hasTagType(t, 'entry'), exit: !!t.close_time && !hasTagType(t, 'exit', 'loss') });
 const noReason = (t) => { const m = missReason(t); return m.entry || m.exit; };
 let tNoReasonOnly = false;
+let tBundleView = lsGet('traderos:tbundle', '0') === '1', tOpenB = new Set();   // 묶음으로 보기 · 펼친 묶음
 const tShow = (t) => (tSym === 'all' || symKeyOf(t.symbol) === tSym)
   && (tOrigin === 'all' || (tOrigin === 'grid') === !!kindOfMagic(t.magic))
   && (!tNoReasonOnly || noReason(t));
@@ -1760,6 +1764,10 @@ function renderTSyms() {
     `<button data-sym="${s.key}" class="${s.key === tSym ? 'on' : ''}">${s.label}</button>`).join('');
 }
 $('tOrigin').onclick = (e) => {
+  if (e.target.closest('#tBundle')) {
+    tBundleView = !tBundleView; lsSet('traderos:tbundle', tBundleView ? '1' : '0'); $('tBundle').classList.toggle('on', tBundleView);
+    return renderTrades();
+  }
   if (e.target.closest('#tNoReason')) {
     tNoReasonOnly = !tNoReasonOnly; $('tNoReason').classList.toggle('on', tNoReasonOnly);
     return tSel ? tSelChanged() : renderTrades();
@@ -1769,6 +1777,7 @@ $('tOrigin').onclick = (e) => {
   document.querySelectorAll('#tOrigin button[data-o]').forEach((x) => x.classList.toggle('on', x === b));
   renderTrades();
 };
+$('tBundle').classList.toggle('on', tBundleView);
 $('tSyms').onclick = (e) => { const b = e.target.closest('button[data-sym]'); if (!b) return; tSym = b.dataset.sym; renderTSyms(); renderTrades(); };
 $('mPrev').onclick = () => { tYm = tYm.m === 1 ? { y: tYm.y - 1, m: 12 } : { y: tYm.y, m: tYm.m - 1 }; loadTrades(); };
 $('mNext').onclick = () => { tYm = tYm.m === 12 ? { y: tYm.y + 1, m: 1 } : { y: tYm.y, m: tYm.m + 1 }; loadTrades(); };
@@ -1873,6 +1882,64 @@ function sltpLine(t) {
   const r = t.close_reason ? `<span class="why" title="${esc(CLOSE_REASON_LONG[t.close_reason] || t.close_reason)}">${esc(CLOSE_REASON[t.close_reason] || t.close_reason)}</span>` : '';
   return bits.length || r ? ` · <span class="sltp">${bits.join(' · ')}${bits.length && r ? ' ' : ''}${r}</span>` : '';
 }
+function tRow(t, k, pm, extra = '') {
+  const o = dt(t.open_time), c = dt(t.close_time), n = t.note || {};
+  const mr = tNoReasonOnly ? missReason(t) : null;
+  const tags = (t.tags || []).map((g) => `<span class="chip ${esc(g.type)}${g.auto ? ' auto' : ''}"${g.auto ? ' title="차트로 추정한 근거"' : ''}>${esc(g.name)}${g.auto ? ' ·추정' : ''}</span>`).join('')
+    + (mr ? [mr.entry && '진입', mr.exit && '청산'].filter(Boolean).map((x) => `<span class="chip miss">${x} 근거 없음</span>`).join('') : '');
+  const snip = n.entry_reason || n.memo || '';
+  const canSel = !!t.close_time, isSel = tSel && tSel.has(t.id), ch = tChainMap && tChainMap.get(t.id);
+  return `<div class="trade${extra}${tSel ? (canSel ? (isSel ? ' sel' : '') + (tAnchor === t.id ? ' anchor' : '') : ' nosel') : ''}" data-id="${t.id}">
+    <div class="t1">${tSel && canSel ? `<input type="checkbox" class="ck" ${isSel ? 'checked' : ''} tabindex="-1" aria-label="선택">` : ''}<span class="side ${t.position === 'BUY' ? 'buy' : 'sell'}" style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:${t.position === 'BUY' ? 'var(--accent-weak)' : 'var(--bad-weak)'};color:${t.position === 'BUY' ? 'var(--up)' : 'var(--down)'}">${esc(t.position)}</span>
+      <span>${esc(t.symbol)}</span><span class="num muted" style="font-weight:400">${fmt(t.volume)} lot</span>${kindOfMagic(t.magic) ? `<span class="gbadge" data-gm="${t.magic}" style="cursor:pointer" title="구간매매 ${GRID_KR[kindOfMagic(t.magic)]} #${t.magic % 100000} - 눌러서 묶음 상세">🧱${GRID_SHORT[kindOfMagic(t.magic)]}</span>` : ''}${t.group_id ? `<span class="grp" data-grp="${t.group_id}" title="묶음 - 눌러서 근거를 한꺼번에">📦${grpCount.get(t.group_id) || ''}</span>` : ch && ch.length > 1 ? `<span class="chain" title="이어서 들어간 거래 묶음">🔗${ch.length}</span>` : ''}${n.time_frame ? `<span class="chip">${TF[n.time_frame] || ''}</span>` : ''}</div>
+    <div class="pl">${c ? `<strong class="num ${cls(t.profit)}">${signed(t.profit)}</strong><small class="num">${pm && pm.has(t.id) ? `<span class="${cls(net(t))}" title="청산 직전 잔고 ${fmt(pm.get(t.id).before)} 대비">${pctTxt(pm.get(t.id).pct)}</span> · ` : ''}수수료 ${fmt(t.commission)}</small>` : '<strong class="muted" style="font-size:13px">보유 중</strong>'}</div>
+    <div class="t2 num">${dayKey(o) !== k ? dayKey(o).slice(5) + ' ' : ''}${hmOf(o)}${c ? ' → ' + (dayKey(c) !== dayKey(o) ? dayKey(c).slice(5) + ' ' : '') + hmOf(c) : ''} · ${fmt(t.price_open)}${c ? ' → ' + fmt(t.price_close) : ''}${sltpLine(t)}</div>
+    ${tags || snip || (t.images || []).length ? `<div class="t3">${tags}${(t.images || []).length ? `<span>📷 ${t.images.length}</span>` : ''}${snip ? `<span class="snip">${esc(snip)}</span>` : ''}</div>` : ''}
+  </div>`;
+}
+// 묶음으로 보기: 📦 직접 묶음(group_id) → 🧱 구간매매(magic) · 🔗 이어서 들어간 거래(tChains, 간격 tGap) 순으로 한 묶음
+//   2건 이상이면 한 줄 (합계 손익 · 첫 청산 직전 잔고 대비 % · 랏 가중 평균 진입가 → 청산가), 누르면 펼침
+function tBundleKeyMap() {
+  const ch = tChains(), map = new Map();
+  for (const t of trades) {
+    if (t.group_id) map.set(t.id, 'p' + t.group_id);
+    else { const g = ch.get(t.id); map.set(t.id, g && g.length > 1 ? 'c' + g[0].id : 't' + t.id); }
+  }
+  return map;
+}
+function tBundleRows(items, k, km, pm) {
+  const seen = new Map(), order = [];
+  for (const t of items) {
+    const key = km.get(t.id) || 't' + t.id;
+    if (!seen.has(key)) { seen.set(key, []); order.push(key); }
+    seen.get(key).push(t);
+  }
+  return order.map((key) => {
+    const g = seen.get(key).sort((a, b) => dt(a.open_time) - dt(b.open_time));
+    if (g.length === 1) return tRow(g[0], k, pm);
+    const closed = g.filter((t) => t.close_time), open = g.length - closed.length;
+    const vol = g.reduce((a, t) => a + (t.volume || 0), 0), sum = closed.reduce((a, t) => a + net(t), 0);
+    const fee = g.reduce((a, t) => a + (t.commission || 0), 0);
+    const wavg = (arr, f) => { const v = arr.reduce((a, t) => a + (t.volume || 0), 0); return v ? arr.reduce((a, t) => a + f(t) * (t.volume || 0), 0) / v : null; };
+    const ao = wavg(g, (t) => t.price_open), ac = closed.length ? wavg(closed, (t) => t.price_close) : null;
+    const first = pm && closed.filter((t) => pm.has(t.id)).sort((a, b) => dt(a.close_time) - dt(b.close_time))[0];
+    const b0 = first ? pm.get(first.id).before : 0;
+    const pc = b0 > 0 ? `<span class="${cls(sum)}" title="첫 청산 직전 잔고 ${fmt(b0)} 대비">${pctTxt(sum / b0)}</span> · ` : '';
+    const o = dt(g[0].open_time), lastC = closed.length ? new Date(Math.max(...closed.map((t) => +dt(t.close_time)))) : null;
+    const sides = [...new Set(g.map((t) => t.position))], syms = [...new Set(g.map((t) => t.symbol))];
+    const wins = closed.filter((t) => net(t) > 0).length;
+    const icon = key[0] === 'p' ? '📦' : kindOfMagic(g[0].magic) ? '🧱' : '🔗';
+    const isOpen = tOpenB.has(key);
+    const side = sides.length === 1 ? sides[0] : 'BUY/SELL';
+    const head = `<div class="trade bundle" data-bundle="${key}">
+      <div class="t1"><span class="fold">${isOpen ? '▾' : '▸'}</span><span class="side" style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:${side === 'SELL' ? 'var(--bad-weak)' : 'var(--accent-weak)'};color:${side === 'SELL' ? 'var(--down)' : 'var(--up)'}">${esc(side)}</span>
+        <span>${esc(syms.join(', '))}</span><span class="num muted" style="font-weight:400">${fmt(vol)} lot</span><span class="bn">${icon} ${g.length}건${closed.length ? ` · 승 ${wins}` : ''}${open ? ` · 보유 ${open}` : ''}</span></div>
+      <div class="pl">${closed.length ? `<strong class="num ${cls(sum)}">${signed(sum)}</strong><small class="num">${pc}수수료 ${fmt(fee)}</small>` : '<strong class="muted" style="font-size:13px">보유 중</strong>'}</div>
+      <div class="t2 num">${dayKey(o) !== k ? dayKey(o).slice(5) + ' ' : ''}${hmOf(o)}${lastC ? ' → ' + (dayKey(lastC) !== dayKey(o) ? dayKey(lastC).slice(5) + ' ' : '') + hmOf(lastC) : ''} · 평균 ${fmt(ao)}${ac != null ? ' → ' + fmt(ac) : ''}</div>
+    </div>`;
+    return head + (isOpen ? g.map((t) => tRow(t, k, pm, ' sub')).join('') : '');
+  }).join('');
+}
 function renderTrades() {
   grpCount = new Map(); for (const t of trades) if (t.group_id) grpCount.set(t.group_id, (grpCount.get(t.group_id) || 0) + 1);
   const list = trades.filter(tShow)
@@ -1887,35 +1954,26 @@ function renderTrades() {
   if (!list.length) { $('tList').innerHTML = '<div class="empty">이 달 거래가 없습니다.</div>'; return; }
   tChainMap = tSel && tPick === 'chain' ? tChains() : null;
 
+  const bundled = tBundleView && !tSel, km = bundled ? tBundleKeyMap() : null, bStart = new Map();
+  if (bundled) for (const t of list) {         // 묶음은 첫 진입한 날 아래에 통째로 (날을 넘겨도 쪼개지 않음)
+    const key = km.get(t.id), o = +dt(t.open_time);
+    if (!bStart.has(key) || o < bStart.get(key)) bStart.set(key, o);
+  }
   const groups = new Map();
   for (const t of list) {
-    const k = dayKey(tdDate(dt(t.open_time)));
+    const k = dayKey(tdDate(bundled ? new Date(bStart.get(km.get(t.id))) : dt(t.open_time)));
     if (!groups.has(k)) groups.set(k, []);
     groups.get(k).push(t);
   }
   let html = '';
   const pm = tradePcts(trades);
-  for (const [k, items] of groups) {
-    const d = tdDate(dt(items[0].open_time)), sum = items.filter((t) => t.close_time).reduce((s, t) => s + net(t), 0);
+  for (const [k, items] of [...groups].sort((a, b) => a[0] < b[0] ? 1 : a[0] > b[0] ? -1 : 0)) {
+    const d = new Date(+k.slice(0, 4), +k.slice(5, 7) - 1, +k.slice(8)), sum = items.filter((t) => t.close_time).reduce((s, t) => s + net(t), 0);
     // 그날 합계 % = 그날 첫 청산 직전 잔고 대비
     const firstC = pm && items.filter((t) => t.close_time && pm.has(t.id)).sort((a, b) => dt(a.close_time) - dt(b.close_time))[0];
     const dayPct = firstC ? ` <small class="num">${pctTxt(sum / pm.get(firstC.id).before)}</small>` : '';
     html += `<div class="day" data-day="${k}"><span><b>${k.slice(5)}</b> (${WEEK[d.getDay()]}) · ${items.length}건</span><span class="num ${cls(sum)}">${signed(sum)}${dayPct}</span></div>`;
-    for (const t of items) {
-      const o = dt(t.open_time), c = dt(t.close_time), n = t.note || {};
-      const mr = tNoReasonOnly ? missReason(t) : null;
-      const tags = (t.tags || []).map((g) => `<span class="chip ${esc(g.type)}${g.auto ? ' auto' : ''}"${g.auto ? ' title="차트로 추정한 근거"' : ''}>${esc(g.name)}${g.auto ? ' ·추정' : ''}</span>`).join('')
-        + (mr ? [mr.entry && '진입', mr.exit && '청산'].filter(Boolean).map((x) => `<span class="chip miss">${x} 근거 없음</span>`).join('') : '');
-      const snip = n.entry_reason || n.memo || '';
-      const canSel = !!t.close_time, isSel = tSel && tSel.has(t.id), ch = tChainMap && tChainMap.get(t.id);
-      html += `<div class="trade${tSel ? (canSel ? (isSel ? ' sel' : '') + (tAnchor === t.id ? ' anchor' : '') : ' nosel') : ''}" data-id="${t.id}">
-        <div class="t1">${tSel && canSel ? `<input type="checkbox" class="ck" ${isSel ? 'checked' : ''} tabindex="-1" aria-label="선택">` : ''}<span class="side ${t.position === 'BUY' ? 'buy' : 'sell'}" style="font-size:11px;font-weight:700;padding:1px 6px;border-radius:5px;background:${t.position === 'BUY' ? 'var(--accent-weak)' : 'var(--bad-weak)'};color:${t.position === 'BUY' ? 'var(--up)' : 'var(--down)'}">${esc(t.position)}</span>
-          <span>${esc(t.symbol)}</span><span class="num muted" style="font-weight:400">${fmt(t.volume)} lot</span>${kindOfMagic(t.magic) ? `<span class="gbadge" data-gm="${t.magic}" style="cursor:pointer" title="구간매매 ${GRID_KR[kindOfMagic(t.magic)]} #${t.magic % 100000} - 눌러서 묶음 상세">🧱${GRID_SHORT[kindOfMagic(t.magic)]}</span>` : ''}${t.group_id ? `<span class="grp" data-grp="${t.group_id}" title="묶음 - 눌러서 근거를 한꺼번에">📦${grpCount.get(t.group_id) || ''}</span>` : ch && ch.length > 1 ? `<span class="chain" title="이어서 들어간 거래 묶음">🔗${ch.length}</span>` : ''}${n.time_frame ? `<span class="chip">${TF[n.time_frame] || ''}</span>` : ''}</div>
-        <div class="pl">${c ? `<strong class="num ${cls(t.profit)}">${signed(t.profit)}</strong><small class="num">${pm && pm.has(t.id) ? `<span class="${cls(net(t))}" title="청산 직전 잔고 ${fmt(pm.get(t.id).before)} 대비">${pctTxt(pm.get(t.id).pct)}</span> · ` : ''}수수료 ${fmt(t.commission)}</small>` : '<strong class="muted" style="font-size:13px">보유 중</strong>'}</div>
-        <div class="t2 num">${dayKey(o) !== k ? dayKey(o).slice(5) + ' ' : ''}${hmOf(o)}${c ? ' → ' + (dayKey(c) !== dayKey(o) ? dayKey(c).slice(5) + ' ' : '') + hmOf(c) : ''} · ${fmt(t.price_open)}${c ? ' → ' + fmt(t.price_close) : ''}${sltpLine(t)}</div>
-        ${tags || snip || (t.images || []).length ? `<div class="t3">${tags}${(t.images || []).length ? `<span>📷 ${t.images.length}</span>` : ''}${snip ? `<span class="snip">${esc(snip)}</span>` : ''}</div>` : ''}
-      </div>`;
-    }
+    html += bundled ? tBundleRows(items, k, km, pm) : items.map((t) => tRow(t, k, pm)).join('');
   }
   $('tList').innerHTML = html;
 }
@@ -1950,6 +2008,8 @@ $('tList').onclick = (e) => {
     } else tSel.has(t.id) ? tSel.delete(t.id) : tSel.set(t.id, t);
     return tSelChanged();
   }
+  const bd = e.target.closest('.trade.bundle');
+  if (bd) { const key = bd.dataset.bundle; tOpenB.has(key) ? tOpenB.delete(key) : tOpenB.add(key); return renderTrades(); }
   const r = e.target.closest('.trade'); if (r) openDetail(Number(r.dataset.id));
 };
 

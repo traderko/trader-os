@@ -410,7 +410,7 @@ async def _group_message(db: AsyncSession, account_id: int, account_number: str,
     wins, losses = sum(1 for x in nets if x > 0), sum(1 for x in nets if x < 0)
     icon, word = ("✅", "익절") if net > 0 else ("🔴", "손절") if net < 0 else ("⚪", "본전")
     mix = f" · 익절 {wins} 손절 {losses}" if wins and losses else ""
-    title = f"{gtag}{icon} {word} · {symbol} {side} {vol:g}lot ({n}건{mix})  {net:+,.2f}"
+    title = f"{gtag}{icon} {word} · {symbol} {side} {vol:g}lot ({n}건{mix})  {net:+,.2f}{await _close_pct(account_id, net)}"
     opened = [(tr, d, t) for tr, d, t in trades if tr and tr.price_open is not None]
     lines = []
     if opened:
@@ -573,7 +573,7 @@ async def _trade_message(db: AsyncSession, account_id: int, account_number: str,
            가격 4,010.25 · 22:15
            SL 3,990.00 · TP 4,050.00
            같은 종목 보유: BUY 1.5lot @4,005.10 (3개)
-    청산:  ✅ 익절 · XAUUSD+ BUY 0.5lot  +512.50
+    청산:  ✅ 익절 · XAUUSD+ BUY 0.5lot  +512.50 (+1.25%)   ← 청산 직전 잔고 대비
            4,000.00 → 4,010.25 (+10.25) · 보유 45분
            손익 +516.00 · 수수료 -3.50
            오늘 누적 +1,230.00 (5건 · 승 4)
@@ -626,7 +626,7 @@ async def _trade_message(db: AsyncSession, account_id: int, account_number: str,
     fee = trade.commission if trade.commission is not None else data.commission   # 진입+청산 수수료 합
     net = (data.profit or 0) + (fee or 0)
     icon, word = ("✅", "익절") if net > 0 else ("🔴", "손절") if net < 0 else ("⚪", "본전")
-    title = f"{tag}{icon} {word} · {data.symbol} {side} {data.volume:g}lot  {net:+,.2f}"
+    title = f"{tag}{icon} {word} · {data.symbol} {side} {data.volume:g}lot  {net:+,.2f}{await _close_pct(account_id, net)}"
     lines = []
     if trade.price_open is not None:
         move = (data.price - trade.price_open) if side == "BUY" else (trade.price_open - data.price)
@@ -659,6 +659,17 @@ async def _trade_message(db: AsyncSession, account_id: int, account_number: str,
         lines.append("남은 포지션: " + _side_summary(remain))
     tag_row = _tag_button("c", [trade.id] if trade is not None else [])
     return title, "\n".join(lines), ([tag_row] if tag_row else None)
+
+
+async def _close_pct(account_id: int, net: float) -> str:
+    """청산 알림 손익 옆 % - 청산 직전 잔고(지금 잔고 - 이번 손익) 대비. 잔고를 못 읽으면 빈 문자열"""
+    import asyncio
+    try:
+        info = await asyncio.wait_for(worker_get(account_id, "/account-info"), 3)
+        base = float(info.get("balance") or 0) - net
+    except Exception:
+        return ""
+    return f" ({net / base * 100:+.2f}%)" if base > 0 else ""
 
 
 def _tag_button(kind: str, ids: list[int]) -> list[dict] | None:
@@ -860,4 +871,4 @@ async def get_trades(
     trade = result.scalar_one_or_none()
     if trade is None:
         raise HTTPException(404, f"trade not found: {trade_id}")
-    return _trade_json(trade)
+    return _trade_json(trade)

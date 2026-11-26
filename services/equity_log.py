@@ -1,4 +1,5 @@
-"""평가금 기록 - 계좌마다 1분에 한 줄 (잔고 · 평가금 마지막/최저/최고 · 증거금) → 평가금 기준 최대 낙폭
+"""평가금 기록 - 계좌마다 1분에 한 줄 (잔고 · 평가금 마지막/최저/최고 · 증거금 · 평가손익 %) → 평가금 기준 최대 낙폭
+   평가손익 % = (평가금 - 잔고) ÷ 잔고 × 100 - pct(마지막) · pct_min(최저) · pct_max(최고)
 
 왜: 통계의 최대 낙폭은 청산된 거래로만 셈 - 들고 있다가 크게 마이너스였다가 살아나서 청산한 건 안 잡힘.
     MT5 는 지난 평가금을 알려주지 않아서 TraderOS 가 직접 적어 둠 (기록을 시작한 뒤부터만 볼 수 있음)
@@ -45,6 +46,16 @@ def _db() -> sqlite3.Connection:
             PRIMARY KEY (account_id, ts))""")
         _conn.execute("""CREATE TABLE IF NOT EXISTS flows (
             account_id INTEGER, ticket INTEGER, ts INTEGER, amount REAL, PRIMARY KEY (account_id, ticket))""")
+        # 평가손익 % (잔고 대비) - 그 분의 마지막 · 최저 · 최고 평가금으로. 예전 기록은 처음 열 때 한 번 채움
+        cols = {r[1] for r in _conn.execute("PRAGMA table_info(equity)")}
+        if "pct" not in cols:
+            for c in ("pct", "pct_min", "pct_max"):
+                _conn.execute(f"ALTER TABLE equity ADD COLUMN {c} REAL")
+            _conn.execute("""UPDATE equity SET
+                pct = ROUND((equity - balance) / balance * 100, 4),
+                pct_min = ROUND((COALESCE(equity_min, equity) - balance) / balance * 100, 4),
+                pct_max = ROUND((COALESCE(equity_max, equity) - balance) / balance * 100, 4)
+                WHERE balance > 0""")
         _conn.commit()
     return _conn
 
@@ -52,13 +63,22 @@ def _db() -> sqlite3.Connection:
 def _write(rows: list[tuple]) -> None:
     with _lock:
         c = _db()
-        c.executemany("INSERT OR REPLACE INTO equity VALUES (?,?,?,?,?,?,?)", rows)
+        c.executemany("""INSERT OR REPLACE INTO equity
+            (account_id, ts, balance, equity, equity_min, equity_max, margin, pct, pct_min, pct_max)
+            VALUES (?,?,?,?,?,?,?,?,?,?)""", rows)
         c.commit()
+
+
+def _pct(eq: float, bal: float) -> float | None:
+    """평가손익 % (잔고 대비) - 잔고가 0 이하면 None"""
+    return round((eq - bal) / bal * 100, 4) if bal > 0 else None
 
 
 def _flush(aid: int, b: dict) -> None:
     try:
-        _write([(aid, b["ts"], b["bal"], b["eq"], b["lo"], b["hi"], b["margin"])])
+        bal = b["bal"]
+        _write([(aid, b["ts"], bal, b["eq"], b["lo"], b["hi"], b["margin"],
+                 _pct(b["eq"], bal), _pct(b["lo"], bal), _pct(b["hi"], bal))])
     except Exception as e:
         print(f"[equity_log] 저장 실패: {e}")
     prev = _last_bal.get(aid)
