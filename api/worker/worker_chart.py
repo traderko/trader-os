@@ -134,3 +134,24 @@ async def get_close_reasons(request: Request, from_ts: str, to_ts: str, is_kst: 
         return out
 
     return await asyncio.to_thread(run)
+
+
+@router.get("/ticks")
+async def get_ticks(request: Request, symbols: str):
+    """종목들의 마지막 시세 {종목: {time(UTC epoch 초), bid, ask}} - 시세 멈춤 · 재개 감지용 (services/market_watch.py)
+    symbols: 쉼표로 구분. 못 찾은 종목은 빠짐"""
+    mt5 = getattr(request.app.state, "mt5", None)
+    if mt5 is None:
+        raise HTTPException(503, "MT5 연결 안 됨")
+
+    def run():
+        out = {}
+        for s in [x.strip() for x in symbols.split(",") if x.strip()][:50]:
+            mt5.symbol_select(s, True)
+            t = mt5.symbol_info_tick(s)
+            if t is None or not t.time:
+                continue
+            out[s] = {"time": int(_broker_epoch_to_utc(t.time).timestamp()), "bid": float(t.bid), "ask": float(t.ask)}
+        return out
+
+    return await asyncio.to_thread(run)

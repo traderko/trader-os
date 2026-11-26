@@ -444,6 +444,9 @@ async def lifespan(app: FastAPI):
     # 10) 거래별 청산 직전 잔고 미리 채우기 - 웹 거래내역 손익 % (services/trade_balance.py)
     from services import trade_balance
     balance_task = asyncio.create_task(trade_balance.loop())
+    # 11) 휴장 · 조기 종료 · 시세 멈춤 알림 (services/market_watch.py)
+    from services import market_watch
+    market_task = asyncio.create_task(market_watch.loop())
  
     yield
  
@@ -455,6 +458,7 @@ async def lifespan(app: FastAPI):
     reason_task.cancel()
     equity_task.cancel()
     balance_task.cancel()
+    market_task.cancel()
     await admin_app.stop_admin_server(admin_server, admin_task)
     watchdog_task.cancel()
     
@@ -500,6 +504,8 @@ app.include_router(account_router.router)
 app.include_router(grid_router.router)
 from api import analysis_router as _analysis_router  # 거래 분석 (웹 '분석' 탭) - MAE·MFE · 증거금 사용률
 app.include_router(_analysis_router.router)
+from api import market_router as _market_router      # 거래 시간 (SessionReporter EA → 휴장 · 조기 종료 알림)
+app.include_router(_market_router.router)
 app.include_router(rates.router)
 from api import hook_router as _hook_router      # 폰 알림 받기 (토스뱅크 잔액) - /hook/bank
 app.include_router(_hook_router.router)
