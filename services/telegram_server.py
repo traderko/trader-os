@@ -1,6 +1,6 @@
 """텔레그램 /서버 (/server) - TraderOS 가 도는 PC 사양 · 상태
 
-CPU(이름 · 코어 · 사용률) · 램 · 저장공간(TraderOS 가 있는 드라이브) · OS · 켜진 지 · IP(내부 · Tailscale · 외부) ·
+CPU(이름 · 코어 · 사용률 · 많이 쓰는 프로그램 상위 5개) · 램 · 저장공간(TraderOS 가 있는 드라이브) · OS · 켜진 지 · IP(내부 · Tailscale · 외부) ·
 TraderOS 버전 · 파이썬 · 이 프로그램이 쓰는 메모리 · MT5 개수. 등록된 대화에서만 (telegram_live 가 확인)
 """
 from __future__ import annotations
@@ -53,6 +53,44 @@ async def _public_ip() -> str:
         return "확인 못 함"
 
 
+def _label(p) -> str:
+    """프로세스 이름 - 파이썬은 TraderOS 본체 · 워커를 구분"""
+    name = (p.info.get("name") or "?").removesuffix(".exe")
+    if name.lower().startswith("python"):
+        cmd = " ".join(p.info.get("cmdline") or []).lower()
+        if "worker" in cmd:
+            return "워커"
+        if "main" in cmd or "uvicorn" in cmd:
+            return "TraderOS"
+    return {"terminal64": "MT5", "claude": "Claude"}.get(name.lower(), name)
+
+
+def _measure() -> tuple[float, list[tuple[str, float]]]:
+    """1초 동안 전체 CPU % 와 많이 쓰는 프로그램 (같은 이름은 합침, 전체 대비 %)"""
+    import psutil
+    procs = []
+    for p in psutil.process_iter(["name", "cmdline"]):
+        try:
+            p.cpu_percent(None)
+            procs.append(p)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            pass
+    total = psutil.cpu_percent(1.0)
+    n = psutil.cpu_count() or 1
+    use: dict[str, float] = {}
+    for p in procs:
+        try:
+            if p.pid == 0 or (p.info.get("name") or "").lower().startswith("system idle"):
+                continue
+            v = p.cpu_percent(None) / n
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+        if v >= 0.5:
+            k = _label(p)
+            use[k] = use.get(k, 0) + v
+    return total, sorted(use.items(), key=lambda x: -x[1])[:5]
+
+
 def _uptime(sec: float) -> str:
     d, r = divmod(int(sec), 86400)
     h, r = divmod(r, 3600)
@@ -62,7 +100,7 @@ def _uptime(sec: float) -> str:
 async def text() -> str:
     import psutil
     from services.updater import version_label
-    cpu_pct = await asyncio.to_thread(psutil.cpu_percent, 1.0)        # 1초 재서 사용률
+    cpu_pct, top = await asyncio.to_thread(_measure)                  # 1초 재서 사용률 · 많이 쓰는 프로그램
     vm = psutil.virtual_memory()
     base = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
     du = psutil.disk_usage(os.path.splitdrive(base)[0] + os.sep if sys.platform == "win32" else "/")
@@ -81,6 +119,7 @@ async def text() -> str:
         f"<b>CPU</b> {html.escape(_cpu_name())}",
         f"   {psutil.cpu_count(logical=False) or '?'}코어 {psutil.cpu_count()}스레드"
         + (f" · {freq.current / 1000:.1f}GHz" if freq and freq.current else "") + f" · 사용 {cpu_pct:.0f}%",
+        ("   많이 쓰는 것: " + " · ".join(f"{html.escape(k)} {v:.0f}%" if v >= 1 else f"{html.escape(k)} {v:.1f}%" for k, v in top) if top else "   많이 쓰는 것: -"),
         f"<b>램</b> {_gb(vm.used)} / {_gb(vm.total)} ({vm.percent:.0f}%) · 남음 {_gb(vm.available)}",
         f"<b>저장공간</b> {os.path.splitdrive(base)[0] or '/'} {_gb(du.used)} / {_gb(du.total)} ({du.percent:.0f}%) · 남음 {_gb(du.free)}",
         f"<b>OS</b> {html.escape(platform.system())} {html.escape(platform.release())} ({html.escape(platform.version())}) · {html.escape(platform.machine())}",
