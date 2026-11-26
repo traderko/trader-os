@@ -1,4 +1,4 @@
-"""텔레그램 /지침 (/guide) - 지침 목록 · 중요도(★1~5) 바꾸기
+"""텔레그램 /지침 (/guide) - 지침 목록 · 중요도(★1~5) 바꾸기 · /무작위 (/random) 지침 하나 뽑아 보기
 
 문구 버튼을 누를 때마다 ★ 가 하나씩 올라감 (★5 다음은 ★1). 바로 저장 (관리 화면 지침 탭과 같은 설정)
 ★ 가 많을수록 '무작위 지침' · '그날 첫 진입'에서 자주 나옴 (services/guidelines.py item_weight)
@@ -38,6 +38,7 @@ def _view(page: int = 0) -> tuple[str, dict]:
         lines.append(f"{_stars(w)} {pct}% · {html.escape(t)}")
         short = t if len(t) <= 22 else t[:21] + "…"
         kb.append([{"text": f"{_stars(w)} {short}", "callback_data": f"gd:t:{i}:{page}"}])
+    kb.insert(0, [{"text": "🎲 무작위로 하나 보기", "callback_data": "gd:r"}])
     nav = []
     if page > 0:
         nav.append({"text": "◀", "callback_data": f"gd:p:{page - 1}"})
@@ -50,6 +51,21 @@ def _view(page: int = 0) -> tuple[str, dict]:
 
 async def cmd(live, client, token, cid: str, arg: str = "") -> None:
     text, kb = _view(0)
+    await live._send(client, token, cid, text, reply_markup=kb)
+
+
+def _random_view() -> tuple[str, dict]:
+    """지침 하나 - 중요도(★)가 높을수록 자주 (무작위 지침 알림과 같은 순서를 씀)"""
+    from services.guidelines import _pick_items
+    pick = _pick_items(1)
+    if not pick:
+        return "📌 지침 목록이 비어 있습니다. 관리 화면 '지침' 탭에서 넣어 주세요.", {"inline_keyboard": []}
+    return (f"📌 <b>지침</b>\n\n□ {html.escape(pick[0])}",
+            {"inline_keyboard": [[{"text": "🎲 하나 더", "callback_data": "gd:r"}, {"text": "📋 목록 · 중요도", "callback_data": "gd:p:0"}]]})
+
+
+async def cmd_random(live, client, token, cid: str, arg: str = "") -> None:
+    text, kb = _random_view()
     await live._send(client, token, cid, text, reply_markup=kb)
 
 
@@ -71,7 +87,10 @@ async def button(live, client, token, cid: str, data: str, message_id) -> str:
             ans = f"{_stars(nw)} 저장"
     elif len(p) >= 3 and p[1] == "p":
         page = int(p[2])
-    text, kb = _view(page)
+    if len(p) >= 2 and p[1] == "r":                # 무작위로 하나 (메시지를 바꿔서 보여줌)
+        text, kb = _random_view()
+    else:
+        text, kb = _view(page)
     r = await live._call(client, token, "editMessageText", chat_id=cid, message_id=message_id,
                          text=text, parse_mode="HTML", reply_markup=kb) if message_id else {}
     if not (r.get("ok") or "not modified" in str(r.get("description", ""))):
