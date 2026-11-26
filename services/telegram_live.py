@@ -1372,6 +1372,9 @@ class TelegramLive:
                 elif mine and (text.startswith("/출금") or text.startswith("/withdraw")):
                     from services import withdraw_notice
                     await withdraw_notice.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                elif mine and (text.startswith("/서버") or text.startswith("/server")):
+                    from services import telegram_server
+                    await telegram_server.cmd(self, client, token, cid)
                 elif mine and (text.startswith("/무작위") or text.startswith("/random")):
                     from services import telegram_guides
                     await telegram_guides.cmd_random(self, client, token, cid)
@@ -1631,6 +1634,7 @@ class TelegramLive:
                             {"command": "accounts", "description": "계좌 목록 · 기본 계좌(★) 바꾸기 (/계좌)"},
                             {"command": "guide", "description": "지침 중요도(★1~5) 바꾸기 (/지침)"},
                             {"command": "random", "description": "지침 하나 무작위로 보기 (/무작위)"},
+                            {"command": "server", "description": "서버 PC 사양 · 상태 (CPU · 램 · 저장공간 · IP) (/서버)"},
                             {"command": "bob", "description": "돌파캔들(BOB) 알림 - 반대 포지션 경고 · 시간봉 켜기·끄기"},
                             {"command": "wallet", "description": "바이낸스 · 개인 지갑 잔고 (/잔고 · /잔고 추가 네트워크 주소 이름)"},
                             {"command": "withdraw", "description": "출금 가능액 + 출금 페이지 (/출금 · /출금 알림 30)"},
