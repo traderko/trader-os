@@ -7,7 +7,8 @@
 // 이 EA가 10분마다 시장 감시 창 종목 · 보유 종목의 앞으로 3일 거래 시간을 읽어
 // 서버(/market/sessions)로 보내면, 서버(services/market_watch.py)가 평소와 다른 종료를 찾아
 // 보유 중일 때 텔레그램으로 미리 알려 줌.
-// 이 계좌의 MT5 아무 차트에 한 번 붙여 두면 됨 (TradeLock EA와 같은 차트도 됨 - 서로 상관없음).
+// 이 계좌의 MT5에 차트를 하나 새로 열어(파일 → 새 차트) 거기에 한 번 붙여 두면 됨.
+// MT5는 차트 하나에 EA 하나만 붙으므로 TradeLock EA가 붙은 차트에는 붙이지 말 것 (TradeLock이 빠짐).
 #property strict
 #define EA_VERSION "1.0.0"
 #property version   "1.00"

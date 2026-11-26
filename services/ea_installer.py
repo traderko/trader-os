@@ -589,3 +589,104 @@ def close_terminal(proc, timeout: float = 30) -> bool:
             return True
         except Exception:
             return False
+
+
+# ── SessionReporter EA 자동으로 붙이기 ─────────────────────────────
+# config.ini [StartUp] 으로는 EA를 하나(tradeLock)만 붙일 수 있어서, SessionReporter(거래 시간 알림, 주문 기능 없음)는
+# MT5 프로필에 'SessionReporter 가 붙은 차트' 파일을 넣어 둔다 → MT5가 켜질 때 그 차트를 열면서 EA도 붙음.
+# 차트 파일 형식은 MT5가 실제로 저장한 파일(tradeLock 차트)을 본떴다:
+#   <chart> 기본 설정 … windows_total=1 / <expert> name · path · expertmode · <inputs> / <window> <indicator> Main
+# 터미널이 꺼져 있을 때만 (켜져 있으면 끌 때 MT5가 프로필을 덮어씀). 이미 SessionReporter 차트가 있으면 아무것도 안 함
+# (사용자가 직접 붙였거나 전에 넣은 것 - 한 번 붙으면 MT5가 프로필에 계속 저장함).
+# 서버의 차트 정리(remove_ea_charts)는 tradeLock 차트만 지우므로 이 차트는 남는다.
+SESSION_EA = "sessionReporter"
+
+
+def _preset_inputs(data_dir: str, terminal_dir: str | None) -> dict[str, str]:
+    """tradeLock 시작 설정의 프리셋(.set)에서 서버 주소 · API 키 (없으면 빈 dict)"""
+    if not terminal_dir:
+        return {}
+    name = (_read_ini(os.path.join(terminal_dir, "config.ini")).get("startup", {}).get("expertparameters") or "").strip()
+    if not name:
+        return {}
+    for folder in (os.path.join(data_dir, "MQL5", "Presets"), os.path.join(terminal_dir, "MQL5", "presets")):
+        try:
+            text = _decode(open(os.path.join(folder, name), "rb").read())
+        except OSError:
+            continue
+        out = {}
+        for line in text.splitlines():
+            k, _, v = line.partition("=")
+            if k.strip() in ("InpServerUrl", "InpApiKey"):
+                out[k.strip()] = v.split("||")[0].strip()
+        return out
+    return {}
+
+
+def _session_chart_text(symbol: str, inputs: dict[str, str]) -> str:
+    chart_id = int(time.time() * 1000) % 10 ** 14
+    lines = [
+        "<chart>", f"id={chart_id}", f"symbol={symbol}", "period_type=1", "period_size=1",
+        "scale=8", "mode=1", "fore=0", "grid=1", "volume=0", "scroll=1", "shift=0", "ohlc=0",
+        "bidline=1", "tradelines=0", "tradehistory=0", "windows_total=1",
+        "",
+        "<expert>", f"name={SESSION_EA}", f"path=Experts\\{SESSION_EA}.ex5", "expertmode=1",
+        "<inputs>",
+        f"InpServerUrl={inputs.get('InpServerUrl') or 'http://127.0.0.1:8000'}",
+        f"InpApiKey={inputs.get('InpApiKey') or ''}",
+        "InpEverySec=600", "InpDays=3",
+        "</inputs>", "</expert>",
+        "",
+        "<window>", "height=100.000000", "objects=0", "",
+        "<indicator>", "name=Main", "path=", "apply=1", "show_data=1", "scale_inherit=0", "scale_line=0",
+        "scale_line_percent=50", "scale_line_value=0.000000", "scale_fix_min=0", "scale_fix_min_val=0.000000",
+        "scale_fix_max=0", "scale_fix_max_val=0.000000", "expertmode=0", "fixed_height=-1",
+        "</indicator>", "</window>", "</chart>", "",
+    ]
+    return "\r\n".join(lines)
+
+
+def has_session_chart(data_dir: str) -> bool:
+    profile = _read_ini(os.path.join(data_dir, "config", "common.ini")).get("charts", {}).get("profilelast") or "Default"
+    folder = os.path.join(data_dir, "MQL5", "Profiles", "Charts", profile)
+    for chr_path in glob.glob(os.path.join(folder, "*.chr")):
+        try:
+            text = _decode(open(chr_path, "rb").read())
+        except OSError:
+            continue
+        for block in re.findall(r"<expert>(.*?)</expert>", text, flags=re.S | re.I):
+            m = re.search(r"^\s*name\s*=\s*(.+?)\s*$", block, flags=re.M | re.I)
+            if m and m.group(1).lower() == SESSION_EA.lower():
+                return True
+    return False
+
+
+def ensure_session_chart(data_dir: str, terminal_dir: str | None = None) -> str | None:
+    """터미널이 꺼져 있을 때 호출. 프로필에 SessionReporter 차트가 없으면 하나 넣음. 넣은 파일 이름 (안 넣었으면 None)"""
+    if not os.path.isfile(os.path.join(data_dir, "MQL5", "Experts", SESSION_EA + ".ex5")):
+        return None                                   # 아직 컴파일 · 복사 전
+    if has_session_chart(data_dir):
+        return None
+    st = _read_ini(os.path.join(terminal_dir, "config.ini")).get("startup", {}) if terminal_dir else {}
+    symbol = (st.get("symbol") or "").strip()
+    if not symbol:
+        return None                                   # 시작 차트 종목을 모르면 넣지 않음 (없는 종목 차트가 되지 않게)
+    profile = _read_ini(os.path.join(data_dir, "config", "common.ini")).get("charts", {}).get("profilelast") or "Default"
+    folder = os.path.join(data_dir, "MQL5", "Profiles", "Charts", profile)
+    os.makedirs(folder, exist_ok=True)
+    n = 1
+    while os.path.exists(os.path.join(folder, f"chart{n:02d}.chr")):
+        n += 1
+    name = f"chart{n:02d}.chr"
+    with open(os.path.join(folder, name), "wb") as f:
+        f.write(_session_chart_text(symbol, _preset_inputs(data_dir, terminal_dir)).encode("utf-8"))
+    order = os.path.join(folder, "order.wnd")         # 차트 탭 순서 - 있으면 끝에 추가 (없으면 MT5가 폴더의 차트를 다 엶)
+    if os.path.isfile(order):
+        raw = open(order, "rb").read()
+        utf16 = raw[:2] in (b"\xff\xfe", b"\xfe\xff")
+        keep = [l.strip() for l in _decode(raw).splitlines()                   # 없는 파일 · 겹치는 줄은 빼고
+                if l.strip() and l.strip() != name and os.path.isfile(os.path.join(folder, l.strip()))]
+        text = "".join(l + "\r\n" for l in keep + [name])
+        with open(order, "wb") as f:
+            f.write(text.encode("utf-16") if utf16 else text.encode("utf-8"))
+    return name

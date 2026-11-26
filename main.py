@@ -153,6 +153,12 @@ def _launch_terminal_with_ea(account_id: int, cfg: dict):
         removed = ea_installer.remove_ea_charts(data_dir, terminal_dir)   # 시작 차트와 겹치지 않게 지난번 EA 차트 정리
         if removed:
             print(f"[ea] account={account_id} 이전 EA 차트 {len(removed)}개 정리")
+        try:                                              # 거래 시간 알림 EA (주문 기능 없음) - 실패해도 MT5는 그대로 띄움
+            added = ea_installer.ensure_session_chart(data_dir, terminal_dir)
+            if added:
+                print(f"[ea] account={account_id} SessionReporter EA 차트 추가: {added}")
+        except Exception as e:
+            print(f"[ea] account={account_id} SessionReporter EA 차트 추가 실패 (무시): {e}")
 
     data_dir = ea_installer.find_data_dir(terminal_dir)
 
