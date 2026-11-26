@@ -6,7 +6,8 @@
 #     tf              : KTR 시간봉 (2m · 5m · 10m · 1h · 2h)
 #   처음엔 1분봉을 MT5 에서 받느라 몇 분 걸릴 수 있음 → 뒤에서 계산하고 바로 돌려줌:
 #     계산 중이면 {"pending": true, "progress": "…"} - 웹이 몇 초 뒤 다시 물어봄 (nginx 60초 제한에 안 걸리게)
-#     끝나면 결과 (10분 동안 기억 - 같은 조건이면 다시 계산하지 않음)
+#     끝나면 결과 (10분 동안 기억 - 같은 조건이면 다시 계산하지 않음. MT5 에 못 붙은 결과는 기억하지 않음)
+#     refresh=true : 기억한 결과를 버리고 다시 계산 (웹 '다시 계산' 버튼)
 #   받은 봉은 data/analysis.db 에 저장 - 다음부터 빠름
 
 import asyncio
@@ -44,7 +45,7 @@ async def _run(job: dict, account_id: int, from_ts: int, to_ts: int, tf: str):
 
 
 @router.get("/{account_number}")
-async def get_analysis(account_number: int, from_ts: int, to_ts: int, tf: str = "5m",
+async def get_analysis(account_number: int, from_ts: int, to_ts: int, tf: str = "5m", refresh: bool = False,
                        db: AsyncSession = Depends(get_db)):
     account = await get_account_or_default(db, account_number)
     if account is None:
@@ -54,7 +55,11 @@ async def get_analysis(account_number: int, from_ts: int, to_ts: int, tf: str = 
         _jobs.pop(k, None)
     key = (account.id, from_ts, to_ts, tf)
     job = _jobs.get(key)
-    if job is None or (job["task"].done() and job["task"].exception() is not None):
+    if job is not None and job["task"].done():
+        failed = job["task"].exception() is not None or not (job["task"].result() or {}).get("mt5_ok", True)
+        if failed or refresh:
+            job = None                    # MT5 에 못 붙었던 결과 · '다시 계산' → 새로
+    if job is None:
         job = {"progress": "시작", "done_at": None}
         job["task"] = asyncio.create_task(_run(job, account.id, from_ts, to_ts, tf))
         _jobs[key] = job

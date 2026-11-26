@@ -393,6 +393,6 @@ async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) 
     if missing_bal:
         notes.append(f"청산 직전 잔고가 아직 없는 구간 {missing_bal}개는 사용률을 못 구했어요 (서버가 채우는 중이면 잠시 뒤 다시).")
 
-    return {"tf": tf, "summary": summary, "trades": out_trades, "episodes": eps,
+    return {"tf": tf, "mt5_ok": mt5_ok and all(v is not None for v in info_of.values()), "summary": summary, "trades": out_trades, "episodes": eps,
             "usage_table": usage_table(eps), "notes": notes,
             "has_usage": any(e["max_usage"] is not None for e in eps)}
