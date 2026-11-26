@@ -37,6 +37,7 @@ def _trade_json(t: Trade) -> dict:
     return {
         "id": t.id, "ticket": t.ticket, "symbol": t.symbol, "position": t.position, "magic": t.magic, "group_id": t.group_id,
         "sl": getattr(t, "sl", None), "tp": getattr(t, "tp", None), "close_reason": getattr(t, "close_reason", None),
+        "balance_before": getattr(t, "balance_before", None),
         "volume": t.volume, "price_open": t.price_open, "price_close": t.price_close,
         "profit": t.profit, "commission": t.commission,
         "open_time": _iso(t.open_time), "close_time": _iso(t.close_time),
@@ -240,7 +241,7 @@ async def create_trade(
             print(f"[addon] {e}")
         # 청산 직전 SL/TP·청산 이유를 거래 기록에 (워커가 기억해 둔 값) - 청산 알림이 이걸 기다렸다가 씀
         import asyncio
-        ct = asyncio.create_task(_save_close_info(account.id, trade.id, data.ticket, getattr(data, "magic", 0)))
+        ct = asyncio.create_task(_save_close_info(account.id, trade.id, data.ticket, getattr(data, "magic", 0), kst_time))
         _close_tasks[trade.id] = ct
         _bg.add(ct)
         ct.add_done_callback(_bg.discard)
@@ -280,8 +281,8 @@ CLOSE_REASON_KR = {"sl": "🛑 SL에 걸림", "tp": "🎯 TP에 걸림", "manual
                    "stopout": "💥 증거금 강제청산", "lock": "🔒 잠금 강제청산", "loss_limit": "🧯 일일 손실 한도 청산"}
 
 
-async def _save_close_info(account_id: int, trade_id: int, ticket: int, magic: int) -> None:
-    """워커에게 이 포지션의 마지막 SL/TP 와 청산 이유를 물어서 거래 기록에 남김"""
+async def _save_close_info(account_id: int, trade_id: int, ticket: int, magic: int, close_at: datetime | None = None) -> None:
+    """워커에게 이 포지션의 마지막 SL/TP 와 청산 이유, 청산 직전 잔고를 물어서 거래 기록에 남김"""
     import asyncio
     from db.session import AsyncSessionLocal
     from services.worker_client import worker_get
@@ -290,6 +291,14 @@ async def _save_close_info(account_id: int, trade_id: int, ticket: int, magic: i
         info = await asyncio.wait_for(worker_get(account_id, "/close-info", {"position": ticket}), 6)
     except Exception as e:
         print(f"[trade] #{ticket} 청산 정보 못 받음: {getattr(e, 'detail', e)}")
+    bal_before = None
+    if close_at is not None:                 # 청산 1초 전까지의 잔고 (같은 순간 나눠 청산된 것도 모두 빼고)
+        try:
+            r = await asyncio.wait_for(worker_get(account_id, "/balance-at", {
+                "before_time": (close_at - timedelta(seconds=1)).isoformat()}), 6)
+            bal_before = float(r["balance"]) if r and r.get("balance") and r["balance"] > 0 else None
+        except Exception as e:
+            print(f"[trade] #{ticket} 청산 직전 잔고 못 받음: {getattr(e, 'detail', e)}")
     reason = info.get("reason")
     if magic == LOCK_CLOSE_MAGIC:
         reason = "lock"
@@ -305,6 +314,8 @@ async def _save_close_info(account_id: int, trade_id: int, ticket: int, magic: i
                     t.tp = info["tp"]
                 if reason:
                     t.close_reason = reason
+                if bal_before:
+                    t.balance_before = round(bal_before, 2)
                 await db.commit()
     except Exception as e:
         print(f"[trade] #{ticket} 청산 정보 저장 실패: {e}")
@@ -410,7 +421,7 @@ async def _group_message(db: AsyncSession, account_id: int, account_number: str,
     wins, losses = sum(1 for x in nets if x > 0), sum(1 for x in nets if x < 0)
     icon, word = ("✅", "익절") if net > 0 else ("🔴", "손절") if net < 0 else ("⚪", "본전")
     mix = f" · 익절 {wins} 손절 {losses}" if wins and losses else ""
-    title = f"{gtag}{icon} {word} · {symbol} {side} {vol:g}lot ({n}건{mix})  {net:+,.2f}{await _close_pct(account_id, net)}"
+    title = f"{gtag}{icon} {word} · {symbol} {side} {vol:g}lot ({n}건{mix})  {net:+,.2f}{await _close_pct(account_id, net, max((tr.balance_before or 0 for tr, _, _ in trades if tr is not None), default=0))}"
     opened = [(tr, d, t) for tr, d, t in trades if tr and tr.price_open is not None]
     lines = []
     if opened:
@@ -626,7 +637,7 @@ async def _trade_message(db: AsyncSession, account_id: int, account_number: str,
     fee = trade.commission if trade.commission is not None else data.commission   # 진입+청산 수수료 합
     net = (data.profit or 0) + (fee or 0)
     icon, word = ("✅", "익절") if net > 0 else ("🔴", "손절") if net < 0 else ("⚪", "본전")
-    title = f"{tag}{icon} {word} · {data.symbol} {side} {data.volume:g}lot  {net:+,.2f}{await _close_pct(account_id, net)}"
+    title = f"{tag}{icon} {word} · {data.symbol} {side} {data.volume:g}lot  {net:+,.2f}{await _close_pct(account_id, net, getattr(trade, 'balance_before', None))}"
     lines = []
     if trade.price_open is not None:
         move = (data.price - trade.price_open) if side == "BUY" else (trade.price_open - data.price)
@@ -661,14 +672,16 @@ async def _trade_message(db: AsyncSession, account_id: int, account_number: str,
     return title, "\n".join(lines), ([tag_row] if tag_row else None)
 
 
-async def _close_pct(account_id: int, net: float) -> str:
-    """청산 알림 손익 옆 % - 청산 직전 잔고(지금 잔고 - 이번 손익) 대비. 잔고를 못 읽으면 빈 문자열"""
+async def _close_pct(account_id: int, net: float, base: float | None = None) -> str:
+    """청산 알림 손익 옆 % - 청산 직전 잔고 대비. base: 거래 기록에 저장된 청산 직전 잔고,
+    없으면 지금 잔고 - 이번 손익. 잔고를 못 읽으면 빈 문자열"""
     import asyncio
-    try:
-        info = await asyncio.wait_for(worker_get(account_id, "/account-info"), 3)
-        base = float(info.get("balance") or 0) - net
-    except Exception:
-        return ""
+    if not (base and base > 0):
+        try:
+            info = await asyncio.wait_for(worker_get(account_id, "/account-info"), 3)
+            base = float(info.get("balance") or 0) - net
+        except Exception:
+            return ""
     return f" ({net / base * 100:+.2f}%)" if base > 0 else ""
 
 
@@ -857,7 +870,9 @@ async def get_balance_before(
     db: AsyncSession = Depends(get_db)
 ):
     """이 달(진입 기준) 청산된 거래마다 청산 직전 잔고 - 웹 거래내역의 손익 % (잔고 대비)
-    {"balances": {거래 id: 잔고}, "source": "mt5" | "equity" | null}
+    {"balances": {거래 id: 잔고}, "source": "stored" | "mt5" | "equity" | null}
+      stored : 거래 기록에 저장된 값 (청산 때 워커에게 받아 둠 - _save_close_info). 다 있으면 MT5 에 묻지 않음
+      없는 거래만 아래로 구하고, mt5 로 구한 값은 거래 기록에 저장해 둠 (다음부터는 stored)
       mt5    : 달 시작 잔고(MT5) + 그 뒤 입출금 + 먼저 청산된 거래 손익(수수료 포함)을 청산 순서대로 더함
       equity : MT5 가 안 붙어 있으면 1분 평가금 기록(data/equity.db)에서 청산 직전 분의 잔고 (기록 시작 뒤 거래만)
     스왑은 거래 기록에 없어서 빠짐 - 거의 차이 없음"""
@@ -870,13 +885,16 @@ async def get_balance_before(
     start = datetime(year, month, 1, tzinfo=kst)
     end = datetime(year + 1, 1, 1, tzinfo=kst) if month == 12 else datetime(year, month + 1, 1, tzinfo=kst)
     rows = (await db.execute(
-        select(Trade.id, Trade.open_time, Trade.close_time, Trade.profit, Trade.commission)
+        select(Trade.id, Trade.open_time, Trade.close_time, Trade.profit, Trade.commission, Trade.balance_before)
         .where(Trade.account_id == account.id, Trade.close_time != None, Trade.close_time >= start)
         .order_by(Trade.close_time, Trade.ticket)
     )).all()
     want = {r.id for r in rows if r.open_time is not None and start <= r.open_time < end}
     if not want:
         return {"balances": {}, "source": None}
+    stored = {r.id: r.balance_before for r in rows if r.id in want and r.balance_before}
+    if len(stored) == len(want):
+        return {"balances": stored, "source": "stored"}
     last = max(r.close_time for r in rows if r.id in want)
 
     out: dict[int, float] = {}
@@ -897,7 +915,16 @@ async def get_balance_before(
             if r.id in want and bal > 0:
                 out[r.id] = round(bal, 2)
             bal += (r.profit or 0) + (r.commission or 0)
-        return {"balances": out, "source": "mt5"}
+        new = {k: v for k, v in out.items() if k not in stored}
+        if new:                                   # 다음부터는 저장된 값으로 (청산 때 받은 값은 그대로 둠)
+            try:
+                from sqlalchemy import update
+                for tid, v in new.items():
+                    await db.execute(update(Trade).where(Trade.id == tid, Trade.balance_before == None).values(balance_before=v))
+                await db.commit()
+            except Exception as e:
+                print(f"[trade] 청산 직전 잔고 저장 실패: {e}")
+        return {"balances": {**out, **stored}, "source": "mt5"}
     except Exception as e:
         if not isinstance(e, HTTPException) or e.status_code != 503:
             print(f"[trade] 청산 직전 잔고 (MT5) 실패: {getattr(e, 'detail', e)}")
@@ -910,7 +937,7 @@ async def get_balance_before(
                     out[r.id] = round(b, 2)
     except Exception as e:
         print(f"[trade] 청산 직전 잔고 (평가금 기록) 실패: {e}")
-    return {"balances": out, "source": "equity" if out else None}
+    return {"balances": {**out, **stored}, "source": "equity" if out else ("stored" if stored else None)}
 
 
 @router.get("/{trade_id}")

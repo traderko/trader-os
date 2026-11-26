@@ -1790,18 +1790,16 @@ async function loadTrades() {
   const cur = () => want === `${acc.account_number}|${tYm.y}|${tYm.m}`;
   const path = `/trades?year=${tYm.y}&month=${tYm.m}&account_number=${encodeURIComponent(acc.account_number)}`;
   if (!cacheGet(path)) $('tList').innerHTML = '<div class="empty">불러오는 중…</div>';
-  // 그 달 시작 잔고 · 입출금 (거래마다 잔고 대비 % 계산용) - 실패해도 거래내역은 그대로
-  const rp = `/accounts/${encodeURIComponent(acc.account_number)}/monthly-report?year=${tYm.y}&month=${tYm.m}`;
-  tBalRep = (cacheGet(rp) || {}).d || null;
-  const alt = () => api(`/trades/balance-before?year=${tYm.y}&month=${tYm.m}&account_number=${encodeURIComponent(acc.account_number)}`)
-    .then((r) => { if (!cur() || !r || !r.balances) return; Object.assign(tBalAlt, r.balances); if (trades.length) renderTrades(); }).catch(() => {});
-  apiRaw(rp).then((f) => {
-    cacheSet(rp, f.text, f.data); if (!cur()) return; tBalRep = f.data;
-    if (!(f.data && f.data.starting_balance > 0)) alt();      // MT5 를 안 띄운 계좌 등 - 시작 잔고가 없으면 다른 길로
-    if (trades.length) renderTrades();
-  }).catch(() => { if (cur()) alt(); });
+  // 거래마다 잔고 대비 % - 청산 직전 잔고는 거래 기록에 저장돼 있음 (balance_before).
+  //   없는 거래가 있을 때만 서버에 한 번 물어봄 → 서버가 MT5 로 구해서 저장 (다음부터는 바로)
+  tBalRep = null;
+  let altAsked = false;
+  const alt = () => { if (altAsked) return; altAsked = true;
+    api(`/trades/balance-before?year=${tYm.y}&month=${tYm.m}&account_number=${encodeURIComponent(acc.account_number)}`)
+      .then((r) => { if (!cur() || !r || !r.balances) return; Object.assign(tBalAlt, r.balances); if (trades.length) renderTrades(); }).catch(() => {}); };
   try {
     await swr([path], ([list]) => { if (!cur()) return; trades = list; renderTrades(); }, cur);
+    if (cur() && trades.some((t) => t.close_time && !(t.balance_before > 0) && !(tBalAlt[t.id] > 0))) alt();
   } catch (e) {
     if (!cur()) return;
     $('dot').className = 'dot bad';
@@ -1863,6 +1861,14 @@ $('jToday').onclick = () => { const t = tdDate(new Date()); jumpTo(`${t.getFullY
 let grpCount = new Map();   // 묶음 번호 → 이 달 거래 중 건수 (📦 표시)
 // 거래마다 청산 직전 잔고 대비 % - 그 달 시작 잔고에서 입출금 · 청산 손익을 시간 순으로 더해 감 (스왑은 빠져 약간 다를 수 있음)
 function tradePcts(list) {
+  // 1) 거래 기록에 저장된 청산 직전 잔고 (청산 때 저장) 2) 그 달 리포트로 계산 3) 서버가 따로 구한 잔고
+  const stored = new Map();
+  for (const t of list) if (t.close_time && t.balance_before > 0) stored.set(t.id, { pct: net(t) / t.balance_before, before: t.balance_before });
+  const rest = tradePctsCalc(list);
+  if (rest) for (const [k, v] of rest) if (!stored.has(k)) stored.set(k, v);
+  return stored.size ? stored : null;
+}
+function tradePctsCalc(list) {
   const r = tBalRep;
   if (!r || !(r.starting_balance > 0)) {               // 리포트가 없으면 서버가 구한 청산 직전 잔고로
     const out = new Map();

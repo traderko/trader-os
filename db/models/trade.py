@@ -22,7 +22,8 @@ class Trade(Base):
     # 청산 직전에 걸려 있던 SL/TP 와 청산 이유 (sl·tp·manual·auto·stopout·lock·loss_limit) - 워커가 기억해 둔 값 (api/trade.py)
     sl = Column(Float, nullable=True)
     tp = Column(Float, nullable=True)
-    close_reason = Column(String, nullable=True)   # 직접 지정한 묶음 (웹 거래내역 [📦 묶기]) - 같은 번호끼리 한 묶음, 근거를 같이 씀
+    close_reason = Column(String, nullable=True)
+    balance_before = Column(Float, nullable=True)  # 청산 직전 잔고 (MT5) - 손익 % 기준. 청산 때 저장, 예전 거래는 웹 거래내역을 열 때 채움   # 직접 지정한 묶음 (웹 거래내역 [📦 묶기]) - 같은 번호끼리 한 묶음, 근거를 같이 씀
     account_id = Column(Integer, ForeignKey("accounts.id"))
 
     account = relationship("Account", back_populates="trades")
@@ -33,4 +34,4 @@ class Trade(Base):
         "TradeTagMap",
         back_populates="trade",
         cascade="all, delete"
-    )
+    )
