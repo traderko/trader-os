@@ -95,6 +95,12 @@ function AutoMessage($files) {
 
 try {
     Step "TraderOS : commit + push"
+    # guide: rebuild docs/guide/commands.md and warn about bot commands without a guide page (tools/guide_check.py)
+    try {
+        $gp = @(FindPython)
+        $gArgs = @($gp | Select-Object -Skip 1) + @((Join-Path (Join-Path $repo 'tools') 'guide_check.py'))
+        & $gp[0] @gArgs
+    } catch { Write-Host "   guide check skipped: $_" -ForegroundColor Yellow }
     Git add -A | Out-Null
     $staged = @(Git diff --cached --name-only --diff-filter=ACMR)
     $all = @(Git diff --cached --name-only)

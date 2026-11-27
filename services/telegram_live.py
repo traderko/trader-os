@@ -1688,8 +1688,6 @@ class TelegramLive:
             oneway_task = asyncio.create_task(oneway.loop())
             from services import withdraw_notice         # 출금 알림 (services/withdraw_notice.py)
             wd_task = asyncio.create_task(withdraw_notice.loop(self, client))
-            from services import margin_alert            # 증거금 사용률 단계 알림 (services/margin_alert.py)
-            ma_task = asyncio.create_task(margin_alert.loop(self, client))
             from services import wallets                 # 바이낸스 · 개인 지갑 입금 알림 (services/wallets.py)
             wallet_task = asyncio.create_task(wallets.loop(self, client))
             from services import breakout                # 돌파캔들(BOB) · 반대 포지션 알림 (services/breakout.py)
@@ -1700,7 +1698,6 @@ class TelegramLive:
                 live_task.cancel()
                 oneway_task.cancel()
                 wd_task.cancel()
-                ma_task.cancel()
                 wallet_task.cancel()
                 bo_task.cancel()
 

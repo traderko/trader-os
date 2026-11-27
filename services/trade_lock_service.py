@@ -522,4 +522,4 @@ async def set_manual_lock(db: AsyncSession, account_id: int, account_number: str
         "minutes": minutes,
         "locked_until": lock.manual_lock_until.isoformat(),
     }
- 
+ 

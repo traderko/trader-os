@@ -586,4 +586,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     _account_id = args.account_id
     _terminal_path = args.terminal_path
-    uvicorn.run(app, host="127.0.0.1", port=args.port)
+    uvicorn.run(app, host="127.0.0.1", port=args.port)

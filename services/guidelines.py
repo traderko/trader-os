@@ -619,7 +619,8 @@ async def _check_margin(a, acc: str, r: dict, entry: str | None = None) -> None:
         try:                                   # 강제청산까지 몇 포인트 (차트에서 바로 판단)
             from services.risk import liquidation, liq_line
             pos = await asyncio.wait_for(worker_get(a.id, "/positions-all"), timeout=5)
-            liq = [f"🧯 {liq_line(x)}" for x in liquidation(info, pos)[:3]]
+            from services.margin_alert import _ktr_txt       # 강제청산까지 거리가 그 장 10분 KTR 몇 개인지
+            liq = [f"🧯 {liq_line(x)}{await _ktr_txt(a.id, x['symbol'], x['points'])}" for x in liquidation(info, pos)[:3]]
             if liq:
                 level += "\n" + "\n".join(liq)
         except Exception:
