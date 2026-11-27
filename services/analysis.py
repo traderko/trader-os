@@ -242,6 +242,8 @@ def episodes(trades: list[dict], bars_of: dict, info_of: dict) -> list[dict]:
     if cur:
         groups.append(cur)
 
+    import bisect
+    keys_of: dict[str, list[int]] = {}       # 종목 → 봉이 있는 분 (정렬)
     out = []
     for g in groups:
         first_close = min(g, key=lambda t: t["close_ts"])
@@ -274,7 +276,14 @@ def episodes(trades: list[dict], bars_of: dict, info_of: dict) -> list[dict]:
         bal, ci, n_open = bal0, 0, 0
         mx_u = mx_m = mx_l = 0.0
         mn_eq = None
-        for m in range(m0, m1 + 60, 60):
+        # 봉이 있는 분 · 진입/청산이 있는 분만 돎 - 그 사이(주말 · 쉬는 시간)는 직전 봉 그대로라 결과가 같음
+        steps = set(adds) | set(rems) | {m0}
+        for sym in e["symbols"]:
+            ks = keys_of.get(sym)
+            if ks is None:
+                ks = keys_of[sym] = sorted(bars_of.get(sym, {}))
+            steps.update(ks[bisect.bisect_left(ks, m0):bisect.bisect_right(ks, m1)])
+        for m in sorted(x for x in steps if m0 <= x <= m1):
             while ci < len(closes) and closes[ci][0] <= m:          # 이 분이 시작하기 전에 청산된 손익은 잔고로
                 bal += closes[ci][1]
                 ci += 1
@@ -503,8 +512,11 @@ async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) 
             t0 = min(int(t.open_time.timestamp()) for t in rows if t.symbol == sym) // 60 * 60 - 300
             t1 = max(int(t.close_time.timestamp()) for t in rows if t.symbol == sym)
             bm: dict[int, tuple] = {}
+            # 5분봉으로 받은 날 (UTC 날짜 번호) - 봉마다 날짜 글자를 만들지 않게 미리 숫자로
+            m5 = {int(datetime.strptime(d, "%Y-%m-%d").replace(tzinfo=timezone.utc).timestamp()) // 86400
+                  for (s_, d), v in prec.items() if s_ == sym and v == "M5"}
             for t, h, l, c in _bars(sym, t0, t1):
-                if prec.get((sym, _day_key(datetime.fromtimestamp(t, timezone.utc)))) == "M5":    # 5분봉은 5분 모두에
+                if m5 and t // 86400 in m5:                 # 5분봉은 5분 모두에
                     for k in range(5):
                         bm[t + k * 60] = (h, l, c)
                 else:
