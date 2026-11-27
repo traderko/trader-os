@@ -1416,6 +1416,9 @@ class TelegramLive:
                         _help_done = await telegram_help.for_command(self, client, token, cid, _w[0].split("@")[0])
                     if _help_done:
                         pass
+                    elif mine and (text.startswith("/묶기") or text.startswith("/batch")):
+                        from services import telegram_batch     # 나눠 체결 알림 묶기 시간 · 최근 체결 기록
+                        await telegram_batch.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                     elif mine and (text.startswith("/손절없음") or text.startswith("/nosl")):
                         from services import nosl_guard         # 손절 없는 포지션 자동청산 켜기 · 끄기 · %
                         await nosl_guard.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
@@ -1793,6 +1796,7 @@ class TelegramLive:
                         print(f"[telegram-live] 봇 {status['bot']} 연결됨 - 봇에게 /start 를 보내면 chat id를 알려줍니다")
                         await self._call(client, token, "setMyCommands", commands=[
                             {"command": "help", "description": "가이드 - 기능마다 쓰는 법 · 알림 예시 (/도움말 · /증거금 도움말)"},
+                            {"command": "batch", "description": "나눠 체결 알림 묶기 시간 · 왜 따로 왔는지 (/묶기 10)"},
                             {"command": "nosl", "description": "손절 없는 포지션 자동청산 (/손절없음 켜기 · 10 · 대기 60)"},
                             {"command": "alerts", "description": "알림 중요도 - 🔴 긴급 · 🟠 중요 · ⚪ 보통 · 🔕 조용 (/중요도)"},
                             {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},

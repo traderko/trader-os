@@ -345,6 +345,12 @@ def _close_line(t) -> str:
 
 
 _batches: dict[tuple, dict] = {}    # (계좌, 종목, 진입/청산, 방향) → 묶는 중인 체결들
+# 최근 체결 알림 기록 - /묶기 (/batch) 로 '왜 안 묶였나' 확인용: (서버 도착 시각, 체결 시각(KST), 종목, 진입/청산, 몇 건으로 보냈나)
+_arrivals: list[dict] = []
+
+
+def batch_log() -> list[dict]:
+    return list(_arrivals)
 
 
 async def _notify_trade(account_id: int, account_number: str, trade_id: int, data: TradeCreate,
@@ -358,6 +364,10 @@ async def _notify_trade(account_id: int, account_number: str, trade_id: int, dat
     cfg = telegram_cfg()
     items = [(trade_id, data, kst_time)]
     wait = cfg.get("trade_batch_sec", 0)
+    rec = {"arrive": _t.time(), "deal": kst_time.timestamp() if kst_time else None, "symbol": data.symbol,
+           "kind": data.entry_type, "side": data.position, "vol": data.volume, "sent": None}
+    _arrivals.append(rec)
+    del _arrivals[:-40]
     if wait > 0:
         key = (account_id, data.symbol, data.entry_type, data.position)
         b = _batches.get(key)
@@ -370,6 +380,7 @@ async def _notify_trade(account_id: int, account_number: str, trade_id: int, dat
         while _t.time() - b["last"] < wait and _t.time() - start < wait * 3:
             await asyncio.sleep(0.3)
         items = _batches.pop(key)["items"]
+    rec["sent"] = len(items)                  # 이 알림이 몇 건을 묶었나 (나머지는 이 알림에 들어감)
     if data.entry_type == "CLOSE":            # 청산 직전 SL/TP·청산 이유가 저장될 때까지 (길어야 몇 초)
         for tid, _, _ in items:
             t = _close_tasks.get(tid)

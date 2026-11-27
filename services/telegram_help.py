@@ -17,7 +17,7 @@ LIMIT = 3600
 # 한글 명령 → 영어 명령 (가이드 문서 첫 줄 commands= 에는 영어로 적혀 있음)
 ALIAS = {"잠금": "lock", "출금": "withdraw", "잔고": "wallet", "증거금": "margin", "돌파": "bob", "원웨이": "oneway",
          "손익": "pnl", "통계": "stats", "근거": "reasons", "지표": "events", "문구": "phrases", "지침": "guide",
-         "무작위": "random", "계좌": "accounts", "서버": "server", "표시": "show", "봉": "bars", "중요도": "alerts", "손절없음": "nosl"}
+         "무작위": "random", "계좌": "accounts", "서버": "server", "표시": "show", "봉": "bars", "중요도": "alerts", "손절없음": "nosl", "묶기": "batch"}
 HELP_WORDS = ("도움말", "help")
 
 
