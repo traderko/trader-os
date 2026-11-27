@@ -518,6 +518,23 @@
         <select id="adSrc"><option value="mt5">MT5</option><option value="oanda">OANDA</option></select></div>
       <div class="actions"><button class="btn primary" id="grSave">저장</button></div>
     </div>
+    <div class="panel" id="alPanel">
+      <h2>알림 중요도</h2>
+      <p class="hint">알림마다 얼마나 눈에 띄게 보낼지 정합니다. 텔레그램 <code>/중요도</code> 에서도 바꿀 수 있습니다.<br>
+        🔴 <b>긴급</b> — 맨 위 큰 머리말 + [✅ 확인] 버튼, 누를 때까지 아래 간격마다 다시 보냄 ·
+        🟠 <b>중요</b> — 머리말 · ⚪ <b>보통</b> — 그대로 · 🔕 <b>조용</b> — 알림음 없이</p>
+      <div class="row"><label class="name">긴급 전용 대화방 chat id<small>그룹을 만들어 봇을 넣고 그 그룹에서 /id → 폰에서 이 그룹만 알림음을 크게</small></label>
+        <input class="wide" id="alChat" placeholder="비우면 안 씀 (그룹이면 -100 으로 시작)" autocomplete="off"></div>
+      <div class="row"><label class="name">긴급 다시 알림</label>
+        <input type="number" id="alMin" min="1" max="60" style="width:70px"><span class="unit">분마다 · 최대</span>
+        <input type="number" id="alMax" min="0" max="20" style="width:70px"><span class="unit">번 (0 = 다시 안 보냄)</span></div>
+      <div id="alList" style="margin-top:10px"></div>
+      <div class="actions">
+        <button class="btn" id="alTest">🔴 긴급 시험 보내기</button>
+        <button class="btn" id="alReset">전부 기본값</button>
+        <button class="btn primary" id="alSave">저장</button>
+      </div>
+    </div>
     <div class="panel">
       <h2>출금 규칙</h2>
       <p class="hint">웹 손익 탭 맨 위에 <b>오늘 출금 가능 금액</b>을 보여줍니다. 하루 단위 규칙이고, 다음 거래일 시작(한국 시간 06:00)에 리셋됩니다.
@@ -1110,7 +1127,31 @@ $('sessAdd').onclick = () => {
   renderSessions(); toast('추가했습니다. 저장을 눌러야 반영됩니다.');
 };
 
+// ── 알림 중요도 (/api/alerts) ──
+let alData = null;
+function renderAlerts() {
+  const d = alData; if (!d) return;
+  $('alChat').value = d.urgent_chat_id || ''; $('alMin').value = d.repeat_min; $('alMax').value = d.repeat_max;
+  const groups = [...new Set(d.categories.map((c) => c.group))];
+  $('alList').innerHTML = groups.map((g) => `<div style="margin:10px 0 4px;font-weight:600;font-size:13px">${esc(g)}</div>` +
+    d.categories.filter((c) => c.group === g).map((c) => `<div class="row" style="margin:4px 0"><label class="name" style="font-weight:400">${esc(c.label)}
+      ${c.level !== c.default ? `<small>기본 ${esc(d.level_kr[c.default])}</small>` : ''}</label>
+      <select data-kind="${esc(c.kind)}">${d.levels.map((l) => `<option value="${l}"${l === c.level ? ' selected' : ''}>${esc(d.level_kr[l])}</option>`).join('')}</select></div>`).join('')).join('');
+}
+async function loadAlerts() { try { alData = await api('alerts'); renderAlerts(); } catch (e) { $('alList').textContent = '불러오지 못했습니다: ' + e.message; } }
+$('alSave').onclick = async () => {
+  const levels = {}; document.querySelectorAll('#alList select[data-kind]').forEach((s) => levels[s.dataset.kind] = s.value);
+  try {
+    alData = await api('alerts', { method: 'PUT', body: JSON.stringify({ levels, urgent_chat_id: $('alChat').value.trim(),
+      repeat_min: parseInt($('alMin').value, 10), repeat_max: parseInt($('alMax').value, 10) }) });
+    renderAlerts(); toast('알림 중요도를 저장했습니다');
+  } catch (e) { toast(e.message, true); }
+};
+$('alReset').onclick = () => { if (!alData) return; alData.categories.forEach((c) => c.level = c.default); renderAlerts(); toast('기본값으로 채웠습니다 - 저장해야 적용됩니다'); };
+$('alTest').onclick = async () => { try { await api('alerts/test', { method: 'POST', body: JSON.stringify({ level: 'urgent' }) }); toast('텔레그램으로 긴급 시험을 보냈습니다'); } catch (e) { toast(e.message, true); } };
+
 async function loadSettings() {
+  loadAlerts();
   settings = await api('settings');
   fillRules(); fillTelegram(); fillOanda(); fillGrid(); fillWithdraw();
   loadDefaults();

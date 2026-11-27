@@ -339,12 +339,14 @@ async def _brief_once(now: datetime, st: dict) -> None:
         text = brief_text(sid, opened, now, data)
         markup = {"inline_keyboard": [[{"text": f"📅 {_label(g)} 최근 {DAYS}일", "callback_data": f"ktr7:{g}:{sid}"}
                                        for g in c["groups"]]]}
+        from services import alert_level                  # 알림 중요도 (기본 🔕 조용 - 소리 없이)
+        lv, text = alert_level.decorate_html("ktr_brief", text)
         if s.get("mid"):
             await asyncio.to_thread(_tg, "editMessageText", message_id=s["mid"], text=text, parse_mode="HTML",
                                     reply_markup=markup, disable_web_page_preview=True)
         else:
             r = await asyncio.to_thread(_tg, "sendMessage", text=text, parse_mode="HTML", reply_markup=markup,
-                                        disable_web_page_preview=True)
+                                        disable_web_page_preview=True, **({"disable_notification": True} if lv == "quiet" else {}))
             s["mid"] = ((r or {}).get("result") or {}).get("message_id")
         s["filled"] = filled
         s["done"] = all(d["today"].get(tf) for d in data.values() for tf in TFS)

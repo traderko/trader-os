@@ -193,11 +193,13 @@ def _cooldown_ok(key: tuple, cd: float | None = None) -> bool:
     return True
 
 
-def send(text: str, context: str = "", title: str = "📌 트레이딩 지침") -> None:
+def send(text: str, context: str = "", title: str = "📌 트레이딩 지침", rule_key: str | None = None) -> None:
     body = text.strip() + (f"\n\n{context.strip()}" if context.strip() else "")
     try:
+        import json as _json
         from services.fcm_service import get_fcm_service
-        get_fcm_service().send(title, body, '{"type":"guideline"}')
+        # rule: 알림 중요도(services/alert_level.py)가 규칙마다 다르게 꾸미도록 (guide:margin_use 등)
+        get_fcm_service().send(title, body, _json.dumps({"type": "guideline", **({"rule": rule_key} if rule_key else {})}))
     except Exception as e:
         print(f"[guideline] 보내기 실패: {e}")
 
@@ -209,7 +211,7 @@ def fire(key: str, account_id: int, detail: str, context: str, text: str | None 
         return False
     if not _cooldown_ok((key, account_id, detail), cooldown_sec):
         return False
-    send(text if text is not None else r.get("text") or "", context, **({"title": title} if title else {}))
+    send(text if text is not None else r.get("text") or "", context, rule_key=key, **({"title": title} if title else {}))
     print(f"[guideline] {key} 계좌{account_id} {detail}")
     return True
 

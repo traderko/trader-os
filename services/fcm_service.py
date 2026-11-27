@@ -49,7 +49,8 @@ def get_fcm_service() -> "FCMService":
 class FCMService:
     def send(self, title: str, body: str, patloadJsonStr: str = '{}', buttons: list | None = None) -> str | None:
         # 텔레그램은 백그라운드로 먼저 보냄 - FCM이 실패해도 텔레그램은 도착하게 (buttons: 텔레그램 메시지 아래 버튼)
-        _telegram.send(title, body, buttons)
+        from services.alert_level import kind_from_payload     # 알림 중요도 (payload 의 type)
+        _telegram.send(title, body, buttons, kind=kind_from_payload(patloadJsonStr))
 
         if init_firebase() is None:
             return None

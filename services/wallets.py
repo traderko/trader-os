@@ -498,9 +498,8 @@ async def loop(live, client) -> None:
     from services.settings_service import telegram_cfg
 
     async def send(t: str) -> None:
-        c = telegram_cfg()
-        if c["bot_token"] and c["chat_id"]:
-            await live._send(client, c["bot_token"], c["chat_id"], t)
+        from services import alert_level                  # 알림 중요도 - 지갑 입금
+        await alert_level.send_html(live, client, "wallet", t)
 
     await asyncio.sleep(90)
     while True:

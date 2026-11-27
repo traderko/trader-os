@@ -379,6 +379,8 @@ async def _notify_trade(account_id: int, account_number: str, trade_id: int, dat
             if len(items) == 1:
                 trade = await db.get(Trade, trade_id)
                 title, body, buttons = await _trade_message(db, account_id, account_number, trade, data, kst_time)
+                if getattr(trade, "close_reason", None) == "stopout":
+                    payload = {**payload, "type": "trade_stopout"}      # 알림 중요도 - 증거금 부족 강제청산
             else:
                 title, body, buttons = await _group_message(db, account_id, account_number, items)
             if cfg.get("trade_sim", True) and cfg.get("trade_sim_mult"):
@@ -388,6 +390,8 @@ async def _notify_trade(account_id: int, account_number: str, trade_id: int, dat
     except Exception as e:
         print(f"[trade] 알림 문구 만들기 실패: {e}")
         title, body, buttons = f"[{data.entry_type}] {data.symbol}", f"{data.position} {data.volume:g}lot 📍{data.price}", None
+    if "type" not in payload:                 # 알림 중요도 (services/alert_level.py) - 진입 · 청산
+        payload = {**payload, "type": "trade_close" if data.entry_type == "CLOSE" else "trade_open"}
     fcm.send(title, body, json.dumps(payload), buttons=buttons)
 
 
@@ -974,4 +978,4 @@ async def get_trades(
     trade = result.scalar_one_or_none()
     if trade is None:
         raise HTTPException(404, f"trade not found: {trade_id}")
-    return _trade_json(trade)
+    return _trade_json(trade)

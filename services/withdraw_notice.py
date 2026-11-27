@@ -157,15 +157,10 @@ async def _accounts() -> list[Account]:
         return list((await db.execute(select(Account).where(Account.lock_enabled == True).order_by(Account.id))).scalars().all())
 
 
-async def _send(live, client, text: str, markup: dict) -> None:
-    from services.settings_service import telegram_cfg
-    t = telegram_cfg()
-    if not t["bot_token"] or not t["chat_id"]:
-        return
-    extra = {"reply_markup": markup} if markup else {}
-    r = await live._send(client, t["bot_token"], t["chat_id"], text, **extra)
-    if not r.get("ok") and markup:                      # 오래된 텔레그램 앱 등에서 복사 버튼이 안 되면 버튼 없이라도
-        await live._send(client, t["bot_token"], t["chat_id"], text)
+async def _send(live, client, text: str, markup: dict, kind: str = "withdraw") -> None:
+    """알림 중요도(services/alert_level.py)대로 - 복사 버튼이 안 되는 앱이면 버튼 없이라도"""
+    from services import alert_level
+    await alert_level.send_html(live, client, kind, text, markup)
 
 
 # ── 정기 알림 ──
@@ -275,7 +270,7 @@ async def _big_profit(live, client, acc: Account, rec: dict, c: dict) -> bool:
     if k2 >= 1 and k2 > rec.get("big", 0):
         rec["big"] = k2
         text, kb = await _message(acc, r, head=f"🎉 오늘 실현 수익 {real:+.0f}% (시작 잔고 {_f(base)}) · 출금 가능")
-        await _send(live, client, text, kb)
+        await _send(live, client, text, kb, kind="withdraw_big")
     return True
 
 

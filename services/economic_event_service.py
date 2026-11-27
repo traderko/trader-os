@@ -268,9 +268,9 @@ class EconomicEventService:
         from services import key_events
         name = event_name.replace("[FF] ", "")
         if key_events.is_key(event_name):
-            self.fcm.send(f"⭐ [{currency}] 주요 지표 발표 예정", f"⭐ {name} ({minutes_before}분 전)")
+            self.fcm.send(f"⭐ [{currency}] 주요 지표 발표 예정", f"⭐ {name} ({minutes_before}분 전)", '{"type":"event"}')
         else:
-            self.fcm.send(f"[{currency}] 경제지표 발표 예정", f"{event_name} ({minutes_before}분 전)")
+            self.fcm.send(f"[{currency}] 경제지표 발표 예정", f"{event_name} ({minutes_before}분 전)", '{"type":"event"}')
 
     def _fetch_events(self):
         url = "https://eco-calendar.einfomax.co.kr/eco/master2"
@@ -299,4 +299,4 @@ class EconomicEventService:
         response.raise_for_status()
 
         return response.json()
-    
+    

@@ -33,29 +33,47 @@ class TelegramService:
     def enabled(self) -> bool:
         return bool(self.token and self.chat_id)
 
-    def send(self, title: str, body: str, buttons: list | None = None) -> None:
+    def send(self, title: str, body: str, buttons: list | None = None, kind: str | None = None) -> None:
         """비동기(백그라운드 스레드)로 전송. 텔레그램이 느리거나 실패해도 호출한 쪽을 막지 않는다.
-        buttons: 메시지 아래 버튼 [[{"text": .., "callback_data": ..}, ...], ...] (누르면 services/telegram_live.py 가 처리)"""
+        buttons: 메시지 아래 버튼 [[{"text": .., "callback_data": ..}, ...], ...] (누르면 services/telegram_live.py 가 처리)
+        kind: 어떤 알림인지 - 중요도(🔴 긴급 · 🟠 중요 · ⚪ 보통 · 🔕 조용)에 따라 꾸밈 (services/alert_level.py)"""
         if not self.enabled:
             return
-        threading.Thread(target=self._send_sync, args=(title, body, buttons), daemon=True).start()
+        threading.Thread(target=self._send_sync, args=(title, body, buttons, kind), daemon=True).start()
 
-    def _send_sync(self, title: str, body: str, buttons: list | None = None) -> None:
-        ok, msg = self.send_now(title, body, buttons)
-        if not ok:
-            print(f"[telegram] {msg}")
+    def _send_sync(self, title: str, body: str, buttons: list | None = None, kind: str | None = None) -> None:
+        level, quiet, chats = "normal", False, [None]
+        try:
+            from services import alert_level
+            level, title, body = alert_level.decorate_plain(kind, title, body)
+            quiet = level == "quiet"
+            if level == "urgent":
+                text = f"{title}\n{body}" if title else body
+                aid = alert_level.register(text, None, buttons)
+                buttons = [[alert_level.ack_button(aid)]] + list(buttons or [])
+                chats = alert_level.chats() or [None]
+        except Exception as e:
+            print(f"[telegram] 중요도 적용 실패 (그냥 보냄): {e}")
+        for cid in chats:
+            ok, msg = self.send_now(title, body, buttons, chat_id=cid, quiet=quiet)
+            if not ok:
+                print(f"[telegram] {msg}")
 
-    def send_now(self, title: str, body: str, buttons: list | None = None) -> tuple[bool, str]:
-        """바로 보내고 (성공 여부, 설명) 반환. 관리 화면의 [테스트 전송] 버튼이 쓴다."""
+    def send_now(self, title: str, body: str, buttons: list | None = None, chat_id: str | None = None,
+                 quiet: bool = False) -> tuple[bool, str]:
+        """바로 보내고 (성공 여부, 설명) 반환. 관리 화면의 [테스트 전송] 버튼이 쓴다.
+        chat_id: 비우면 설정의 대화방 · quiet: 알림음 없이"""
         cfg = telegram_cfg()
         if not (cfg["bot_token"] and cfg["chat_id"]):
             return False, "봇 토큰과 chat id를 모두 입력해야 합니다."
+        cid = chat_id or cfg["chat_id"]
 
         text = f"{title}\n{body}" if title else body
         try:
             res = requests.post(
                 TELEGRAM_API.format(token=cfg["bot_token"]),
-                json={"chat_id": cfg["chat_id"], "text": text, "disable_web_page_preview": True,
+                json={"chat_id": cid, "text": text, "disable_web_page_preview": True,
+                      **({"disable_notification": True} if quiet else {}),
                       **({"reply_markup": {"inline_keyboard": buttons}} if buttons else {})},
                 timeout=10,
             )
@@ -66,7 +84,8 @@ class TelegramService:
         if res.status_code == 200:
             try:   # 실시간 현황 '맨 아래 유지' 방식이 이 알림 아래로 현황을 다시 내리도록
                 from services.telegram_live import note_message
-                note_message(cfg["chat_id"], res.json()["result"]["message_id"])
+                if str(cid) == str(cfg["chat_id"]):
+                    note_message(cfg["chat_id"], res.json()["result"]["message_id"])
             except Exception:
                 pass
             return True, "전송 성공"

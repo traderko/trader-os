@@ -603,7 +603,7 @@ async def execute(db, acc, body: dict, via: str = "웹") -> dict:
     try:
         from services.fcm_service import get_fcm_service
         get_fcm_service().send(f"🧱 구간매매 시작 ({MODE_KR.get(plan['mode'], plan['mode'])} · {via})",
-                               "\n".join(result_lines(acc.account_number, plan, res)))
+                               "\n".join(result_lines(acc.account_number, plan, res)), '{"type":"grid"}')
     except Exception as e:
         print(f"[grid] 알림 실패: {e}")
     return {"plan": plan, "result": res}

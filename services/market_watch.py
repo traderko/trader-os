@@ -359,7 +359,8 @@ def _send(key: str, title: str, body: str) -> None:
         _sent.pop(k, None)
     try:
         from services.telegram_service import TelegramService
-        TelegramService().send(title, body)
+        kind = "mt5_down" if key.startswith("down|") else "mt5_up" if key.startswith("up|") else "market"
+        TelegramService().send(title, body, kind=kind)          # 알림 중요도 (services/alert_level.py)
     except Exception as e:
         print(f"[market_watch] 텔레그램 실패: {e}")
     print(f"[market_watch] {title} | {body}")

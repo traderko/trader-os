@@ -1406,6 +1406,9 @@ class TelegramLive:
                         _help_done = await telegram_help.for_command(self, client, token, cid, _w[0].split("@")[0])
                     if _help_done:
                         pass
+                    elif mine and (text.startswith("/중요도") or text.startswith("/alerts")):
+                        from services import alert_level        # 알림 중요도 🔴 긴급 · 🟠 중요 · ⚪ 보통 · 🔕 조용
+                        await alert_level.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                     elif mine and (text.startswith("/도움말") or text.startswith("/help")):
                         from services import telegram_help      # 가이드 목차 · 문서 (docs/guide)
                         await telegram_help.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
@@ -1555,6 +1558,27 @@ class TelegramLive:
                         try:
                             fn = telegram_grid.wiz_button if data.startswith("gw:") else telegram_grid.button
                             answer = await fn(self, client, token, cid, data, (cb.get("message") or {}).get("message_id"))
+                        except Exception as e:
+                            answer = f"실패: {e}"[:190]
+                elif data.startswith("ua:"):          # 🔴 긴급 알림 [✅ 확인] - 다시 알림 멈춤 (services/alert_level.py)
+                    from services import alert_level
+                    if cid not in alert_level.chats():
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        alert_level.ack(data[3:])
+                        answer = "✅ 확인했어요 - 다시 알림을 멈춥니다"
+                        m = cb.get("message") or {}
+                        rows = [r for r in ((m.get("reply_markup") or {}).get("inline_keyboard") or [])
+                                if not any(str(b.get("callback_data", "")).startswith("ua:") for b in r)]
+                        await self._call(client, token, "editMessageReplyMarkup", chat_id=cid, message_id=m.get("message_id"),
+                                         reply_markup={"inline_keyboard": rows})
+                elif data.startswith("al:"):          # /중요도 알림마다 중요도 바꾸기 (services/alert_level.py)
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        from services import alert_level
+                        try:
+                            answer = await alert_level.button(self, client, token, cid, data, (cb.get("message") or {}).get("message_id"))
                         except Exception as e:
                             answer = f"실패: {e}"[:190]
                 elif data.startswith("hp:"):          # /도움말 가이드 문서 버튼 (services/telegram_help.py)
@@ -1709,6 +1733,8 @@ class TelegramLive:
             oneway_task = asyncio.create_task(oneway.loop())
             from services import withdraw_notice         # 출금 알림 (services/withdraw_notice.py)
             wd_task = asyncio.create_task(withdraw_notice.loop(self, client))
+            from services import alert_level             # 🔴 긴급 알림 다시 보내기 (확인 누를 때까지)
+            ua_task = asyncio.create_task(alert_level.loop(self, client))
             from services import wallets                 # 바이낸스 · 개인 지갑 입금 알림 (services/wallets.py)
             wallet_task = asyncio.create_task(wallets.loop(self, client))
             from services import breakout                # 돌파캔들(BOB) · 반대 포지션 알림 (services/breakout.py)
@@ -1719,6 +1745,7 @@ class TelegramLive:
                 live_task.cancel()
                 oneway_task.cancel()
                 wd_task.cancel()
+                ua_task.cancel()
                 wallet_task.cancel()
                 bo_task.cancel()
 
@@ -1739,6 +1766,7 @@ class TelegramLive:
                         print(f"[telegram-live] 봇 {status['bot']} 연결됨 - 봇에게 /start 를 보내면 chat id를 알려줍니다")
                         await self._call(client, token, "setMyCommands", commands=[
                             {"command": "help", "description": "가이드 - 기능마다 쓰는 법 · 알림 예시 (/도움말 · /증거금 도움말)"},
+                            {"command": "alerts", "description": "알림 중요도 - 🔴 긴급 · 🟠 중요 · ⚪ 보통 · 🔕 조용 (/중요도)"},
                             {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
                             {"command": "lock", "description": "스스로 잠그기 - 정한 시간 동안 문구로도 못 풂 (/잠금 90)"},
                             {"command": "accounts", "description": "계좌 목록 · 기본 계좌(★) 바꾸기 (/계좌)"},

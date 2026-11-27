@@ -1115,3 +1115,46 @@ async def read_log(name: str, lines: int = 300):
         f.seek(max(0, size - 400_000))  # 끝 400KB만 읽음
         text = f.read().decode("utf-8", errors="replace")
     return {"name": name, "lines": text.splitlines()[-lines:]}
+
+
+# ── 알림 중요도 (services/alert_level.py) - 관리 화면 텔레그램 탭 '알림 중요도' ──
+@router.get("/api/alerts")
+async def read_alerts():
+    from services import alert_level as al
+    c = al.cfg()
+    return {"levels": list(al.LEVELS), "level_kr": al.LEVEL_KR,
+            "categories": [{"kind": k, "label": lb, "group": g, "default": d, "level": c["levels"][k]} for k, lb, d, g in al.CATEGORIES],
+            "urgent_chat_id": c["urgent_chat_id"], "repeat_min": c["repeat_min"], "repeat_max": c["repeat_max"]}
+
+
+@router.put("/api/alerts")
+async def write_alerts(body: dict):
+    from services import alert_level as al
+    patch = {}
+    if isinstance(body.get("levels"), dict):
+        patch["levels"] = body["levels"]
+    if "urgent_chat_id" in body:
+        patch["urgent_chat_id"] = str(body.get("urgent_chat_id") or "").strip()
+    for k, lo, hi in (("repeat_min", 1, 60), ("repeat_max", 0, 20)):
+        if k in body:
+            try:
+                v = int(body[k])
+            except (TypeError, ValueError):
+                raise HTTPException(400, f"{k} 는 숫자여야 합니다.")
+            if not lo <= v <= hi:
+                raise HTTPException(400, f"{'다시 알림 간격' if k == 'repeat_min' else '다시 알림 횟수'}는 {lo}~{hi} 사이여야 합니다.")
+            patch[k] = v
+    al.save(patch)
+    return await read_alerts()
+
+
+@router.post("/api/alerts/test")
+async def test_alert(body: dict | None = None):
+    from services import alert_level as al
+    from services.telegram_service import TelegramService
+    lv = (body or {}).get("level", "urgent")
+    if lv not in al.LEVELS:
+        raise HTTPException(400, "level")
+    TelegramService().send(f"알림 중요도 시험 · {al.LEVEL_KR[lv]}", "이렇게 보입니다." + (" [✅ 확인] 을 누르면 다시 알림이 멈춥니다." if lv == "urgent" else ""),
+                           kind=f"__test_{lv}")
+    return {"ok": True}
