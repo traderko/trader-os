@@ -1397,7 +1397,19 @@ class TelegramLive:
                     text = raw.lower()
                     cid = str(chat["id"])
                     mine = cid == str(telegram_cfg()["chat_id"] or "")
-                    if mine and text.startswith("/unlock"):
+                    _w = raw.split()
+                    _ask_help = (mine and len(_w) >= 2 and _w[0].startswith("/") and _w[1].lower() in ("도움말", "help")
+                                 and _w[0].lower().split("@")[0] not in ("/도움말", "/help"))
+                    _help_done = False
+                    if _ask_help:                                # '/증거금 도움말' - 그 기능 가이드 (services/telegram_help.py)
+                        from services import telegram_help
+                        _help_done = await telegram_help.for_command(self, client, token, cid, _w[0].split("@")[0])
+                    if _help_done:
+                        pass
+                    elif mine and (text.startswith("/도움말") or text.startswith("/help")):
+                        from services import telegram_help      # 가이드 목차 · 문서 (docs/guide)
+                        await telegram_help.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
+                    elif mine and text.startswith("/unlock"):
                         await self.start_unlock(client, token, cid, None)
                     elif mine and text.startswith("/update"):
                         await self.show_update(client, token, cid)
@@ -1543,6 +1555,15 @@ class TelegramLive:
                         try:
                             fn = telegram_grid.wiz_button if data.startswith("gw:") else telegram_grid.button
                             answer = await fn(self, client, token, cid, data, (cb.get("message") or {}).get("message_id"))
+                        except Exception as e:
+                            answer = f"실패: {e}"[:190]
+                elif data.startswith("hp:"):          # /도움말 가이드 문서 버튼 (services/telegram_help.py)
+                    if cid != str(telegram_cfg()["chat_id"] or ""):
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        from services import telegram_help
+                        try:
+                            answer = await telegram_help.button(self, client, token, cid, data, (cb.get("message") or {}).get("message_id"))
                         except Exception as e:
                             answer = f"실패: {e}"[:190]
                 elif data.startswith("ktr7:"):        # 최근 7거래일 KTR (services/ktr_brief.py)
@@ -1717,6 +1738,7 @@ class TelegramLive:
                         status["bot"] = "@" + (me["result"].get("username") or "")
                         print(f"[telegram-live] 봇 {status['bot']} 연결됨 - 봇에게 /start 를 보내면 chat id를 알려줍니다")
                         await self._call(client, token, "setMyCommands", commands=[
+                            {"command": "help", "description": "가이드 - 기능마다 쓰는 법 · 알림 예시 (/도움말 · /증거금 도움말)"},
                             {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
                             {"command": "lock", "description": "스스로 잠그기 - 정한 시간 동안 문구로도 못 풂 (/잠금 90)"},
                             {"command": "accounts", "description": "계좌 목록 · 기본 계좌(★) 바꾸기 (/계좌)"},

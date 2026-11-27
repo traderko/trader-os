@@ -519,6 +519,8 @@ app.include_router(_market_router.router)
 app.include_router(rates.router)
 from api import hook_router as _hook_router      # 폰 알림 받기 (토스뱅크 잔액) - /hook/bank
 app.include_router(_hook_router.router)
+from api import guide_router as _guide_router    # 가이드 (docs/guide) - 웹 📖 도움말 · 텔레그램 /도움말
+app.include_router(_guide_router.router)
 
 
 # 개인용 기능 (파일이 있을 때만 - 공개판에는 없음)

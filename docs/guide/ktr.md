@@ -1,4 +1,4 @@
-<!-- guide: commands=/ktr,/grid,/grids,/bars settings=ktr_brief,grid,oanda -->
+<!-- guide: commands=/ktr,/bars settings=ktr_brief,grid,oanda -->
 # KTR · 장 시작 브리핑
 
 ## KTR
@@ -21,7 +21,7 @@
 | `/ktr` | 오늘 KTR 표 (장 × 시간봉) + 주요 지표 발표 봉 크기 |
 | `/ktr 최근` | 최근 7거래일 KTR 목록 + 7일 · 20일 평균. 평소의 1.3배 넘는 날 🔥, 0.7배 안 되는 날 💤 |
 | `/ktr 브리핑 끄기` · `켜기` | 장 시작 자동 브리핑 |
-| `/grid` · `/grids` | KTR 간격 구간매매 주문 · 진행 중인 것 보기 ([README 구간매매](../../README.md#구간매매)) |
+| `/grid` · `/grids` | KTR 간격 구간매매 주문 · 진행 중인 것 보기 → [구간매매](grid.md) |
 | `/bars 90` | 과거 봉(2분~2시간)을 zip 파일로 받기 — 직접 분석하고 싶을 때 |
 
 ## 장 시작 자동 브리핑 (기본 켜짐)

@@ -348,6 +348,16 @@
   /* 거래 상세 (폰: 전체 화면) */
   .full { position: fixed; inset: 0; z-index: 25; background: var(--bg); overflow-y: auto; -webkit-overflow-scrolling: touch; }
   .full[hidden] { display: none; }
+  .md { line-height: 1.6; font-size: 14.5px; }
+  .md h1 { font-size: 20px; margin: 6px 0 12px; } .md h2 { font-size: 17px; margin: 22px 0 8px; } .md h3 { font-size: 15px; margin: 16px 0 6px; }
+  .md table { border-collapse: collapse; width: 100%; margin: 8px 0; font-size: 13px; display: block; overflow-x: auto; }
+  .md th, .md td { border: 1px solid var(--line); padding: 5px 8px; text-align: left; vertical-align: top; }
+  .md pre { background: var(--card, rgba(127,127,127,.08)); border: 1px solid var(--line); border-radius: 8px; padding: 10px; overflow-x: auto; font-size: 12.5px; white-space: pre-wrap; }
+  .md code { background: rgba(127,127,127,.14); border-radius: 4px; padding: 0 4px; font-size: 12.5px; }
+  .md pre code { background: none; padding: 0; }
+  .md blockquote { margin: 8px 0; padding: 4px 12px; border-left: 3px solid var(--line); color: var(--muted); }
+  .md ul, .md ol { padding-left: 22px; margin: 6px 0; } .md p { margin: 8px 0; }
+  .md a { color: var(--accent, #3b82f6); }
   .full header { position: sticky; }
   .full .inner { max-width: 760px; margin: 0 auto; padding: 12px 12px 40px; }
   .kv2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px 12px; }
@@ -581,6 +591,7 @@
   <select id="acc" aria-label="계좌"></select>
   <button class="btn small" id="accDef" hidden title="이 계좌를 기본 계좌로 (★)">☆ 기본으로</button>
   <button class="btn small" id="accMt5" hidden></button>
+  <button class="btn small ghost" id="helpOpen" title="가이드 - 기능마다 쓰는 법과 알림 예시">📖</button>
   <div class="theme" id="theme" title="화면 테마">
     <button data-theme="auto">자동</button><button data-theme="light">☀</button><button data-theme="dark">☾</button>
   </div>
@@ -851,6 +862,16 @@
     <button class="btn primary" id="dSave" style="margin-left:auto">저장</button>
   </header>
   <div class="inner" id="dBody"></div>
+</div>
+<!-- 가이드 (docs/guide - 서버 /guide) -->
+<div class="full" id="help" hidden>
+  <header>
+    <button class="btn ghost" id="hClose" aria-label="닫기">✕</button>
+    <button class="btn ghost small" id="hBack" hidden>◀ 목차</button>
+    <h1 id="hTitle">가이드</h1>
+    <a class="btn small ghost" id="hGit" target="_blank" rel="noopener" style="margin-left:auto">GitHub 에서 보기 ↗</a>
+  </header>
+  <div class="inner md" id="hBody"><div class="empty">불러오는 중…</div></div>
 </div>
 <div class="viewer" id="viewer" hidden><img id="viewerImg" alt=""></div>
 
@@ -1730,6 +1751,75 @@ function refreshAll() { if (tab === 'trades') return loadTrades(); if (tab === '
 setInterval(() => { if (!busy()) loadLock(); }, 3000);
 setInterval(() => { if (!busy()) { loadPositions(); loadRisk(); } }, 5000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refreshAll(); });
+
+// ══════════════ 가이드 (📖) ══════════════
+// 서버 /guide 가 docs/guide/*.md 를 그대로 줌 → 여기서 간단히 HTML 로 (표 · 목록 · 코드 · 링크 · 굵게 정도)
+const H_GIT = 'https://github.com/traderko/trader-os/blob/main/';
+const mdId = (t) => t.trim().toLowerCase().replace(/[^\p{L}\p{N}\s-]/gu, '').replace(/\s+/g, '-');
+function mdInline(t) {
+  let x = esc(t);
+  x = x.replace(/`([^`]+)`/g, (_, c) => `<code>${c}</code>`);
+  x = x.replace(/\*\*([^*]+)\*\*/g, '<b>$1</b>');
+  x = x.replace(/(^|[^*])\*([^*\s][^*]*)\*/g, '$1<i>$2</i>');
+  x = x.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (_, txt, url) => {
+    const u = url.replace(/&amp;/g, '&');
+    const m = u.match(/^([A-Za-z0-9_-]+)\.md(#.*)?$/);              // 다른 가이드 문서
+    if (m) return `<a href="#" data-guide="${m[1]}" data-anchor="${esc((m[2] || '').slice(1))}">${txt}</a>`;
+    const full = /^https?:/.test(u) ? u : H_GIT + u.replace(/^(\.\.\/)+/, '').replace(/^\.\//, 'docs/guide/');
+    return `<a href="${esc(full)}" target="_blank" rel="noopener">${txt}</a>`;
+  });
+  return x;
+}
+function mdHtml(src) {
+  const lines = src.replace(/<!--[\s\S]*?-->/g, '').replace(/\r/g, '').split('\n');
+  const out = []; let i = 0;
+  const cells = (l) => l.trim().replace(/^\|/, '').replace(/\|$/, '').split('|').map((c) => c.trim());
+  while (i < lines.length) {
+    const l = lines[i];
+    if (/^```/.test(l)) { const buf = []; i++; while (i < lines.length && !/^```/.test(lines[i])) buf.push(lines[i++]); i++; out.push(`<pre><code>${esc(buf.join('\n'))}</code></pre>`); continue; }
+    const h = l.match(/^(#{1,4})\s+(.*)$/);
+    if (h) { out.push(`<h${h[1].length} id="g-${esc(mdId(h[2]))}">${mdInline(h[2])}</h${h[1].length}>`); i++; continue; }
+    if (/^\s*\|/.test(l)) {
+      const rows = []; while (i < lines.length && /^\s*\|/.test(lines[i])) rows.push(lines[i++]);
+      const body = rows.filter((r) => !/^\s*\|?\s*:?-{2,}/.test(r));
+      out.push('<table>' + body.map((r, k) => '<tr>' + cells(r).map((c) => k === 0 ? `<th>${mdInline(c)}</th>` : `<td>${mdInline(c)}</td>`).join('') + '</tr>').join('') + '</table>');
+      continue;
+    }
+    if (/^\s*>/.test(l)) { const buf = []; while (i < lines.length && /^\s*>/.test(lines[i])) buf.push(lines[i++].replace(/^\s*>\s?/, '')); out.push(`<blockquote>${buf.map(mdInline).join('<br>')}</blockquote>`); continue; }
+    if (/^([-*]|\d+\.)\s+/.test(l)) {
+      const ol = /^\d+\./.test(l); const items = [];
+      while (i < lines.length) {
+        const t = lines[i];
+        if (/^([-*]|\d+\.)\s+/.test(t)) items.push([mdInline(t.replace(/^([-*]|\d+\.)\s+/, ''))]);      // 항목
+        else if (/^\s{2,}\S/.test(t) && items.length) items[items.length - 1].push(mdInline(t.trim().replace(/^([-*]|\d+\.)\s+/, '· ')));  // 안쪽 항목 · 이어지는 줄
+        else break;
+        i++;
+      }
+      out.push(`<${ol ? 'ol' : 'ul'}>` + items.map((p) => `<li>${p.join('<br>')}</li>`).join('') + `</${ol ? 'ol' : 'ul'}>`);
+      continue;
+    }
+    if (!l.trim()) { i++; continue; }
+    const buf = []; while (i < lines.length && lines[i].trim() && !/^(#{1,4}\s|```|\s*\||\s*>|\s*([-*]|\d+\.)\s)/.test(lines[i])) buf.push(lines[i++]);
+    out.push(`<p>${buf.map(mdInline).join('<br>')}</p>`);
+  }
+  return out.join('\n');
+}
+async function openHelp(name = 'README', anchor = '') {
+  $('help').hidden = false; document.body.style.overflow = 'hidden';
+  $('hBody').innerHTML = '<div class="empty">불러오는 중…</div>';
+  try {
+    const d = await api('/guide/' + encodeURIComponent(name));
+    $('hTitle').textContent = d.title; $('hGit').href = d.github; $('hBack').hidden = name === 'README';
+    $('hBody').innerHTML = mdHtml(d.markdown);
+    const el = anchor && document.getElementById('g-' + mdId(decodeURIComponent(anchor)));
+    if (el) el.scrollIntoView(); else $('help').scrollTop = 0;
+  } catch (e) { $('hBody').innerHTML = `<div class="empty">가이드를 불러오지 못했습니다: ${esc(e.message)}</div>`; }
+}
+function closeHelp() { $('help').hidden = true; document.body.style.overflow = ''; }
+$('helpOpen').onclick = () => openHelp();
+$('hClose').onclick = closeHelp;
+$('hBack').onclick = () => openHelp();
+$('hBody').onclick = (e) => { const a = e.target.closest('a[data-guide]'); if (a) { e.preventDefault(); openHelp(a.dataset.guide, a.dataset.anchor); } };
 
 // ══════════════ 탭 ══════════════
 let tab = 'pos';

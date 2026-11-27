@@ -1,4 +1,4 @@
-<!-- guide: commands=/unlock,/lock,/cancel,/phrases,/events,/guide,/random settings=lock,guidelines -->
+<!-- guide: commands=/unlock,/lock,/cancel,/phrases,/guide,/random settings=lock,guidelines -->
 # 거래 잠금
 
 TraderOS 의 핵심 기능입니다. **정해 둔 시간 · 상황에는 거래를 잠그고, 잠긴 동안 들어간 포지션은 MT5 EA 가 바로 청산**합니다.
@@ -50,7 +50,7 @@ NAS100+ BUY 1lot · 손익 -3.20
 
 - `/지침` — 지침 문구마다 중요도(★1~5). ★ 가 많을수록 '무작위 지침' 에 자주 나옴
 - `/무작위` — 지침 하나 뽑아 보기
-- `/지표` — 이번 주 지표 발표 · 지표일 잠금 구간
+- `/지표` — 이번 주 지표 발표 · 지표일 잠금 구간 → [지표 발표일 잠금](events.md)
 
 ## 주의
 

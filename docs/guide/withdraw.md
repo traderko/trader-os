@@ -1,4 +1,4 @@
-<!-- guide: commands=/withdraw,/wallet settings=withdraw_notice,pnl.withdraw_pct -->
+<!-- guide: commands=/withdraw settings=withdraw_notice,pnl.withdraw_pct -->
 # 출금 알림
 
 **번 돈을 다시 매매에 넣기 전에 빼 두게** 도와주는 기능입니다. 브로커에 출금 API 가 없어서 출금은 직접 하고, 금액 계산과 알림만 자동입니다.
@@ -29,7 +29,7 @@
 | `/출금` (`/withdraw`) | 지금 계좌마다 출금 가능액 + 버튼 |
 | `/출금 알림 30` · `끄기` · `켜기` | 장 바뀌기 몇 분 전에 알릴지 (10~300) |
 | `/출금 큰수익 20` · `끄기` · `켜기` | 큰 수익 알림 단계 % |
-| `/잔고` (`/wallet`) | 출금받는 바이낸스 · 개인 지갑 잔고 · 입금 알림 |
+| `/잔고` (`/wallet`) | 출금받는 바이낸스 · 개인 지갑 잔고 · 입금 알림 → [지갑 잔고](wallet.md) |
 
 ## 주의
 
