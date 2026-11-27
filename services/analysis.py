@@ -157,15 +157,19 @@ async def _ktr(account_id: int, symbol: str, tf: str, at: datetime) -> float | N
         r = _db().execute("SELECT ktr FROM ktr WHERE symbol=? AND tf=? AND open_ts=?", key).fetchone()
     if r:
         return r[0] or None
+    v = None
     try:
         start, end = grid._window([opened], tf, datetime.now(timezone.utc))
         candles = await grid._candles(account_id, symbol, "mt5", tf, start, end)
         v = grid._ktr_from(candles, sid, opened, tf, "mt5")["ktr"]
-    except Exception:
-        return None
-    if v and v > 0:
+    except Exception as e:
+        if "MT5 봉을 받지 못했습니다" in str(e):
+            return None                                   # 워커 문제 - 저장하지 않고 다음에 다시
+    # 지난 장인데 봉이 없으면(휴장 등) 0 으로 저장 - 분석할 때마다 MT5 에 다시 묻지 않게
+    old = datetime.now(timezone.utc) - opened > timedelta(hours=26)
+    if (v and v > 0) or old:
         with _lock:
-            _db().execute("INSERT OR REPLACE INTO ktr VALUES (?,?,?,?)", (*key, v))
+            _db().execute("INSERT OR REPLACE INTO ktr VALUES (?,?,?,?)", (*key, v if v and v > 0 else 0))
             _db().commit()
     return v if v and v > 0 else None
 
@@ -381,8 +385,27 @@ async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) 
     progress("거래마다 역행 · 순행 재는 중 (KTR 받는 중)")
     bars_of: dict[str, dict] = {}
     ktr_of: dict[int, float | None] = {}
-    for t in rows:                                        # KTR (저장된 건 바로, 없는 장만 MT5 에)
-        ktr_of[t.id] = await _ktr(account_id, t.symbol, tf, t.open_time) if mt5_ok else None
+    if mt5_ok:                                            # KTR - 같은 장은 한 번만, 없는 장은 4개씩 한꺼번에 MT5 에
+        from services import grid
+        sess: dict[tuple, datetime] = {}                  # (종목, 장 시작) → 그 장의 첫 거래 시각
+        key_of: dict[int, tuple] = {}
+        for t in rows:
+            try:
+                k = (t.symbol, grid.session_open(grid.current_session(t.open_time), t.open_time))
+            except Exception:
+                continue
+            key_of[t.id] = k
+            sess.setdefault(k, t.open_time)
+        sem = asyncio.Semaphore(4)
+
+        async def one(k):
+            async with sem:
+                return k, await _ktr(account_id, k[0], tf, sess[k])
+        got_k = dict(await asyncio.gather(*[one(k) for k in sess]))
+        for t in rows:
+            ktr_of[t.id] = got_k.get(key_of.get(t.id))
+    else:
+        ktr_of = {t.id: None for t in rows}
     lap("ktr")
 
     def measure() -> list[dict]:
