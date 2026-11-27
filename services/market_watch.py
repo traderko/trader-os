@@ -324,12 +324,60 @@ def learn(an: str, symbol: str, halt_ts: int, reopen_ts: int) -> str | None:
     return name
 
 
-def predicted_closes(an: str, symbol: str, now: float, ahead: float) -> list[dict]:
-    """앞으로 ahead 초 안 휴일 종료 예상 [{end, reopen, kind: 'unusual', source: 'cme' | 'learned', name}]"""
+def _broker_closes(broker: str, symbol: str, cls: str, now: float, ahead: float) -> list[dict]:
+    """브로커 홈페이지 휴장 공지로 찾은 종료 [{end, reopen, name, source: 'broker'}]"""
+    if not broker:
+        return []
+    try:
+        from services import broker_hours
+        from services.symbols import group_of
+        g = group_of(symbol)
+        if not g:
+            return []
+        out = []
+        for c in broker_hours.closes_for(broker, g["key"], now, ahead):
+            nyd = _ny(c["end"]).date()
+            sch = None
+            for dd in (nyd, nyd + timedelta(days=1)):
+                s = cme_schedule(dd, cls)
+                if s and abs(s["end"] - c["end"]) <= 3 * 3600:
+                    sch = s
+                    break
+            out.append({"end": c["end"], "reopen": sch["reopen"] if sch else None, "source": "broker",
+                        "name": (sch or {}).get("name") or c["name"] or ("휴장" if c["closed"] else "조기 마감")})
+        return out
+    except Exception as e:
+        print(f"[market_watch] 브로커 공지 확인 실패: {e}")
+        return []
+
+
+def _broker_day_lines(broker: str, d: date, now: float) -> str:
+    """미국 날짜 d 근처 브로커 공지 종료 시각 (골드 · 나스닥 · 오일)"""
+    if not broker:
+        return ""
+    try:
+        from services import broker_hours
+        out = []
+        for key, label in (("nasdaq", "나스닥"), ("gold", "골드"), ("oil", "오일")):
+            for c in broker_hours.closes_for(broker, key, now - 6 * 3600, 3 * 86400):
+                if c["day"] == d.isoformat():               # 공지 날짜 (브로커 날짜 = 미국 날짜)
+                    out.append(f"· {label} {_hm(c['end'])} " + ("휴장" if c["closed"] else "조기 마감"))
+                    break
+        return "\n".join(out)
+    except Exception:
+        return ""
+
+
+def predicted_closes(an: str, symbol: str, now: float, ahead: float, broker: str = "") -> list[dict]:
+    """앞으로 ahead 초 안 휴일 종료 예상 [{end, reopen, kind: 'unusual', source: 'broker' | 'learned' | 'cme', name}]
+    브로커 홈페이지 공지가 있으면 그 시각이 먼저 (같은 날 CME · 지난번 시각은 생략)"""
     cls = asset_class(symbol)
     if not cls:
         return []
     out, seen = [], set()
+    for c in _broker_closes(broker, symbol, cls, now, ahead):
+        seen.add(c["end"])
+        out.append({**c, "kind": "unusual"})
     today = _ny(now).date()
     for k in range(0, 5):
         d = today + timedelta(days=k)
@@ -344,6 +392,8 @@ def predicted_closes(an: str, symbol: str, now: float, ahead: float) -> list[dic
             c = {"end": end, "reopen": end + lr["minutes"] * 60, "source": "learned", "name": name}
         elif sch:
             c = {**sch, "source": "cme"}
+        if c and any(abs(c["end"] - x) <= 3 * 3600 for x in seen):
+            continue                                 # 브로커 공지가 이미 있는 날
         if c and now <= c["end"] <= now + ahead and c["end"] not in seen:
             seen.add(c["end"])
             out.append({**c, "kind": "unusual"})
@@ -351,7 +401,7 @@ def predicted_closes(an: str, symbol: str, now: float, ahead: float) -> list[dic
 
 
 # ── 알림 ──
-def _send(key: str, title: str, body: str) -> None:
+def _send(key: str, title: str, body: str, kind: str = "") -> None:
     if key in _sent:
         return
     _sent[key] = time.time()
@@ -359,7 +409,7 @@ def _send(key: str, title: str, body: str) -> None:
         _sent.pop(k, None)
     try:
         from services.telegram_service import TelegramService
-        kind = "mt5_down" if key.startswith("down|") else "mt5_up" if key.startswith("up|") else "market"
+        kind = kind or ("mt5_down" if key.startswith("down|") else "mt5_up" if key.startswith("up|") else "market")
         TelegramService().send(title, body, kind=kind)          # 알림 중요도 (services/alert_level.py)
     except Exception as e:
         print(f"[market_watch] 텔레그램 실패: {e}")
@@ -426,21 +476,53 @@ async def _check_account(aid: int, an: str, now: float) -> None:
             if c["kind"] == "unusual" and (sym in held or _recent_symbol(aid, sym)):
                 upcoming.append((sym, {**c, "source": "ea"}))
     # 1-1) CME 휴일 시간표 · 지난번 실제 시각 (브로커가 MT5 거래 시간에 휴장을 표시하지 않을 때)
+    try:
+        from services.withdraw_notice import broker_of
+        broker = await broker_of(aid)
+    except Exception:
+        broker = ""
     for sym in set(held) | (_recent.get(aid, (0, set()))[1]):
-        for c in predicted_closes(an, sym, now, 18 * 3600):
+        for c in predicted_closes(an, sym, now, 18 * 3600, broker):
             if not any(x == sym and abs(y["end"] - c["end"]) <= 1800 for x, y in upcoming):
                 upcoming.append((sym, c))
     fresh = [(sym, c) for sym, c in upcoming if f"plan|{an}|{sym}|{c['end']}" not in _sent]   # 종료마다 한 번만
     if fresh:
         for sym, c in fresh:
             _sent[f"plan|{an}|{sym}|{c['end']}"] = now
-        src = {"ea": "", "cme": " · CME 기준 예상", "learned": " · 지난번 실제 시각"}
+        src = {"ea": "", "cme": " · CME 기준 예상", "learned": " · 지난번 실제 시각", "broker": " · 브로커 공지"}
         lines = [f"· {sym} {_hm(c['end'])} 종료 → {_hm(c['reopen']) if c['reopen'] else '?'} 재개"
                  + (f" ({c['name']}{src.get(c.get('source'), '')})" if c.get("name") else src.get(c.get("source"), ""))
                  + (f"\n   보유: {_pos_line(held[sym])}" if sym in held else "") for sym, c in fresh]
         foot = "한국 시간 · " + ("브로커 MT5 거래 시간 기준" if all(c.get("source") == "ea" for _, c in fresh)
+                                 else "브로커 홈페이지 휴장 공지 기준" if all(c.get("source") in ("ea", "broker") for _, c in fresh)
                                  else "CME 예상은 브로커와 몇 분 다를 수 있어요")
         _send(f"planmsg|{an}|{now}", f"📅 휴장 · 조기 종료 예정 (계좌 {an})", "\n".join(lines) + "\n" + foot)
+    # 1-2) 포지션 · 최근 거래가 없는 종목군도 미리 알림 (중요도 낮게 - market_info, 기본 🔕 조용)
+    try:
+        from services.symbols import group_of
+        mine = {(group_of(x) or {}).get("key") for x, _ in upcoming} | \
+               {(group_of(x) or {}).get("key") for x in set(held) | (_recent.get(aid, (0, set()))[1])}
+        info = []
+        for key, label, rep in (("nasdaq", "나스닥", "NAS100"), ("gold", "골드", "XAUUSD"), ("oil", "오일", "USOIL")):
+            if key in mine:
+                continue
+            for c in predicted_closes(an, rep, now, 18 * 3600, broker):
+                k = f"planinfo|{broker or an}|{key}|{c['end']}"     # 같은 브로커 계좌 여러 개여도 한 번
+                if k not in _sent:
+                    _sent[k] = now
+                    info.append((label, c))
+        if info:
+            src = {"cme": "CME 기준 예상", "learned": "지난번 실제 시각", "broker": "브로커 공지"}
+            lines = [f"· {label} {_hm(c['end'])} 종료 → {_hm(c['reopen']) if c['reopen'] else '?'} 재개"
+                     + f" ({c.get('name') or ''}{' · ' if c.get('name') else ''}{src.get(c.get('source'), '')})"
+                     for label, c in info]
+            who = {"infinox": "인피녹스", "hantec": "한텍"}.get(broker, f"계좌 {an}")
+            _send(f"planinfomsg|{broker or an}|{now}", f"📅 휴장 · 조기 종료 예정 ({who} · 포지션 없음)",
+                  "\n".join(lines) + "\n한국 시간 · 이 종목들은 지금 포지션이 없어요. 진입하면 멈추기 직전 알림도 드려요",
+                  kind="market_info")
+    except Exception as e:
+        print(f"[market_watch] 포지션 없는 종목 휴장 알림 실패: {e}")
+
     for sym, c in upcoming:
         if sym not in held:
             continue
@@ -463,11 +545,14 @@ async def _check_account(aid: int, an: str, now: float) -> None:
         for d in (ny_today, ny_today + timedelta(days=1)):
             name = us_holidays(d.year).get(d)
             if name and d not in plan_days:
+                bl = _broker_day_lines(broker, d, now)
                 _send(f"hol|{an}|{d}", f"📅 미국 휴일: {name} ({d:%m/%d}, 미국 날짜)",
-                      f"계좌 {an} · 지수 · 금 · 유가가 평소보다 일찍 멈추거나 쉴 수 있어요. 정확한 시간은 브로커 공지를 확인하세요."
+                      f"계좌 {an} · 지수 · 금 · 유가가 평소보다 일찍 멈추거나 쉴 수 있어요. "
+                      + (f"브로커 공지 (한국 시간):\n{bl}" if bl else "정확한 시간은 브로커 공지를 확인하세요.")
                       + (f"\n보유: " + ", ".join(f"{s} {_pos_line(ps)}" for s, ps in held.items()) if held else "")
                       + ("\n(브로커 MT5 거래 시간에는 이 날 휴장 표시가 없어요 - 멈추면 시세 멈춤 알림이 가요)" if have_sessions
-                         else "\n(MT5에 SessionReporter EA를 붙이면 브로커 거래 시간으로 정확히 알려 드려요)"))
+                         else "\n(MT5에 SessionReporter EA를 붙이면 브로커 거래 시간으로 정확히 알려 드려요)"),
+                      kind="" if held else "market_info")    # 포지션 없으면 중요도 낮게
                 break
 
     # 3) 시세 멈춤 · 재개 (보유 종목)
@@ -508,7 +593,7 @@ async def _check_account(aid: int, an: str, now: float) -> None:
         # 시세가 STALE_SEC 넘게 없음 → 멈춤. 예정된 것인지 판단 (CME 휴일 시간표 · 지난번 실제 시각도)
         kind = halt_kind(w, t, now)
         if kind == "unexpected" and any(abs(c["end"] - t) <= STALE_SEC + 600
-                                        for c in predicted_closes(an, sym, t - 3600, 2 * 3600)):
+                                        for c in predicted_closes(an, sym, t - 3600, 2 * 3600, broker)):
             kind = "unusual"
         st["halt"] = {"since": t, "price": st["mid"] or mid, "kind": kind}
         if kind == "unexpected":
@@ -543,6 +628,11 @@ async def _refresh_recent(aid: int) -> None:
 async def loop() -> None:
     await asyncio.sleep(30)
     while True:
+        try:
+            from services import broker_hours
+            await broker_hours.maybe_refresh()       # 6시간마다 인피녹스 · 한텍 휴장 공지
+        except Exception as e:
+            print(f"[market_watch] 브로커 공지 받기 실패: {e}")
         try:
             now = time.time()
             for aid, an in await _accounts():

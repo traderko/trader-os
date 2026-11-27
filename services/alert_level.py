@@ -47,6 +47,7 @@ CATEGORIES: list[tuple[str, str, str, str]] = [
     ("loss_reentry", "손실 직후 빠른 재진입", "high", "체결"),
     ("ea_outdated", "EA 예전 버전 · 두 개 실행", "high", "서버 · MT5"),
     ("market", "휴장 · 조기 종료 · 거래 멈춤", "high", "시장"),
+    ("market_info", "휴장 예정 - 포지션 없는 종목", "quiet", "시장"),
     ("guide:no_sl", "지침 - 손절 미설정", "high", "지침"),
     ("guide:event_hold", "지침 - 지표 · 장 시작 전 포지션", "high", "지침"),
     ("guide:revenge", "지침 - 손절 직후 재진입", "high", "지침"),
