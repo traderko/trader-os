@@ -22,21 +22,21 @@ def _worker_base_url(account_id: int) -> str:
 
 @router.get("/{account_id}/positions")
 async def positions(account_id: int):
-    async with httpx.AsyncClient(timeout=5.0) as client:
-        try:
-            res = await client.get(f"{_worker_base_url(account_id)}/positions")
-        except httpx.ConnectError:
-            raise HTTPException(503, f"워커(account_id={account_id})에 연결할 수 없습니다.")
+    from services.worker_client import shared_client      # 요청마다 클라이언트를 만들면 SSL 준비로 서버가 멈춤
+    try:
+        res = await shared_client().get(f"{_worker_base_url(account_id)}/positions", timeout=5.0)
+    except httpx.ConnectError:
+        raise HTTPException(503, f"워커(account_id={account_id})에 연결할 수 없습니다.")
     return res.json()
 
 
 @router.post("/{account_id}/positions/{ticket}/close")
 async def close_position(account_id: int, ticket: int):
-    async with httpx.AsyncClient(timeout=10.0) as client:
-        try:
-            res = await client.post(f"{_worker_base_url(account_id)}/positions/{ticket}/close")
-        except httpx.ConnectError:
-            raise HTTPException(503, f"워커(account_id={account_id})에 연결할 수 없습니다.")
+    from services.worker_client import shared_client
+    try:
+        res = await shared_client().post(f"{_worker_base_url(account_id)}/positions/{ticket}/close", timeout=10.0)
+    except httpx.ConnectError:
+        raise HTTPException(503, f"워커(account_id={account_id})에 연결할 수 없습니다.")
     if res.status_code != 200:
         raise HTTPException(res.status_code, res.text)
     return res.json()
@@ -45,12 +45,12 @@ async def close_position(account_id: int, ticket: int):
 @router.get("/positions/all")
 async def positions_all():
     async def fetch(account_id: int):
-        async with httpx.AsyncClient(timeout=5.0) as client:
-            try:
-                res = await client.get(f"{_worker_base_url(account_id)}/positions")
-                return account_id, res.json()
-            except Exception as e:
-                return account_id, {"error": str(e)}
+        from services.worker_client import shared_client
+        try:
+            res = await shared_client().get(f"{_worker_base_url(account_id)}/positions", timeout=5.0)
+            return account_id, res.json()
+        except Exception as e:
+            return account_id, {"error": str(e)}
 
     results = await asyncio.gather(*[fetch(aid) for aid in WORKER_PORTS.keys()])
-    return {aid: data for aid, data in results}
+    return {aid: data for aid, data in results}

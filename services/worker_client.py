@@ -4,10 +4,28 @@
 # main.py나 다른 라우터가 서로를 import하지 않도록, 아무것도 의존하지 않는
 # 독립 모듈로 둔다 (순환 import 방지).
 
+import asyncio
+
 from fastapi import HTTPException
 import httpx
 
 WORKER_PORT_BASE = 9000
+
+# 워커 요청용 클라이언트는 하나를 계속 씀 (이벤트 루프마다 하나)
+#   - 예전: 요청마다 httpx.AsyncClient 를 새로 만들었는데, 만들 때마다 SSL 인증서를 읽느라(ssl.create_default_context)
+#     Windows 에서 0.5~1초씩 서버 전체가 멈춤 → 요청이 많으면 몇 초씩 멈춰 EA 체결 보고가 늦게 도착 (2026-11 /묶기 로 찾음)
+#   - 워커는 http://127.0.0.1 이라 SSL 이 필요 없음 (verify=False 로 인증서도 안 읽음)
+_clients: dict[int, httpx.AsyncClient] = {}
+
+
+def shared_client() -> httpx.AsyncClient:
+    loop = asyncio.get_running_loop()
+    c = _clients.get(id(loop))
+    if c is None or c.is_closed:
+        c = httpx.AsyncClient(verify=False, timeout=10.0,
+                              limits=httpx.Limits(max_connections=50, max_keepalive_connections=20))
+        _clients[id(loop)] = c
+    return c
 
 
 def worker_port_for(account_id: int) -> int:
@@ -20,11 +38,10 @@ def worker_base_url(account_id: int) -> str:
 
 async def worker_get(account_id: int, path: str, params: dict | None = None, timeout: float = 10.0):
     """timeout: 기본 10초. MT5 전체 기록을 읽는 요청(청산 직전 잔고 채우기 등)은 길게 줌"""
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        try:
-            res = await client.get(f"{worker_base_url(account_id)}{path}", params=params)
-        except httpx.ConnectError:
-            raise HTTPException(503, f"워커(account_id={account_id})에 연결할 수 없습니다.")
+    try:
+        res = await shared_client().get(f"{worker_base_url(account_id)}{path}", params=params, timeout=timeout)
+    except httpx.ConnectError:
+        raise HTTPException(503, f"워커(account_id={account_id})에 연결할 수 없습니다.")
     if res.status_code != 200:
         raise HTTPException(res.status_code, res.text)
     data = res.json()
@@ -47,11 +64,10 @@ async def worker_get(account_id: int, path: str, params: dict | None = None, tim
 
 
 async def worker_post(account_id: int, path: str, json: dict, timeout: float = 10.0):
-    async with httpx.AsyncClient(timeout=timeout) as client:
-        try:
-            res = await client.post(f"{worker_base_url(account_id)}{path}", json=json)
-        except httpx.ConnectError:
-            raise HTTPException(503, f"워커(account_id={account_id})에 연결할 수 없습니다.")
+    try:
+        res = await shared_client().post(f"{worker_base_url(account_id)}{path}", json=json, timeout=timeout)
+    except httpx.ConnectError:
+        raise HTTPException(503, f"워커(account_id={account_id})에 연결할 수 없습니다.")
     if res.status_code != 200:
         raise HTTPException(res.status_code, res.text)
-    return res.json()
+    return res.json()
