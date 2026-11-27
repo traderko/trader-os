@@ -23,6 +23,7 @@ router = APIRouter(prefix="/trades")
 
 LOCK_CLOSE_MAGIC = 990099
 LOSS_LIMIT_MAGIC = 990098   # services/loss_limit.py - 일일 손실 한도 청산
+NOSL_MAGIC = 990097         # services/nosl_guard.py - 손절 없는 포지션 자동청산
 BATCH_SIZE = 1000  # 11 columns * 1000 = 11000 params, 여유있게 안전
 
 def _iso(dt):
@@ -278,7 +279,8 @@ _close_tasks: dict = {}             # 거래 id → 청산 정보 저장 중인 
 
 # 청산 이유 → 알림·웹에 쓰는 말
 CLOSE_REASON_KR = {"sl": "🛑 SL에 걸림", "tp": "🎯 TP에 걸림", "manual": "✋ 직접 청산", "auto": "🤖 자동 청산",
-                   "stopout": "💥 증거금 강제청산", "lock": "🔒 잠금 강제청산", "loss_limit": "🧯 일일 손실 한도 청산"}
+                   "stopout": "💥 증거금 강제청산", "lock": "🔒 잠금 강제청산", "loss_limit": "🧯 일일 손실 한도 청산",
+                   "nosl": "🧯 손절 없음 자동청산"}
 
 
 async def _save_close_info(account_id: int, trade_id: int, ticket: int, magic: int, close_at: datetime | None = None) -> None:
@@ -297,6 +299,8 @@ async def _save_close_info(account_id: int, trade_id: int, ticket: int, magic: i
         reason = "lock"
     elif magic == LOSS_LIMIT_MAGIC:
         reason = "loss_limit"
+    elif magic == NOSL_MAGIC:
+        reason = "nosl"
     try:
         async with AsyncSessionLocal() as db:
             t = await db.get(Trade, trade_id)

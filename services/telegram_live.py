@@ -1416,6 +1416,9 @@ class TelegramLive:
                         _help_done = await telegram_help.for_command(self, client, token, cid, _w[0].split("@")[0])
                     if _help_done:
                         pass
+                    elif mine and (text.startswith("/손절없음") or text.startswith("/nosl")):
+                        from services import nosl_guard         # 손절 없는 포지션 자동청산 켜기 · 끄기 · %
+                        await nosl_guard.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                     elif mine and (text.startswith("/중요도") or text.startswith("/alerts")):
                         from services import alert_level        # 알림 중요도 🔴 긴급 · 🟠 중요 · ⚪ 보통 · 🔕 조용
                         await alert_level.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
@@ -1578,6 +1581,12 @@ class TelegramLive:
                             answer = await fn(self, client, token, cid, data, (cb.get("message") or {}).get("message_id"))
                         except Exception as e:
                             answer = f"실패: {e}"[:190]
+                elif data.startswith("nsl:"):         # 손절 없는 포지션 자동청산 [✋ 버티기] [🗡 지금 청산] (services/nosl_guard.py)
+                    from services import alert_level, nosl_guard
+                    if cid not in alert_level.chats():
+                        answer = "등록된 대화에서만 쓸 수 있습니다"
+                    else:
+                        answer = await nosl_guard.button(self, client, token, cid, data)
                 elif data.startswith("ua:"):          # 🔴 긴급 알림 [✅ 확인] - 다시 알림 멈춤 (services/alert_level.py)
                     from services import alert_level
                     if cid not in alert_level.chats():
@@ -1784,6 +1793,7 @@ class TelegramLive:
                         print(f"[telegram-live] 봇 {status['bot']} 연결됨 - 봇에게 /start 를 보내면 chat id를 알려줍니다")
                         await self._call(client, token, "setMyCommands", commands=[
                             {"command": "help", "description": "가이드 - 기능마다 쓰는 법 · 알림 예시 (/도움말 · /증거금 도움말)"},
+                            {"command": "nosl", "description": "손절 없는 포지션 자동청산 (/손절없음 켜기 · 10 · 대기 60)"},
                             {"command": "alerts", "description": "알림 중요도 - 🔴 긴급 · 🟠 중요 · ⚪ 보통 · 🔕 조용 (/중요도)"},
                             {"command": "unlock", "description": "거래 잠금 풀기 (문구 직접 입력)"},
                             {"command": "lock", "description": "스스로 잠그기 - 정한 시간 동안 문구로도 못 풂 (/잠금 90)"},

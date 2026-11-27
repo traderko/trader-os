@@ -14,6 +14,7 @@
 
 import argparse
 import asyncio
+import json
 from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
@@ -227,6 +228,34 @@ def _close_all_sync(mt5) -> tuple[int, list[str]]:
     return closed, failed
 
 
+def _close_tickets_sync(mt5, tickets: list[int], magic: int, comment: str) -> tuple[int, list[str]]:
+    """정한 포지션만 시장가 청산 (SL 이 그새 걸린 것은 건너뜀). (닫은 개수, 실패 설명 목록)"""
+    closed, failed = 0, []
+    want = set(tickets)
+    for p in mt5.positions_get() or []:
+        if p.ticket not in want or p.sl:
+            continue
+        tick = mt5.symbol_info_tick(p.symbol)
+        if tick is None:
+            failed.append(f"{p.symbol} #{p.ticket} 시세 없음")
+            continue
+        req = {
+            "action": mt5.TRADE_ACTION_DEAL, "position": p.ticket, "symbol": p.symbol, "volume": p.volume,
+            "type": mt5.ORDER_TYPE_SELL if p.type == 0 else mt5.ORDER_TYPE_BUY,
+            "price": tick.bid if p.type == 0 else tick.ask, "deviation": 50, "magic": magic, "comment": comment,
+        }
+        res = None
+        for filling in (mt5.ORDER_FILLING_IOC, mt5.ORDER_FILLING_FOK, mt5.ORDER_FILLING_RETURN):
+            res = mt5.order_send({**req, "type_filling": filling})
+            if res is None or res.retcode != 10030:
+                break
+        if res is not None and res.retcode == mt5.TRADE_RETCODE_DONE:
+            closed += 1
+        else:
+            failed.append(f"{p.symbol} #{p.ticket} ({getattr(res, 'retcode', None)} {getattr(res, 'comment', '') if res else mt5.last_error()})")
+    return closed, failed
+
+
 def _cancel_pending_sync(mt5) -> tuple[int, list[str]]:
     """대기 주문(리밋·스탑 - 첫 진입 추가 리밋·구간매매 포함) 전부 취소. (취소한 개수, 실패 설명 목록)
     손실 한도로 막은 뒤 남은 리밋이 체결되면 새 포지션이 생기므로 (추가 리밋은 EA 강제청산 예외라 그대로 남음)"""
@@ -350,6 +379,59 @@ async def _loss_limit_loop(mt5, account_row):
                 saved_at = _time.time()
         except Exception as e:
             print(f"[loss_limit] account={aid} 오류: {e}")
+        await asyncio.sleep(LOSS_POLL_SEC)
+
+
+# ── 손절 없는 포지션 자동청산 (services/nosl_guard.py) ─────────────────
+async def _nosl_guard_loop(mt5, account_row):
+    """한 종목의 SL 없는 포지션 손실이 잔고의 N% 를 넘으면 🔴 알림 + 카운트다운 → 안 누르면 그 포지션만 청산"""
+    from services import nosl_guard as NG
+    import time as _time
+
+    aid, number = account_row.id, account_row.account_number
+    while True:
+        try:
+            c = NG.cfg()
+            if not c["enabled"]:
+                if NG.read_state(aid):
+                    NG.write_state(aid, {})                     # 끄면 진행 중인 카운트다운도 없앰
+                await asyncio.sleep(LOSS_POLL_SEC)
+                continue
+            info = await asyncio.to_thread(mt5.account_info)
+            pos = await asyncio.to_thread(mt5.positions_get)
+            if info is None or pos is None:
+                await asyncio.sleep(LOSS_POLL_SEC)
+                continue
+            st = NG.read_state(aid)
+            before = json.dumps(st, sort_keys=True, default=str)
+            acts = NG.step_once(st, NG.groups(pos), float(info.balance), _time.time(), c)
+            if json.dumps(st, sort_keys=True, default=str) != before:
+                NG.write_state(aid, st)
+            for a in acts:
+                kind, sym = a[0], a[1]
+                if kind == "ask":
+                    title, body, _ = NG.ask_text(number, sym, a[2], a[3], c)
+                    print(f"[nosl] {number} {sym} 손실 {a[2]:.1f}% - {c['countdown_sec']}초 카운트다운")
+                    _fcm.send(title, body, '{"type":"nosl_guard","account_number":"%s"}' % number, buttons=NG.buttons(aid, sym))
+                elif kind == "close":
+                    n, failed = await asyncio.to_thread(_close_tickets_sync, mt5, a[3]["tickets"], NG.NOSL_MAGIC, "no-SL guard")
+                    why = "🗡 지금 청산 버튼" if a[4] == "now" else f"{c['countdown_sec']}초 동안 응답 없음"
+                    print(f"[nosl] {number} {sym} 청산 {n}개 ({why}) 실패 {failed}")
+                    _fcm.send(f"🧯 손절 없는 포지션 청산 · {sym}",
+                              f"계좌 {number}: {sym} SL 없는 포지션 {n}개 청산 · 손실 약 {a[2]:.1f}% ({why})"
+                              + (f"\n⚠️ 청산 실패 {len(failed)}개: " + ", ".join(failed[:3]) + " - MT5 에서 직접 확인하세요" if failed else ""),
+                              '{"type":"nosl_result","account_number":"%s"}' % number)
+                elif kind == "keep":
+                    _fcm.send(f"✋ {sym} 이번엔 버팁니다",
+                              f"계좌 {number}: 손실이 {a[2]:g}% 에 닿으면 다시 묻습니다. 지금이라도 SL 을 걸어 두세요.",
+                              '{"type":"nosl_result","account_number":"%s"}' % number)
+                elif kind == "cancel":
+                    _fcm.send(f"✅ {sym} 자동청산 취소",
+                              f"계좌 {number}: " + (f"손실이 {a[2]:.1f}% 로 줄어 청산하지 않습니다." if a[2] else
+                                                   "SL 없는 포지션이 없어져(청산 · SL 설정) 카운트다운을 멈춥니다."),
+                              '{"type":"nosl_result","account_number":"%s"}' % number)
+        except Exception as e:
+            print(f"[nosl] account={aid} 오류: {e}")
         await asyncio.sleep(LOSS_POLL_SEC)
 
 
@@ -508,6 +590,7 @@ async def lifespan(app: FastAPI):
     watch_task = asyncio.create_task(_lock_watch_loop(mt5, account_row.account_number))
     loss_task = asyncio.create_task(_loss_limit_loop(mt5, account_row))
     margin_task = asyncio.create_task(_margin_lock_loop(mt5, account_row))
+    nosl_task = asyncio.create_task(_nosl_guard_loop(mt5, account_row))
     sltp_task = asyncio.create_task(_sltp_watch_loop(mt5))
 
     yield
@@ -515,6 +598,7 @@ async def lifespan(app: FastAPI):
     watch_task.cancel()
     loss_task.cancel()
     margin_task.cancel()
+    nosl_task.cancel()
     sltp_task.cancel()
 
     await asyncio.to_thread(mt5.shutdown)

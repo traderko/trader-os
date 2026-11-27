@@ -18,7 +18,7 @@ TraderOS 를 처음 쓰는 분을 위한 설명서입니다. 기능마다 **무�
 
 | 분류 | 문서 |
 |---|---|
-| 지키기 | [거래 잠금](lock.md) · [지표 발표일 잠금](events.md) · [일일 손실 한도](loss-limit.md) · [증거금 경고 · 잠금](margin.md) |
+| 지키기 | [거래 잠금](lock.md) · [지표 발표일 잠금](events.md) · [일일 손실 한도](loss-limit.md) · [손절 없는 포지션 자동청산](nosl.md) · [증거금 경고 · 잠금](margin.md) |
 | 보기 | [웹 화면 둘러보기](web.md) · [실시간 현황](live.md) · [알림 중요도](alerts.md) · [거래 분석 탭](analysis.md) · [근거 태그 · 근거별 성과](reasons.md) |
 | 시장 · 주문 | [KTR · 장 시작 브리핑](ktr.md) · [구간매매](grid.md) · [돌파캔들(BOB) 알림](bob.md) |
 | 돈 | [출금 알림](withdraw.md) · [출금 지갑 잔고](wallet.md) |

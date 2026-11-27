@@ -47,10 +47,11 @@ class TelegramService:
             from services import alert_level
             level, title, body = alert_level.decorate_plain(kind, title, body)
             quiet = level == "quiet"
-            if level == "urgent":
+            if level == "urgent" and alert_level.norm(kind) not in alert_level.NO_REPEAT:
                 text = f"{title}\n{body}" if title else body
                 aid = alert_level.register(text, None, buttons)
                 buttons = [[alert_level.ack_button(aid)]] + list(buttons or [])
+            if level == "urgent":
                 chats = alert_level.chats() or [None]
         except Exception as e:
             print(f"[telegram] 중요도 적용 실패 (그냥 보냄): {e}")

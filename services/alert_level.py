@@ -38,6 +38,8 @@ CATEGORIES: list[tuple[str, str, str, str]] = [
     ("daily_loss_close", "일일 손실 한도 - 전부 청산", "urgent", "손실 한도"),
     ("margin_lock", "증거금 잠금 걸림", "urgent", "증거금"),
     ("mt5_down", "MT5 응답 없음", "urgent", "서버 · MT5"),
+    ("nosl_guard", "손절 없는 포지션 자동청산 카운트다운", "urgent", "체결"),
+    ("nosl_result", "손절 없는 포지션 청산 · 버팀 · 취소", "high", "체결"),
     ("guide:margin_use", "증거금 경고 (10 · 20 · 30%)", "high", "증거금"),
     ("daily_loss_warn", "일일 손실 경고", "high", "손실 한도"),
     ("breakout", "돌파캔들(BOB) · 반대 포지션", "high", "시장"),
@@ -68,6 +70,8 @@ CATEGORIES: list[tuple[str, str, str, str]] = [
 ]
 _DEFAULT_LEVEL = {k: lv for k, _, lv, _ in CATEGORIES}
 # 보내는 곳이 쓰는 이름 → 위 목록의 kind
+# 긴급이어도 다시 알림 · 확인 버튼을 붙이지 않는 것 (자기 버튼 · 카운트다운이 있는 알림)
+NO_REPEAT = {"nosl_guard"}
 ALIAS = {"trade_lock_consec_clear": "trade_lock_unlocked", "addon": "grid", "guideline": "guide"}
 
 
