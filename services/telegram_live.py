@@ -9,6 +9,8 @@
 #   증거금 12.9%  ▰▱▱▱▱▱▱▱▱▱  여유 · 강제청산 200%
 #   🧈 XAUUSD+  BUY 0.40 @4,466.27  +383.80
 #      SL시 -200.20 (3/3) · TP시 +245.00 (1/3)
+#   전체 SL·TP시 (종목·방향이 2개 이상일 때)
+#      SL 모두 닿으면 -350.00 (-3.4%) → 잔고 9,650.00
 #
 # 같이 하는 일 (봇에게 온 메시지를 2초마다 확인 - getUpdates, 서버가 밖으로만 요청하므로 공유기·Tailscale 설정 불필요):
 #   - [🔄 새로고침] 버튼 → 바로 갱신
@@ -280,6 +282,46 @@ def _positions_block(positions: list[dict], show: dict | None = None, bal: float
     return out
 
 
+def _sltp_total_lines(positions: list[dict], bal: float = 0) -> list[str]:
+    """계좌 전체 - SL 이 모두 닿으면 · TP 가 모두 닿으면 손익 합계 (잔고 대비 %, 그때 잔고)
+    종목·방향 묶음이 2개 이상일 때만 (하나면 위 종목 줄과 같음). 스왑은 빼고 계산 (종목 줄과 같게)"""
+    groups, tot, cnt, miss, unknown = set(), {"sl": 0.0, "tp": 0.0}, {"sl": 0, "tp": 0}, {"sl": 0, "tp": 0}, 0
+    for p in positions:
+        _, pv = _sym_info(p["symbol"])
+        pv = p.get("contract_size") or pv
+        if pv is None:
+            unknown += 1
+            continue
+        sg = 1 if p["type"] == 0 else -1
+        for k in ("sl", "tp"):
+            if p.get(k):
+                tot[k] += (p[k] - p["price_open"]) * sg * p["volume"] * pv
+                cnt[k] += 1
+                groups.add((p["symbol"], p["type"]))
+            else:
+                miss[k] += 1
+    if len(groups) < 2 or not (cnt["sl"] or cnt["tp"]):
+        return []
+    parts = []
+    for k, name in (("sl", "SL"), ("tp", "TP")):
+        if cnt[k]:
+            after = f" → 잔고 {_f(bal + tot[k])}" if bal > 0 else ""
+            parts.append(f"   {name} 모두 닿으면 <b>{_s(tot[k])}</b>{_pct(tot[k], bal)}{after}")
+    out = ["", "<b>전체 SL·TP시</b>"] + parts
+    notes = []
+    if cnt["sl"] and miss["sl"]:
+        notes.append(f"SL 없는 포지션 {miss['sl']}개는 빠짐 (손실 한도 없음)")
+    elif not cnt["sl"]:
+        notes.append("SL 걸린 포지션 없음")
+    if cnt["tp"] and miss["tp"]:
+        notes.append(f"TP 없는 {miss['tp']}개 빠짐")
+    if unknown:
+        notes.append(f"계산 못 한 {unknown}개")
+    if notes:
+        out.append(("   ⚠️ " if miss["sl"] else "   ") + " · ".join(notes))
+    return out
+
+
 class TelegramLive:
     def __init__(self):
         self.state = self._load()
@@ -415,6 +457,8 @@ class TelegramLive:
             if show["positions"]:
                 lines.append("")
                 lines += _positions_block(positions, show, bal)
+                if show.get("sltp", True):
+                    lines += _sltp_total_lines(positions, bal)     # 계좌 전체 SL·TP시 손익 합계
             allpos.extend(positions)
             # 종목·방향 묶음마다 SL/TP 버튼 (/pos 안 쓰고 바로) - 대표 티켓 + 'a'(같은 종목·방향 전체)
             seen: dict[tuple, list] = {}
