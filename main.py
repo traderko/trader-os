@@ -414,6 +414,7 @@ async def lifespan(app: FastAPI):
         _worker_procs[account_id] = _spawn_worker(account_id, cfg)
  
     watchdog_task = asyncio.create_task(_watchdog_loop())
+    lag_task = asyncio.create_task(_loop_lag_watch())     # 서버가 멈추는 순간 기록 (텔레그램 /묶기)
 
     # 4) 웹 관리 화면 (http://127.0.0.1:8100/) - 워커 목록·로그 폴더를 넘겨줌
     #    _worker_procs는 같은 dict 객체라 watchdog이 워커를 재시작해도 화면에 그대로 반영됨
@@ -471,6 +472,7 @@ async def lifespan(app: FastAPI):
     ktr_brief_task.cancel()
     await admin_app.stop_admin_server(admin_server, admin_task)
     watchdog_task.cancel()
+    lag_task.cancel()
     
     try:
         await watchdog_task
@@ -488,6 +490,36 @@ async def lifespan(app: FastAPI):
             proc.kill()
  
 app = FastAPI(root_path="/trading-api", lifespan=lifespan)
+
+
+@app.middleware("http")
+async def _time_trade_reports(request, call_next):
+    """EA 의 체결 보고(POST /trades) 처리 시간 기록 - EA 는 5초 안에 답이 없으면 실패로 보고 3초마다 하나씩 다시 보냄
+    → 처리가 느리면 체결이 몇 초씩 늦게 도착 (텔레그램 /묶기 에서 보임 · services/telegram_batch.py)"""
+    if request.method != "POST" or not request.url.path.endswith("/trades"):
+        return await call_next(request)
+    import time as _t
+    from api.trade import note_request
+    t0 = _t.time()
+    status = 500
+    try:
+        resp = await call_next(request)
+        status = resp.status_code
+        return resp
+    finally:
+        note_request(t0, _t.time(), status)
+
+
+async def _loop_lag_watch():
+    """서버가 잠깐씩 멈추는지 (다른 작업이 이벤트 루프를 붙잡음) - 0.5초 넘게 늦으면 기록 (/묶기 에서 보임)"""
+    import time as _t
+    from api.trade import note_lag
+    while True:
+        t0 = _t.monotonic()
+        await asyncio.sleep(0.25)
+        lag = _t.monotonic() - t0 - 0.25
+        if lag > 0.5:
+            note_lag(_t.time(), lag)
 
 app.add_middleware(
     CORSMiddleware,

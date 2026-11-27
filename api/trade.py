@@ -349,8 +349,22 @@ _batches: dict[tuple, dict] = {}    # (계좌, 종목, 진입/청산, 방향) �
 _arrivals: list[dict] = []
 
 
+_req_log: list[tuple] = []      # POST /trades 처리 (시작, 끝, 상태) - main.py 미들웨어가 적음
+_lag_log: list[tuple] = []      # 서버(이벤트 루프)가 멈췄던 때 (시각, 몇 초) - main.py 감시 작업이 적음
+
+
 def batch_log() -> list[dict]:
     return list(_arrivals)
+
+
+def note_request(start: float, end: float, status: int) -> None:
+    _req_log.append((start, end, status))
+    del _req_log[:-80]
+
+
+def note_lag(at: float, sec: float) -> None:
+    _lag_log.append((at, sec))
+    del _lag_log[:-80]
 
 
 async def _notify_trade(account_id: int, account_number: str, trade_id: int, data: TradeCreate,
