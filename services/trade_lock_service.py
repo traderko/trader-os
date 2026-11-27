@@ -354,6 +354,10 @@ async def get_lock_state(db: AsyncSession, account_id: int) -> dict:
         extra["daily_loss"] = daily
     if current_reason == "manual" and loss_limit.locked_by_limit(account_id, lock.manual_lock_until):
         extra["manual_kind"] = "loss_limit"
+    elif current_reason == "manual":
+        from services import margin_lock
+        if margin_lock.locked_by_margin(account_id, lock.manual_lock_until):
+            extra["manual_kind"] = "margin"            # 증거금 사용률 잠금 - 사용률이 내려가면 저절로 풀림
 
     if session is not None:
         extra["session"] = {
@@ -518,4 +522,4 @@ async def set_manual_lock(db: AsyncSession, account_id: int, account_number: str
         "minutes": minutes,
         "locked_until": lock.manual_lock_until.isoformat(),
     }
- 
+ 

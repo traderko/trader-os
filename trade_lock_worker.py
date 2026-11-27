@@ -353,6 +353,69 @@ async def _loss_limit_loop(mt5, account_row):
         await asyncio.sleep(LOSS_POLL_SEC)
 
 
+# ── 증거금 사용률 잠금 (services/margin_lock.py) ──────────────────────
+async def _margin_lock_loop(mt5, account_row):
+    """사용률이 한도를 넘으면 추가 진입 막기(수동 잠금 칸) · 대기 주문 취소, 내려가면 이 잠금만 풂"""
+    from services import margin_lock as ML
+    import time as _time
+
+    aid, number = account_row.id, account_row.account_number
+    over_since = under_since = None
+    last_hold = 0.0
+    while True:
+        try:
+            c = ML.cfg()
+            st = ML.read_state(aid)
+            info = await asyncio.to_thread(mt5.account_info)
+            if info is None:
+                await asyncio.sleep(LOSS_POLL_SEC)
+                continue
+            util = info.margin / info.equity * 100 if info.equity > 0 else 0.0
+            t = _time.time()
+            if c["enabled"] and util >= c["pct"]:
+                over_since = over_since or t
+                under_since = None
+            elif util < c["pct"] - ML.REARM_PP or not c["enabled"]:
+                under_since = under_since or t
+                over_since = None
+            else:                                              # 한도 근처 (2%p 안) - 지금 상태 유지
+                over_since = under_since = None
+
+            if over_since and t - over_since >= ML.CONFIRM_SEC:
+                first = not st.get("locked")
+                if first or t - last_hold >= 60:                # 넘어 있는 동안 1분마다 잠금 시간을 늘림
+                    async with AsyncSessionLocal() as db:
+                        mine, until = await ML.hold(db, aid)
+                    last_hold = t
+                    if first and mine:
+                        pend = ""
+                        try:
+                            nc, nf = await asyncio.to_thread(_cancel_pending_sync, mt5)
+                            if nc or nf:
+                                pend = f"\n대기 주문 {nc}개 취소" + (f" · 취소 실패 {len(nf)}개: " + ", ".join(nf[:3]) if nf else "")
+                        except Exception as e:
+                            pend = f"\n⚠️ 대기 주문 취소 오류: {e}"
+                        print(f"[margin_lock] {number} 잠금 - 사용률 {util:.1f}% ≥ {c['pct']:g}%")
+                        _fcm.send("🔒 증거금 사용률 잠금 - 추가 진입 차단",
+                                  f"계좌 {number}: 증거금 사용률 {util:.0f}% (한도 {c['pct']:g}%)\n"
+                                  f"지금 포지션은 그대로 둡니다. 새로 들어가는 포지션은 바로 청산됩니다.\n"
+                                  f"사용률이 {c['pct'] - ML.REARM_PP:g}% 아래로 내려가면 저절로 풀립니다.{pend}",
+                                  '{"type":"margin_lock","account_number":"%s"}' % number)
+            elif under_since and t - under_since >= ML.CONFIRM_SEC and st.get("locked"):
+                async with AsyncSessionLocal() as db:
+                    done = await ML.release(db, aid)
+                if not done:
+                    ML.write_state(aid, {"locked": False})     # 다른 잠금으로 바뀌었음 - 기록만 정리
+                print(f"[margin_lock] {number} 풀림 - 사용률 {util:.1f}%")
+                _fcm.send("🔓 증거금 사용률 잠금 풀림",
+                          f"계좌 {number}: 증거금 사용률 {util:.0f}% - 다시 진입할 수 있습니다." if c["enabled"]
+                          else f"계좌 {number}: 증거금 잠금을 꺼서 풀었습니다.",
+                          '{"type":"margin_unlock","account_number":"%s"}' % number)
+        except Exception as e:
+            print(f"[margin_lock] account={aid} 오류: {e}")
+        await asyncio.sleep(LOSS_POLL_SEC)
+
+
 def _remember_chart_symbol(mt5, account_row) -> None:
     """MT5 시작 차트(tradeLock EA가 붙는 차트)에 쓸 종목을 이 계좌의 실제 종목 이름으로 기록.
     브로커마다 금 종목 이름이 달라서(XAUUSD / XAUUSD+ / GOLD) 없는 이름을 넣으면 차트가 안 열리고 EA도 안 붙는다.
@@ -444,12 +507,14 @@ async def lifespan(app: FastAPI):
 
     watch_task = asyncio.create_task(_lock_watch_loop(mt5, account_row.account_number))
     loss_task = asyncio.create_task(_loss_limit_loop(mt5, account_row))
+    margin_task = asyncio.create_task(_margin_lock_loop(mt5, account_row))
     sltp_task = asyncio.create_task(_sltp_watch_loop(mt5))
 
     yield
 
     watch_task.cancel()
     loss_task.cancel()
+    margin_task.cancel()
     sltp_task.cancel()
 
     await asyncio.to_thread(mt5.shutdown)
@@ -521,4 +586,4 @@ if __name__ == "__main__":
     args = parser.parse_args()
     _account_id = args.account_id
     _terminal_path = args.terminal_path
-    uvicorn.run(app, host="127.0.0.1", port=args.port)
+    uvicorn.run(app, host="127.0.0.1", port=args.port)

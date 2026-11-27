@@ -7,6 +7,9 @@
   - /출금 (/withdraw) : 지금 바로 계좌마다 출금 가능액 + 버튼
     /출금 알림 30      : 장 바뀌기 30분 전에 알림 (10~300)
     /출금 알림 끄기|켜기
+  - 큰 수익 알림: 오늘 실현 수익(청산된 손익)이 거래일 시작 잔고의 20% · 40% · 60% … 를 넘을 때마다
+    바로 출금 가능액 알림 (번 돈이 다시 매매에 들어가기 전에)
+    /출금 큰수익 30 : 30% 마다 · /출금 큰수익 끄기|켜기
 
 출금 가능액 계산은 웹 손익 탭 출금 카드와 같음 (api/account_router.get_withdraw_rule).
 주의: 거래일이 바뀐 뒤(한국 07시, 서머타임 아닐 때 08시)에 출금하면 다음 거래일 몫에서 빠짐.
@@ -33,7 +36,8 @@ LINKS = {
     "infinox": ("인피녹스", "https://myaccount.infinox.com/ko/funds/withdraw"),
     "hantec": ("한텍", "https://portal-mu.hmarkets.com/#walletbal"),
 }
-DEFAULTS = {"enabled": True, "lead_min": 30}
+DEFAULTS = {"enabled": True, "lead_min": 30, "big_enabled": True, "big_pct": 20}
+BIG_RECHECK_SEC = 300         # 큰 수익 같지만 확인해 보니 아니면(입금 등) 이만큼 뒤에 다시 확인
 
 
 # ── 설정 · 상태 ──
@@ -48,7 +52,12 @@ def cfg() -> dict:
     for k, url in (raw.get("links") or {}).items():
         if k in links and isinstance(url, str) and url.startswith("https://"):
             links[k] = (links[k][0], url)
-    return {"enabled": bool(raw.get("enabled", True)), "lead_min": lead, "links": links}
+    try:
+        big = min(500, max(5, float(raw.get("big_pct", DEFAULTS["big_pct"]))))
+    except (TypeError, ValueError):
+        big = DEFAULTS["big_pct"]
+    return {"enabled": bool(raw.get("enabled", True)), "lead_min": lead, "links": links,
+            "big_enabled": bool(raw.get("big_enabled", True)), "big_pct": big}
 
 
 def save_cfg(patch: dict) -> None:
@@ -174,7 +183,7 @@ def boundaries(now: datetime) -> list[tuple[str, str, datetime]]:
 async def check_once(live, client, now: datetime | None = None) -> None:
     from services.loss_limit import KST, trading_day
     c = cfg()
-    if not c["enabled"]:
+    if not (c["enabled"] or c["big_enabled"]):
         return
     now = now or datetime.now(KST)
     day = trading_day(now)
@@ -191,6 +200,11 @@ async def check_once(live, client, now: datetime | None = None) -> None:
             rec = {"day": day, "sent": [], "last": None, "wd": None, "checked": 0}
             st[key] = rec
             changed = True
+        # 0) 큰 수익 알림 (오늘 실현 수익이 시작 잔고의 N% 단계를 넘을 때마다)
+        if c["big_enabled"] and await _big_profit(live, client, acc, rec, c):
+            changed = True
+        if not c["enabled"]:
+            continue
         # 1) 장 바뀌기 전 알림 (그 시점마다 한 번)
         todo = [(k, name, t) for k, name, t in due if k not in rec["sent"]]
         if todo:
@@ -228,6 +242,43 @@ async def check_once(live, client, now: datetime | None = None) -> None:
         _save(st)
 
 
+async def _big_profit(live, client, acc: Account, rec: dict, c: dict) -> bool:
+    """오늘 실현 수익이 시작 잔고의 big_pct 단계를 새로 넘었으면 알림. 기록이 바뀌었으면 True
+    매분 잔고(/account-info)만 보고, 넘은 것 같을 때만 정확한 계산(출금 규칙 - 입출금 반영)으로 확인"""
+    from services.worker_client import worker_get
+    if rec.get("start") is None:
+        if time.time() - rec.get("big_checked", 0) < 60:
+            return False
+        rec["big_checked"] = time.time()
+        r = await _rule(acc)
+        if r is None or not r.get("start_balance"):
+            return True
+        rec["start"] = float(r["start_balance"])
+        return True
+    try:
+        info = await asyncio.wait_for(worker_get(acc.id, "/account-info"), 5)
+    except Exception:
+        return False
+    start, step = rec["start"], c["big_pct"]
+    if start <= 0:
+        return False
+    k = int((float(info.get("balance") or 0) - start) / start * 100 // step)
+    if k < 1 or k <= rec.get("big", 0) or time.time() - rec.get("big_checked", 0) < BIG_RECHECK_SEC:
+        return False
+    rec["big_checked"] = time.time()
+    r = await _rule(acc)
+    if r is None:
+        return True
+    base = float(r.get("start_balance") or start)
+    real = r["net_profit"] / base * 100 if base > 0 else 0
+    k2 = int(real // step)
+    if k2 >= 1 and k2 > rec.get("big", 0):
+        rec["big"] = k2
+        text, kb = await _message(acc, r, head=f"🎉 오늘 실현 수익 {real:+.0f}% (시작 잔고 {_f(base)}) · 출금 가능")
+        await _send(live, client, text, kb)
+    return True
+
+
 async def loop(live, client) -> None:
     await asyncio.sleep(60)
     while True:
@@ -240,7 +291,21 @@ async def loop(live, client) -> None:
 
 # ── /출금 (/withdraw) ──
 async def cmd(live, client, token, cid: str, arg: str) -> None:
-    words = (arg or "").split()
+    words = (arg or "").replace("%", " ").split()
+    if words and words[0] in ("큰수익", "big"):
+        v = words[1] if len(words) > 1 else ""
+        if v in ("끄기", "off"):
+            save_cfg({"big_enabled": False})
+        elif v in ("켜기", "on"):
+            save_cfg({"big_enabled": True})
+        elif v.replace(".", "", 1).isdigit():
+            save_cfg({"big_pct": float(v), "big_enabled": True})
+        c = cfg()
+        await live._send(client, token, cid,
+                         f"🎉 큰 수익 출금 알림 {'켜짐' if c['big_enabled'] else '꺼짐'} · 오늘 실현 수익이 시작 잔고의 "
+                         f"{c['big_pct']:g}% · {c['big_pct'] * 2:g}% · {c['big_pct'] * 3:g}% … 넘을 때마다\n"
+                         "<i>바꾸기: /출금 큰수익 30 · /출금 큰수익 끄기 · /출금 큰수익 켜기</i>")
+        return
     if words and words[0] in ("알림", "notice"):
         v = words[1] if len(words) > 1 else ""
         if v in ("끄기", "off"):
@@ -254,7 +319,8 @@ async def cmd(live, client, token, cid: str, arg: str) -> None:
         when = " · ".join(f"{name} {(t - timedelta(minutes=c['lead_min'])):%H:%M}" for _, name, t in boundaries(datetime.now(KST)))
         await live._send(client, token, cid,
                          f"💸 출금 알림 {'켜짐' if c['enabled'] else '꺼짐'} · 장 바뀌기 {c['lead_min']}분 전\n{when}\n"
-                         "<i>바꾸기: /출금 알림 20 · /출금 알림 끄기 · /출금 알림 켜기</i>")
+                         f"🎉 큰 수익 알림 {'켜짐' if c['big_enabled'] else '꺼짐'} · {c['big_pct']:g}% 마다\n"
+                         "<i>바꾸기: /출금 알림 20 · /출금 알림 끄기 · /출금 알림 켜기 · /출금 큰수익 30 · /출금 큰수익 끄기</i>")
         return
     accs = await _accounts()
     if not accs:

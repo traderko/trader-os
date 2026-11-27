@@ -186,6 +186,8 @@ def _lock_line(s: dict | None) -> str:
         return f"주말 · 잠금 쉼 ({_hm(s.get('remaining_sec', 0))} 뒤 다시){daily}"
     if s.get("locked"):
         if reason == "manual":
+            if s.get("manual_kind") == "margin":
+                return f"<b>증거금 잠금</b> · 사용률이 내려가면 풀림 (추가 진입은 바로 청산){daily}"
             what = "손실 한도 잠금" if s.get("manual_kind") == "loss_limit" else "수동 잠금"
             return f"<b>{what}</b> · {_hm(s.get('remaining_sec', 0))} 뒤 해제{daily}"
         return f"<b>잠김</b> · {html.escape(why)}{daily}"
@@ -1417,6 +1419,9 @@ class TelegramLive:
                             await ktr_brief.cmd(self, client, token, cid, _a)
                         else:
                             await telegram_grid.cmd_ktr(self, client, token, cid, _a)
+                    elif mine and (text.startswith("/증거금") or text.startswith("/margin")):
+                        from services import margin_alert       # 증거금 사용률 알림 켜기·끄기 · 단계
+                        await margin_alert.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                     elif mine and (text.startswith("/봉") or text.startswith("/bars")):
                         from services import bar_export          # 과거 봉 zip 으로 받기 (연구용)
                         await bar_export.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
@@ -1683,6 +1688,8 @@ class TelegramLive:
             oneway_task = asyncio.create_task(oneway.loop())
             from services import withdraw_notice         # 출금 알림 (services/withdraw_notice.py)
             wd_task = asyncio.create_task(withdraw_notice.loop(self, client))
+            from services import margin_alert            # 증거금 사용률 단계 알림 (services/margin_alert.py)
+            ma_task = asyncio.create_task(margin_alert.loop(self, client))
             from services import wallets                 # 바이낸스 · 개인 지갑 입금 알림 (services/wallets.py)
             wallet_task = asyncio.create_task(wallets.loop(self, client))
             from services import breakout                # 돌파캔들(BOB) · 반대 포지션 알림 (services/breakout.py)
@@ -1693,6 +1700,7 @@ class TelegramLive:
                 live_task.cancel()
                 oneway_task.cancel()
                 wd_task.cancel()
+                ma_task.cancel()
                 wallet_task.cancel()
                 bo_task.cancel()
 
@@ -1720,7 +1728,7 @@ class TelegramLive:
                             {"command": "server", "description": "서버 PC 사양 · 상태 (CPU · 램 · 저장공간 · IP) (/서버)"},
                             {"command": "bob", "description": "돌파캔들(BOB) 알림 - 반대 포지션 경고 · 시간봉 켜기·끄기"},
                             {"command": "wallet", "description": "바이낸스 · 개인 지갑 잔고 (/잔고 · /잔고 추가 네트워크 주소 이름)"},
-                            {"command": "withdraw", "description": "출금 가능액 + 출금 페이지 (/출금 · /출금 알림 30)"},
+                            {"command": "withdraw", "description": "출금 가능액 · 출금 알림 (/출금 알림 30 · /출금 큰수익 20)"},
                             {"command": "show", "description": "실시간 현황에 보일 것 켜고 끄기 (/표시)"},
                             {"command": "oneway", "description": "원웨이 장 - 지금 몇 KTR 갔는지·알림 설정 (/원웨이)"},
                             {"command": "pnl", "description": "손익 - 오늘·주·월 (/손익 어제)"},
@@ -1730,6 +1738,7 @@ class TelegramLive:
                             {"command": "grid", "description": "구간매매 - 버튼으로 하나씩 설정 (또는 한 줄로)"},
                             {"command": "grids", "description": "진행 중인 구간매매·청산"},
                             {"command": "ktr", "description": "KTR 표 (장 × 시간봉) · /ktr 최근 (7거래일) · /ktr 브리핑"},
+                            {"command": "margin", "description": "증거금 사용률 알림 · 잠금 (/margin 알림 10 20 30 · /margin 잠금 20)"},
                             {"command": "bars", "description": "과거 봉 파일로 받기 (/bars 90 · /bars 90 gold)"},
                             {"command": "reasons", "description": "근거 없는 거래 모아 보기 (/근거 3일)"},
                             {"command": "events", "description": "이번 주 지표 발표·지표일 잠금 (/지표)"},
