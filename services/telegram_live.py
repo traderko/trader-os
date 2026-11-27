@@ -582,7 +582,11 @@ class TelegramLive:
         if row:
             kb.append(row)
         kb.append([{"text": "모두 켜기", "callback_data": "lv:all:1"}, {"text": "모두 끄기", "callback_data": "lv:all:0"}])
-        return ("⚙️ <b>실시간 현황에 보일 것</b>\n누르면 켜고 끕니다. 현황에 바로 반영됩니다. (잠금 줄은 항상 보임)"), {"inline_keyboard": kb}
+        pos = telegram_cfg()["live_position"]                     # 현황 위치 - 맨 위 고정 / 맨 아래 유지
+        kb.append([{"text": ("✅ " if pos == "top" else "") + "📌 맨 위 고정", "callback_data": "lv:pos:top"},
+                   {"text": ("✅ " if pos == "bottom" else "") + "⬇️ 맨 아래 유지", "callback_data": "lv:pos:bottom"}])
+        return ("⚙️ <b>실시간 현황에 보일 것</b>\n누르면 켜고 끕니다. 현황에 바로 반영됩니다. (잠금 줄은 항상 보임)\n"
+                "<b>위치</b> 📌 맨 위 고정: 대화방 위에 고정 · ⬇️ 맨 아래 유지: 다른 메시지가 오면 현황을 맨 아래로 다시 보냄"), {"inline_keyboard": kb}
 
     async def show_button(self, client, token, cid: str, data: str, message_id) -> str:
         from services.settings_service import get_settings, update_settings
@@ -601,9 +605,15 @@ class TelegramLive:
             on = data.endswith(":1")
             cur = {k: on for k, _ in LIVE_PARTS}
             ans = "모두 켬" if on else "모두 끔"
+        elif data.startswith("lv:pos:"):                          # 위치 바꾸기 - 다음 갱신 때 고정 / 맨 아래로 옮김
+            pos = "bottom" if data.endswith("bottom") else "top"
+            update_settings({"telegram": {"live_position": pos}})
+            cur = None
+            ans = "📌 맨 위 고정" if pos == "top" else "⬇️ 맨 아래 유지"
         else:
             return ""
-        update_settings({"live_show": cur})
+        if cur is not None:
+            update_settings({"live_show": cur})
         text, kb = self._show_menu()
         if message_id:
             await self._call(client, token, "editMessageText", chat_id=cid, message_id=message_id,
@@ -1474,7 +1484,15 @@ class TelegramLive:
                         from services import self_lock
                         await self_lock.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
                     elif mine and (text.startswith("/표시") or text.startswith("/show")):
-                        await self.show_button(client, token, cid, "lv:menu", None)
+                        _a = raw.split(None, 1)[1].strip() if len(raw.split(None, 1)) > 1 else ""
+                        if _a in ("위", "위로", "고정", "top"):          # /표시 위 · /표시 아래 - 현황 위치
+                            await self.show_button(client, token, cid, "lv:pos:top", None)
+                            await self._send(client, token, cid, "📌 실시간 현황을 <b>맨 위에 고정</b>합니다.")
+                        elif _a in ("아래", "아래로", "bottom"):
+                            await self.show_button(client, token, cid, "lv:pos:bottom", None)
+                            await self._send(client, token, cid, "⬇️ 실시간 현황을 <b>맨 아래</b>로 유지합니다 (다른 메시지가 오면 다시 맨 아래로).")
+                        else:
+                            await self.show_button(client, token, cid, "lv:menu", None)
                     elif mine and (text.startswith("/원웨이") or text.startswith("/oneway")):
                         from services import oneway
                         await oneway.cmd(self, client, token, cid, raw.split(None, 1)[1] if len(raw.split(None, 1)) > 1 else "")
@@ -1776,7 +1794,7 @@ class TelegramLive:
                             {"command": "bob", "description": "돌파캔들(BOB) 알림 - 반대 포지션 경고 · 시간봉 켜기·끄기"},
                             {"command": "wallet", "description": "바이낸스 · 개인 지갑 잔고 (/잔고 · /잔고 추가 네트워크 주소 이름)"},
                             {"command": "withdraw", "description": "출금 가능액 · 출금 알림 (/출금 알림 30 · /출금 큰수익 20)"},
-                            {"command": "show", "description": "실시간 현황에 보일 것 켜고 끄기 (/표시)"},
+                            {"command": "show", "description": "실시간 현황에 보일 것 · 위치 (/표시 · /표시 위 · /표시 아래)"},
                             {"command": "oneway", "description": "원웨이 장 - 지금 몇 KTR 갔는지·알림 설정 (/원웨이)"},
                             {"command": "pnl", "description": "손익 - 오늘·주·월 (/손익 어제)"},
                             {"command": "stats", "description": "매매 통계 - 승률·PF·종목·장별 (/통계)"},
