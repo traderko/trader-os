@@ -510,12 +510,48 @@ async def _time_trade_reports(request, call_next):
         note_request(t0, _t.time(), status)
 
 
+_loop_beat = {"t": 0.0, "tid": None}
+
+
+def _stall_sampler():
+    """별도 스레드: 이벤트 루프가 1초 넘게 멈추면 그 순간 루프가 실행 중인 코드(파일:줄)를 적어 둠
+    → /묶기 '멈춘 곳' 에 가장 많이 나온 곳이 범인 (services/telegram_batch.py)"""
+    import sys as _sys
+    import time as _t
+    import traceback
+    from api.trade import note_stall
+    here = os.path.dirname(os.path.abspath(__file__))
+    sampled_at = 0.0
+    while True:
+        _t.sleep(0.5)
+        beat, tid = _loop_beat["t"], _loop_beat["tid"]
+        if not beat or tid is None:
+            continue
+        stale = _t.monotonic() - beat
+        if stale < 1.0 or beat == sampled_at:
+            continue
+        sampled_at = beat                                   # 멈춤 한 번에 한 번만
+        frame = _sys._current_frames().get(tid)
+        if frame is None:
+            continue
+        stack = traceback.extract_stack(frame)
+        ours = [f"{os.path.relpath(f.filename, here)}:{f.lineno} {f.name}" for f in stack
+                if f.filename.startswith(here) and "site-packages" not in f.filename and "venv" not in f.filename]
+        last = stack[-1]
+        deepest = f"{os.path.basename(last.filename)}:{last.lineno} {last.name}"
+        note_stall(_t.time(), ours[-4:] + ([f"→ {deepest}"] if not last.filename.startswith(here) else []))
+
+
 async def _loop_lag_watch():
     """서버가 잠깐씩 멈추는지 (다른 작업이 이벤트 루프를 붙잡음) - 0.5초 넘게 늦으면 기록 (/묶기 에서 보임)"""
+    import threading
     import time as _t
     from api.trade import note_lag
+    _loop_beat["tid"] = threading.get_ident()
+    threading.Thread(target=_stall_sampler, daemon=True, name="stall-sampler").start()
     while True:
         t0 = _t.monotonic()
+        _loop_beat["t"] = t0
         await asyncio.sleep(0.25)
         lag = _t.monotonic() - t0 - 0.25
         if lag > 0.5:

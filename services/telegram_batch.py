@@ -64,6 +64,14 @@ def report() -> str:
                      + " · ".join(f"{_hms(t)} {s:.1f}초" for t, s in sorted(worst)))
     else:
         lines.append("\n✅ 최근 1시간 서버가 멈춘 적 없음 (0.5초 넘게)")
+    from api.trade import _stall_samples
+    smp = [f for t, f in _stall_samples if _time.time() - t < 3600]
+    if smp:
+        from collections import Counter
+        cnt = Counter(" ← ".join(reversed(f)) for f in smp if f)
+        lines.append("🔎 <b>멈춘 동안 서버가 하던 일</b> (많은 순 - 이 내용을 Claude 에게 보내 주세요)")
+        for where, n in cnt.most_common(3):
+            lines.append(f"<code>{html.escape(where)[:300]}</code> × {n}")
     lines.append("<i>바꾸기: /묶기 10 (0~30초)</i>")
     return "\n".join(lines)
 

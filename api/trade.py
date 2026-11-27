@@ -367,6 +367,14 @@ def note_lag(at: float, sec: float) -> None:
     del _lag_log[:-80]
 
 
+_stall_samples: list[tuple] = []   # 서버가 멈춘 동안 무엇을 하고 있었나 (시각, [파일:줄 함수 …]) - main.py 감시 스레드
+
+
+def note_stall(at: float, frames: list[str]) -> None:
+    _stall_samples.append((at, frames))
+    del _stall_samples[:-60]
+
+
 async def _notify_trade(account_id: int, account_number: str, trade_id: int, data: TradeCreate,
                         kst_time: datetime, fcm: FCMService, payload: dict) -> None:
     """체결 알림. 같은 종목·방향으로 몇 초 안에 나눠 체결되면 하나로 묶고(trade_batch_sec),
