@@ -12,9 +12,10 @@ f_data() =>
 // ▲▲▲ TRADEROS DATA END ▲▲▲
 // 데이터는 f_data() 함수(들) 안에 - 전역에 두면 '본문이 너무 길다'(CE10295)로 거부됨
 // 컴파일 토큰 한도(약 10만)가 있어서 압축 형식: 청산 시각 순, 한 줄 = 거래 하나
-//   진입시각차(초, 앞 줄 진입 기준),보유(초),진입가차(틱, 같은 종목 앞 줄 기준),청산-진입(틱),b|s,랏×100,손익×100,종목번호[,묶인 건수]
+//   진입시각차(초, 앞 줄 진입 기준),보유(초),진입가차(틱, 같은 종목 앞 줄 기준),청산-진입(틱),b|s,랏×100,손익×100,종목번호
+//   [,SL-진입(틱),TP-진입(틱),청산 이유,묶인 건수,청산 직전 잔고 차이(달러, 앞 줄 기준),최대 평가이익×100,최대 평가손실×100]
 //   DATA_MERGED = true 면 웹에서 이미 묶은 데이터 (평균 진입·청산가, 합계 랏·손익) - 묶음만 표시
-//   DATA_SYMS = "종목:소수자리|종목:소수자리" (종목번호 순)
+//   DATA_SYMS = "종목:소수자리[:증거금계수]|…" (종목번호 순) - 증거금 = 계수 × 랏 × 진입가 (MT5 가 계산한 1랏 증거금 ÷ 가격)
 // 웹 TraderOS → 거래내역 → TV → [TV 코드 복사] 로 이 파일 전체를 새로 만들어 붙여넣으면 됨
 // ============================================================
 
@@ -38,6 +39,7 @@ tradeDataInput = input.text_area(defval="", title="추가 거래 데이터 (선�
 
 compactMode   = input.bool(true,  "Compact Mode (점/네모 + 마우스오버 툴팁)", group="Display")
 mobileMode    = input.bool(false, "모바일 모드 (청산 라벨에 손익 항상 표시)", group="Display")
+showPctLabel  = input.bool(false, "청산 라벨에 손익 % 표시", group="Display", tooltip="청산 직전 잔고 대비 손익 %. 잔고 기록이 있는 거래만")
 showTimeLabel = input.bool(false, "라벨에 시간 표시", group="Display")
 timeFormat    = input.string("MM-dd HH:mm", "시간 표시 형식", group="Display")
 labelTz       = input.string("Asia/Seoul", "라벨 시간대", group="Display")
@@ -157,6 +159,10 @@ type TradeRecord
     float  sl = 0.0          // 청산 직전 SL (없으면 0)
     float  tp = 0.0          // 청산 직전 TP (없으면 0)
     string why = ""          // 청산 이유 한 글자: s=SL t=TP m=직접 a=자동 o=증거금 강제 l=잠금 x=손실 한도
+    float  bal = 0.0         // 청산 직전 잔고 (모르면 0) - 손익 % · 증거금율 기준
+    float  margin = 0.0      // 이 거래(묶음) 증거금 (모르면 0)
+    float  runUp = na        // 들고 있던 동안 최대 평가이익 (계좌 전체 평가손익 · 1분 기록, 모르면 na)
+    float  runDn = na        // 들고 있던 동안 최대 평가손실 (≤ 0)
 
 f_parseRows(string src, int baseMs, string defaultSym, bool isOffset, array<TradeRecord> out) =>
     for row in str.split(src, "\n")
@@ -192,7 +198,7 @@ f_whyKr(string w) =>
      w == "o" ? "증거금 강제청산" : w == "l" ? "잠금 강제청산" : w == "x" ? "일일 손실 한도" : ""
 
 // 압축 데이터 한 덩어리 읽기 (st: [앞 줄 진입 ms], lastTicks: 종목별 앞 줄 진입가 틱)
-f_parseCompact(string src, array<string> syms, array<float> scales, array<int> st, array<float> lastTicks, array<TradeRecord> out) =>
+f_parseCompact(string src, array<string> syms, array<float> scales, array<float> mfs, array<int> st, array<float> lastTicks, array<float> balSt, array<TradeRecord> out) =>
     for row in str.split(src, "\n")
         f = str.split(row, ",")
         if array.size(f) >= 8
@@ -204,25 +210,40 @@ f_parseCompact(string src, array<string> syms, array<float> scales, array<int> s
             ticks   = array.get(lastTicks, si) + str.tonumber(array.get(f, 2))
             array.set(lastTicks, si, ticks)
             sy      = array.get(syms, si)
+            float bal = 0.0                      // 청산 직전 잔고: 앞 줄 잔고 + 차이 (빈칸이면 모름)
+            if array.size(f) >= 13
+                d = str.tonumber(array.get(f, 12))
+                if not na(d)
+                    array.set(balSt, 0, array.get(balSt, 0) + d)
+                    bal := array.get(balSt, 0)
             if f_symMatch(sy)
+                lot = str.tonumber(array.get(f, 5)) / 100
+                cnt = array.size(f) >= 12 ? str.tonumber(array.get(f, 11)) : na
                 array.push(out, TradeRecord.new(openMs, ticks / sc, closeMs, (ticks + str.tonumber(array.get(f, 3))) / sc,
-                     array.get(f, 4) == "b" ? "buy" : "sell", str.tonumber(array.get(f, 5)) / 100, str.tonumber(array.get(f, 6)) / 100,
-                     sy, array.size(f) >= 12 ? int(str.tonumber(array.get(f, 11))) : 1, closeMs, array.new<int>(),
-                     f_ext(f, 8, ticks, sc), f_ext(f, 9, ticks, sc), array.size(f) >= 11 ? array.get(f, 10) : ""))
+                     array.get(f, 4) == "b" ? "buy" : "sell", lot, str.tonumber(array.get(f, 6)) / 100,
+                     sy, na(cnt) ? 1 : int(cnt), closeMs, array.new<int>(),
+                     f_ext(f, 8, ticks, sc), f_ext(f, 9, ticks, sc), array.size(f) >= 11 ? array.get(f, 10) : "",
+                     bal, array.get(mfs, si) * lot * ticks / sc,
+                     array.size(f) >= 15 ? str.tonumber(array.get(f, 13)) / 100 : na,
+                     array.size(f) >= 15 ? str.tonumber(array.get(f, 14)) / 100 : na))
     true
 
 f_load(array<TradeRecord> raw, array<TradeRecord> groups) =>
     syms   = array.new<string>()
     scales = array.new<float>()
+    mfs    = array.new<float>()                 // 종목별 증거금 계수 (없으면 0 → 증거금 표시 안 함)
     if str.length(DATA_SYMS) > 0
         for it in str.split(DATA_SYMS, "|")
             kv = str.split(it, ":")
             array.push(syms, array.get(kv, 0))
             array.push(scales, math.pow(10, array.size(kv) > 1 ? str.tonumber(array.get(kv, 1)) : 2))
+            mf = array.size(kv) > 2 ? str.tonumber(array.get(kv, 2)) : na
+            array.push(mfs, na(mf) ? 0.0 : mf)
     st = array.from(DATA_BASE_MS)
     lastTicks = array.new<float>(array.size(syms), 0.0)
+    balSt = array.from(0.0)
     for chunk in f_data()
-        f_parseCompact(chunk, syms, scales, st, lastTicks, raw)
+        f_parseCompact(chunk, syms, scales, mfs, st, lastTicks, balSt, raw)
     if str.length(tradeDataInput) > 0
         cleanInput = str.replace_all(str.replace_all(tradeDataInput, "\r\n", "\n"), "\r", "\n")
         hdr = str.split(array.get(str.split(cleanInput, "\n"), 0), ",")
@@ -257,9 +278,15 @@ f_load(array<TradeRecord> raw, array<TradeRecord> groups) =>
                     g.tp := 0.0
                 if g.why != r.why
                     g.why := ""
+                g.margin     := g.margin + r.margin       // 묶음 증거금 = 합계 · 잔고는 첫 청산 직전 것
+                if g.bal <= 0
+                    g.bal := r.bal
+                if not na(r.runUp)                    // 묶음: 개별 거래 중 가장 큰 값 (계좌 전체 평가손익이라 겹친 시간은 같은 값)
+                    g.runUp := na(g.runUp) ? r.runUp : math.max(g.runUp, r.runUp)
+                    g.runDn := na(g.runDn) ? r.runDn : math.min(g.runDn, r.runDn)
                 array.push(g.members, i)
             else
-                ng = TradeRecord.new(r.openTime, r.openPrice, r.closeTime, r.closePrice, r.dir, r.lot, r.profit, r.sym, 1, r.closeTime, array.from(i), r.sl, r.tp, r.why)
+                ng = TradeRecord.new(r.openTime, r.openPrice, r.closeTime, r.closePrice, r.dir, r.lot, r.profit, r.sym, 1, r.closeTime, array.from(i), r.sl, r.tp, r.why, r.bal, r.margin, r.runUp, r.runDn)
                 array.push(groups, ng)
                 map.put(lastOf, k, array.size(groups) - 1)
     true
@@ -293,6 +320,11 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
     periodKeys   = array.new<string>()
     periodProfit = array.new<float>()
     periodCount  = array.new<int>()
+    periodGrow   = array.new<float>()          // 기간 수익률 (거래마다 1 + 손익% 곱)
+    grow = 1.0                                 // 수익률 (복리) - 잔고 기록이 있는 거래만
+    pctN = 0
+    maxMarginPct = 0.0
+    worstRunDn = 0.0                           // 거래 중 가장 깊었던 평가손실 % (잔고 대비)
 
     if n > 0
         // 청산 시각 순으로 들어 있음 → 뒤(최근)부터 보면서 한도까지 그림
@@ -309,6 +341,12 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
                     lossCount += 1
                     grossLoss += t.profit
                 totalProfit += t.profit
+                if t.bal > 0
+                    grow *= 1 + t.profit / t.bal
+                    pctN += 1
+                    maxMarginPct := math.max(maxMarginPct, t.margin / t.bal * 100)
+                    if not na(t.runDn)
+                        worstRunDn := math.min(worstRunDn, t.runDn / t.bal * 100)
                 if showAggTable
                     key = f_periodKey(t.closeTime)
                     idx = array.indexof(periodKeys, key)
@@ -316,9 +354,12 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
                         array.push(periodKeys, key)
                         array.push(periodProfit, t.profit)
                         array.push(periodCount, 1)
+                        array.push(periodGrow, t.bal > 0 ? 1 + t.profit / t.bal : 1.0)
                     else
                         array.set(periodProfit, idx, array.get(periodProfit, idx) + t.profit)
                         array.set(periodCount, idx, array.get(periodCount, idx) + 1)
+                        if t.bal > 0
+                            array.set(periodGrow, idx, array.get(periodGrow, idx) * (1 + t.profit / t.bal))
             // 이 거래(묶음)를 그리는 데 드는 선·라벨 수
             picks    = showPicks and useGroups ? array.size(t.members) : 0
             needLab  = 1 + (picks > 0 ? picks : (showEntry ? 1 : 0))
@@ -340,6 +381,14 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
                          "Close:  " + closeTimeStr + "  @" + str.tostring(t.closePrice, format.mintick) + "\n" +
                          "Lot:    " + str.tostring(t.lot) + "\n" +
                          "Profit: " + str.tostring(t.profit, "#.##") +
+                         (t.bal > 0 ? "  (" + (t.profit >= 0 ? "+" : "") + str.tostring(t.profit / t.bal * 100, "#.##") + "%)" : "") +
+                         (t.margin > 0 ? "\n증거금: " + str.tostring(t.margin, "#,###.##") +
+                             (t.bal > 0 ? "  (잔고의 " + str.tostring(t.margin / t.bal * 100, "#.#") + "%)" : "") : "") +
+                         (not na(t.runUp) ? "\n최대 평가이익: +" + str.tostring(t.runUp, "#,###.##") +
+                             (t.bal > 0 ? " (+" + str.tostring(t.runUp / t.bal * 100, "#.##") + "%)" : "") +
+                             "\n최대 평가손실: " + str.tostring(t.runDn, "#,###.##") +
+                             (t.bal > 0 ? " (" + str.tostring(t.runDn / t.bal * 100, "#.##") + "%)" : "") : "") +
+                         (t.bal > 0 ? "\n청산 직전 잔고: " + str.tostring(t.bal, "#,###.##") : "") +
                          (t.sl > 0 or t.tp > 0 ? "\nSL " + (t.sl > 0 ? str.tostring(t.sl, format.mintick) : "없음") + " · TP " + (t.tp > 0 ? str.tostring(t.tp, format.mintick) : "없음") : "") +
                          (t.why != "" ? "\n" + f_whyKr(t.why) : "")
                     snappedOpen  = f_snapToBar(t.openTime)
@@ -369,7 +418,9 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
                              style=isBuy ? label.style_triangleup : label.style_triangledown,
                              size=f_labelSize(), tooltip="OPEN\n" + tipBase)
                     labelY = t.closePrice + t.closePrice * (offsetPct / 100) * (i % 2 == 0 ? 1 : -1)
-                    profitText = (compactMode and not mobileMode) ? "" : str.tostring(t.profit, "#.##")
+                    pctText = showPctLabel and t.bal > 0 ? (t.profit >= 0 ? "+" : "") + str.tostring(t.profit / t.bal * 100, "#.##") + "%" : ""
+                    profitText0 = (compactMode and not mobileMode) ? "" : str.tostring(t.profit, "#.##")
+                    profitText = profitText0 != "" and pctText != "" ? profitText0 + " (" + pctText + ")" : profitText0 + pctText
                     exitTimeText = showTimeLabel ? closeTimeStr : ""
                     exitText = profitText != "" and exitTimeText != "" ? exitTimeText + "\n" + profitText : profitText + exitTimeText
                     label.new(x=snappedClose, y=labelY, xloc=xloc.bar_time,
@@ -381,7 +432,7 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
         winRate = cnt > 0 ? float(winCount) / cnt * 100 : 0.0
         pf = grossLoss != 0 ? math.abs(grossWin / grossLoss) : na
         unit = useGroups or DATA_MERGED ? "묶음" : "건"
-        st = table.new(position.top_right, 2, 8, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
+        st = table.new(position.top_right, 2, 11, bgcolor=color.new(color.black, 70), border_width=1, border_color=color.gray)
         table.cell(st, 0, 0, "보기", text_color=color.white)
         table.cell(st, 1, 0, viewMode + (useGroups ? " · 거래 " + str.tostring(array.size(raw)) + "건" : ""), text_color=color.white)
         table.cell(st, 0, 1, autoPage ? "표시 / 화면 / 전체" : "표시 / 전체", text_color=color.white)
@@ -397,8 +448,15 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
         table.cell(st, 1, 5, na(pf) ? "N/A" : str.tostring(pf, "#.##"), text_color=color.white)
         table.cell(st, 0, 6, "안내", text_color=color.white)
         table.cell(st, 1, 6, drawn < inView ? "그림 한도(500) - 확대하면 다 보임" : "전부 표시", text_color=drawn < inView ? color.orange : color.white)
-        table.cell(st, 0, 7, "Data", text_color=color.white)
-        table.cell(st, 1, 7, DATA_GENERATED, text_color=color.white)
+        table.cell(st, 0, 7, "수익률 (복리)", text_color=color.white)
+        table.cell(st, 1, 7, pctN > 0 ? (grow >= 1 ? "+" : "") + str.tostring((grow - 1) * 100, "#.##") + "%" + (pctN < winCount + lossCount ? " (잔고 기록 " + str.tostring(pctN) + "건)" : "") : "잔고 기록 없음",
+             text_color=grow >= 1 ? winColor : lossColor)
+        table.cell(st, 0, 8, "최대 증거금율", text_color=color.white)
+        table.cell(st, 1, 8, maxMarginPct > 0 ? str.tostring(maxMarginPct, "#.#") + "% (거래 1건 기준)" : "-", text_color=maxMarginPct >= 20 ? color.orange : color.white)
+        table.cell(st, 0, 9, "거래 중 최대 평가손실", text_color=color.white)
+        table.cell(st, 1, 9, worstRunDn < 0 ? str.tostring(worstRunDn, "#.##") + "% (잔고 대비)" : "-", text_color=worstRunDn <= -20 ? color.orange : color.white)
+        table.cell(st, 0, 10, "Data", text_color=color.white)
+        table.cell(st, 1, 10, DATA_GENERATED, text_color=color.white)
 
     if showAggTable and array.size(periodKeys) > 0
         sortedIdx = array.sort_indices(periodKeys, order.ascending)
@@ -414,7 +472,9 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
             pnl = array.get(periodProfit, idx)
             table.cell(ag, 0, rowIdx, array.get(periodKeys, idx), text_color=color.white)
             table.cell(ag, 1, rowIdx, str.tostring(array.get(periodCount, idx)), text_color=color.white)
-            table.cell(ag, 2, rowIdx, str.tostring(pnl, "#.##"), text_color=pnl >= 0 ? winColor : lossColor)
+            gr  = array.get(periodGrow, idx)
+            table.cell(ag, 2, rowIdx, str.tostring(pnl, "#.##") + (gr != 1.0 ? "  " + (gr >= 1 ? "+" : "") + str.tostring((gr - 1) * 100, "#.##") + "%" : ""),
+                 text_color=pnl >= 0 ? winColor : lossColor)
             rowIdx += 1
     true
 

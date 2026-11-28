@@ -2264,16 +2264,18 @@ function pineMerge(list) {
       if ((t.sl || 0) !== (g.sl || 0)) g.sl = null;
       if ((t.tp || 0) !== (g.tp || 0)) g.tp = null;
       if (t.close_reason) g._why[t.close_reason] = (g._why[t.close_reason] || 0) + 1;
+      if (!(g.balance_before > 0) && t.balance_before > 0) g.balance_before = t.balance_before;
     } else {
       const v = Number(t.volume) || 0;
       const ng = { symbol: t.symbol, position: t.position, volume: v, profit: Number(t.profit) || 0,
                    _po: t.price_open * v, _pc: t.price_close * v, _o: t._o, _c: t._c, _last: t._c, n: 1,
-                   sl: t.sl || null, tp: t.tp || null, _why: t.close_reason ? { [t.close_reason]: 1 } : {} };
+                   sl: t.sl || null, tp: t.tp || null, _why: t.close_reason ? { [t.close_reason]: 1 } : {},
+                   balance_before: t.balance_before > 0 ? t.balance_before : null };   // 묶음 첫 청산 직전 잔고
       open.set(k, ng); out.push(ng);
     }
   }
   return out.map((g) => ({ symbol: g.symbol, position: g.position, volume: g.volume, profit: g.profit, n: g.n,
-    sl: g.sl, tp: g.tp, close_reason: Object.entries(g._why).sort((a, b) => b[1] - a[1])[0]?.[0] || null,
+    sl: g.sl, tp: g.tp, balance_before: g.balance_before, close_reason: Object.entries(g._why).sort((a, b) => b[1] - a[1])[0]?.[0] || null,
     price_open: g.volume ? g._po / g.volume : 0, price_close: g.volume ? g._pc / g.volume : 0,
     open_time: new Date(g._o).toISOString(), close_time: new Date(g._c).toISOString() }));
 }
@@ -2453,6 +2455,26 @@ async function pineCodeParts(merged = false) {
   for (const t of closed) digOf[t.symbol] = Math.max(digOf[t.symbol] || 0, decOf(t.price_open), decOf(t.price_close));
   if (merged) { closed = pineMerge(closed); closed.sort((a, b) => dt(a.close_time) - dt(b.close_time)); }
   const sec = (v) => Math.floor(dt(v).getTime() / 1000);
+  // 종목별 증거금 계수 = MT5 가 계산한 1랏 증거금 ÷ 가격 (파인에서 증거금 = 계수 × 랏 × 진입가)
+  //   MT5 가 꺼져 있거나 조회 전용 계좌면 빈칸 → 파인이 증거금을 표시 안 함 (손익 % 는 그대로)
+  const mfOf = {};
+  await Promise.all([...new Set(closed.map((t) => t.symbol))].map(async (sy) => {
+    const last = closed.filter((t) => t.symbol === sy).pop(), px = Number(last.price_open);
+    if (!(px > 0) || viewOnly()) return;
+    try {
+      const r = await Promise.race([
+        api(`/accounts/${encodeURIComponent(acc.account_number)}/simulate?symbol=${encodeURIComponent(sy)}&side=buy&volume=1&price_open=${px}&price_close=${px}`),
+        new Promise((_, no) => setTimeout(() => no(new Error('timeout')), 6000))]);
+      if (r && r.margin > 0) mfOf[sy] = Number((r.margin / px).toPrecision(6));
+    } catch (e) { /* 증거금 없이 */ }
+  }));
+  // 들고 있던 동안 최대 평가이익 · 최대 평가손실 (서버 1분 평가금 기록 - 기록 시작 뒤 거래만). 못 받으면 빈칸
+  const extOf = new Map();
+  try {
+    const r = await api(`/accounts/${encodeURIComponent(acc.account_number)}/equity-extremes`,
+      { method: 'POST', body: JSON.stringify({ windows: closed.map((t) => [sec(t.open_time), sec(t.close_time)]) }) });
+    (r.rows || []).forEach((x, i) => { if (x) extOf.set(closed[i], x); });
+  } catch (e) { /* 최대 이익 · 손실 없이 */ }
   // 트레이딩뷰 컴파일 토큰 한도(약 10만) - 코드 몫을 빼고 코드 하나에 데이터는 이 글자 수까지
   const BUDGET = 50000;
   // 압축 형식 (trade_history.pine 의 f_parseCompact 와 짝): 진입시각차,보유초,진입가차(틱),청산-진입(틱),b|s,랏×100,손익×100,종목번호[,묶인 건수]
@@ -2460,22 +2482,28 @@ async function pineCodeParts(merged = false) {
     const syms = [...new Set(list.map((t) => t.symbol))];
     const dig = syms.map((sy) => Math.max(digOf[sy] ?? 2, merged ? 2 : 0));   // 묶음 평균가는 소수 2자리 이상
     const base = Math.min(...list.map((t) => sec(t.open_time)));
-    let prevO = base; const last = syms.map(() => 0);
+    let prevO = base, prevBal = 0; const last = syms.map(() => 0);
     const rows = list.map((t) => {
       const si = syms.indexOf(t.symbol), m = 10 ** dig[si], o = sec(t.open_time);
       const tk = Math.round(Number(t.price_open) * m), tc = Math.round(Number(t.price_close) * m);
       const r = [o - prevO, sec(t.close_time) - o, tk - last[si], tc - tk,
         String(t.position || '').toLowerCase().startsWith('b') ? 'b' : 's',
         Math.round(Number(t.volume) * 100), Math.round(Number(t.profit) * 100), si];
-      // 덧붙임 (없으면 빈칸, 끝의 빈칸은 뺌): SL-진입(틱), TP-진입(틱), 청산 이유 한 글자, 묶인 건수
+      // 덧붙임 (없으면 빈칸, 끝의 빈칸은 뺌): SL-진입(틱), TP-진입(틱), 청산 이유 한 글자, 묶인 건수, 청산 직전 잔고(달러, 앞 줄과 차이),
+      //   최대 평가이익×100, 최대 평가손실×100 (들고 있던 동안, 1분 평가금 기록)
+      const bal = t.balance_before > 0 ? Math.round(Number(t.balance_before)) : null;
       const ext = [t.sl ? Math.round(Number(t.sl) * m) - tk : '', t.tp ? Math.round(Number(t.tp) * m) - tk : '',
-        { sl: 's', tp: 't', manual: 'm', auto: 'a', stopout: 'o', lock: 'l', loss_limit: 'x' }[t.close_reason] || '', merged ? (t.n || 1) : ''];
+        { sl: 's', tp: 't', manual: 'm', auto: 'a', stopout: 'o', lock: 'l', loss_limit: 'x' }[t.close_reason] || '', merged ? (t.n || 1) : '',
+        bal != null ? bal - prevBal : ''];
+      const ex = extOf.get(t);
+      if (ex) ext.push(Math.round(ex[0] * 100), Math.round(ex[1] * 100));
+      if (bal != null) prevBal = bal;
       while (ext.length && ext[ext.length - 1] === '') ext.pop();
       const r2 = r.concat(ext).join(',');
       prevO = o; last[si] = tk; return r2;
     });
     return { rows, base, len: rows.reduce((n, r) => n + r.length + 1, 0),
-      syms: syms.map((sy, i) => `${String(sy).replace(/[|:,]/g, '')}:${dig[i]}`).join('|') };
+      syms: syms.map((sy, i) => `${String(sy).replace(/[|:,]/g, '')}:${dig[i]}${mfOf[sy] ? ':' + mfOf[sy] : ''}`).join('|') };
   };
   // 나누기: 최근 것부터 한도의 90% 까지 크게 담고, 남은 오래된 거래가 마지막(가장 작은) 덩어리
   //   1분 안에 같이 청산된 거래(같은 묶음이 될 것) 사이에서는 자르지 않음. 복사 1 = 가장 최근

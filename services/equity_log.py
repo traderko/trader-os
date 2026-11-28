@@ -223,6 +223,21 @@ def drawdown(aid: int, start: datetime, end: datetime) -> dict | None:
     return out
 
 
+def trade_extremes(aid: int, windows: list[tuple[int, int]]) -> list[tuple[float, float] | None]:
+    """거래마다 들고 있던 동안의 최대 평가이익 · 최대 평가손실 (계좌 전체 평가손익 = 평가금 - 잔고, 1분 기록의 최고 · 최저)
+    windows: [(진입 초, 청산 초)] → [(최대 이익 ≥ 0, 최대 손실 ≤ 0) | None(기록 없음)]
+    같은 시간에 다른 포지션도 있었으면 그것까지 합친 값 (TV 코드 툴팁 - 웹 거래내역 → 📋 TV)"""
+    out: list[tuple[float, float] | None] = []
+    with _lock:
+        c = _db()
+        for o, cl in windows:
+            r = c.execute("""SELECT MAX(COALESCE(equity_max, equity) - balance), MIN(COALESCE(equity_min, equity) - balance), COUNT(*)
+                             FROM equity WHERE account_id=? AND ts>=? AND ts<=? AND margin > 0""",
+                          (aid, int(o) // 60 * 60, int(cl) // 60 * 60)).fetchone()
+            out.append((max(r[0], 0.0), min(r[1], 0.0)) if r and r[2] else None)
+    return out
+
+
 def balance_before(aid: int, ts: int, within_sec: int = 600) -> float | None:
     """ts(초) 직전에 끝난 분의 잔고 - 거래 손익 % 의 기준 (MT5 가 안 붙어 있을 때). within_sec 안에 기록이 없으면 None"""
     with _lock:
