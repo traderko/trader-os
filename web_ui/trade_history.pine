@@ -67,10 +67,10 @@ aggTz        = input.string("Asia/Seoul", "집계 기준 시간대", group="Summ
 
 // 스크린샷용: 마우스를 올리지 않아도 보이게 - 청산 라벨에 번호(#1, #2 …), 구석 표에 그 번호의 자세한 내용
 infoOn     = input.bool(false, "거래 정보 표 (스크린샷용)", group="거래 정보 표",
-     tooltip="화면에 보이는 최근 거래 몇 개를 구석 표로. 청산 라벨에 #번호가 붙어 표와 맞춰 볼 수 있음. 캔들을 가리지 않게 위치를 고르세요")
+     tooltip="화면에 보이는 최근 거래 몇 개를 구석 표로. 화면 안 모든 청산 라벨에 #번호(왼쪽부터 #1)가 붙어 표와 맞춰 볼 수 있음. 캔들을 가리지 않게 위치를 고르세요")
 infoCount  = input.int(5, "표시할 거래 수 (화면 안 최근)", minval=1, maxval=20, group="거래 정보 표")
 infoSel    = input.string("", "고른 번호만 (예: 3 · 2,5 · 2-4)", group="거래 정보 표",
-     tooltip="비워 두면 최근 N개. 번호를 넣으면 화면 안 모든 거래에 #번호가 붙고, 고른 번호만 표에 나옴 (여러 개: 쉼표 · 범위)")
+     tooltip="비워 두면 표에 최근 N개. 라벨 · 툴팁의 #번호를 넣으면 그 거래만 표에 나옴 (여러 개: 쉼표 · 범위). 차트를 옮기면 번호가 다시 매겨짐")
 infoOnly   = input.bool(false, "고른 거래만 그리기", group="거래 정보 표", tooltip="고른 번호가 있을 때 나머지 거래는 차트에서 숨김 (번호는 그대로)")
 infoPos    = input.string("Bottom Left", "표 위치", options=["Top Left", "Top Center", "Top Right", "Bottom Left", "Bottom Center", "Bottom Right", "Middle Left", "Middle Right"], group="거래 정보 표")
 infoSize   = input.string("small", "글자 크기", options=["tiny", "small", "normal", "large"], group="거래 정보 표")
@@ -411,12 +411,10 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
     infoNums = array.new<int>()                // 그 거래 번호
     sel = f_selSet(infoSel)                    // 고른 번호 (비면 최근 N개)
     selMode = infoOn and array.size(sel) > 0
-    infoN = 0                                  // 번호를 매길 거래 수 = 화면 안 거래 수 (고른 번호가 없으면 최대 N개)
+    infoN = 0                                  // 번호를 매길 거래 수 = 화면 안 거래 수 (고른 번호가 있든 없든 같은 번호 - 왼쪽부터 #1)
     vk = 0                                     // 화면 안 거래 순번 (최근부터 1)
     if infoOn and n > 0
         for i = n - 1 to 0
-            if not selMode and infoN >= infoCount
-                break
             t = array.get(list, i)
             if not autoPage or (t.closeTime >= visL and t.openTime <= visR)
                 infoN += 1
@@ -463,7 +461,7 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
             if visible
                 vk += 1
                 num := infoOn and vk <= infoN ? infoN - vk + 1 : 0
-            isSel = selMode ? array.includes(sel, num) : num > 0
+            isSel = selMode ? array.includes(sel, num) : num > 0 and vk <= infoCount   // 번호가 없으면 화면 안 최근 N개
             if visible and not full and not (selMode and infoOnly and not isSel)
                 if usedLabels + needLab > MAX_LABELS or usedLines + needLine > MAX_LINES
                     full := true
@@ -478,7 +476,7 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
                     closeTimeStr = str.format_time(t.closeTime, timeFormat, labelTz)
                     dirSign = isBuy ? 1.0 : -1.0
                     ptK     = t.pv * t.lot                 // 1pt 움직일 때 이 거래(묶음) 손익
-                    tipBase = t.sym + " " + (isBuy ? "BUY" : "SELL") + (t.cnt > 1 ? "  (" + str.tostring(t.cnt) + "건 묶음, 평균가)" : "") + "\n" +
+                    tipBase = (num > 0 ? "#" + str.tostring(num) + "  " : "") + t.sym + " " + (isBuy ? "BUY" : "SELL") + (t.cnt > 1 ? "  (" + str.tostring(t.cnt) + "건 묶음, 평균가)" : "") + "\n" +
                          "Open:   " + openTimeStr  + "  @" + str.tostring(t.openPrice, format.mintick) + "\n" +
                          "Close:  " + closeTimeStr + "  @" + str.tostring(t.closePrice, format.mintick) + "\n" +
                          "Lot:    " + str.tostring(t.lot) + "\n" +
@@ -530,7 +528,7 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
                     profitText = profitText0 != "" and pctText != "" ? profitText0 + " (" + pctText + ")" : profitText0 + pctText
                     exitTimeText = showTimeLabel ? closeTimeStr : ""
                     exitText0 = profitText != "" and exitTimeText != "" ? exitTimeText + "\n" + profitText : profitText + exitTimeText
-                    numText = num > 0 ? "#" + str.tostring(num) : ""
+                    numText = num > 0 ? "#" + str.tostring(num) : ""   // 화면 안 모든 거래에 번호 (고를 때 보고 넣도록)
                     if isSel
                         array.push(infoList, t)
                         array.push(infoNums, num)
