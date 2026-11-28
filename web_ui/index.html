@@ -2252,7 +2252,7 @@ const pineFmt = (v) => Number(v).toFixed(2);
 // 같이 청산한 분할 진입 합치기: 같은 심볼·방향이고 청산 시각이 직전 것과 60초 안이면 한 줄
 //   진입 = 가장 이른 진입 시각 · 랏 가중 평균 진입가 / 청산 = 가장 늦은 청산 시각 · 가중 평균 청산가 / 랏·손익 합계
 function pineMerge(list) {
-  const rows = list.map((t) => ({ ...t, _o: dt(t.open_time).getTime(), _c: dt(t.close_time).getTime() }))
+  const rows = list.map((t) => ({ ...t, _src: t, _o: dt(t.open_time).getTime(), _c: dt(t.close_time).getTime() }))
                    .sort((a, b) => a._c - b._c);
   const open = new Map(), out = [];
   for (const t of rows) {
@@ -2265,17 +2265,19 @@ function pineMerge(list) {
       if ((t.tp || 0) !== (g.tp || 0)) g.tp = null;
       if (t.close_reason) g._why[t.close_reason] = (g._why[t.close_reason] || 0) + 1;
       if (!(g.balance_before > 0) && t.balance_before > 0) g.balance_before = t.balance_before;
+      g._mem.push(t._src);
     } else {
       const v = Number(t.volume) || 0;
       const ng = { symbol: t.symbol, position: t.position, volume: v, profit: Number(t.profit) || 0,
                    _po: t.price_open * v, _pc: t.price_close * v, _o: t._o, _c: t._c, _last: t._c, n: 1,
                    sl: t.sl || null, tp: t.tp || null, _why: t.close_reason ? { [t.close_reason]: 1 } : {},
-                   balance_before: t.balance_before > 0 ? t.balance_before : null };   // 묶음 첫 청산 직전 잔고
+                   balance_before: t.balance_before > 0 ? t.balance_before : null,    // 묶음 첫 청산 직전 잔고
+                   _mem: [t._src] };                                                // 묶인 개별 거래 (청산 순)
       open.set(k, ng); out.push(ng);
     }
   }
   return out.map((g) => ({ symbol: g.symbol, position: g.position, volume: g.volume, profit: g.profit, n: g.n,
-    sl: g.sl, tp: g.tp, balance_before: g.balance_before, close_reason: Object.entries(g._why).sort((a, b) => b[1] - a[1])[0]?.[0] || null,
+    sl: g.sl, tp: g.tp, balance_before: g.balance_before, members: g._mem, close_reason: Object.entries(g._why).sort((a, b) => b[1] - a[1])[0]?.[0] || null,
     price_open: g.volume ? g._po / g.volume : 0, price_close: g.volume ? g._pc / g.volume : 0,
     open_time: new Date(g._o).toISOString(), close_time: new Date(g._c).toISOString() }));
 }
@@ -2468,13 +2470,31 @@ async function pineCodeParts(merged = false) {
       if (r && r.margin > 0) mfOf[sy] = Number((r.margin / px).toPrecision(6));
     } catch (e) { /* 증거금 없이 */ }
   }));
-  // 들고 있던 동안 최대 평가이익 · 최대 평가손실 (서버 1분 평가금 기록 - 기록 시작 뒤 거래만). 못 받으면 빈칸
-  const extOf = new Map();
-  try {
-    const r = await api(`/accounts/${encodeURIComponent(acc.account_number)}/equity-extremes`,
-      { method: 'POST', body: JSON.stringify({ windows: closed.map((t) => [sec(t.open_time), sec(t.close_time)]) }) });
-    (r.rows || []).forEach((x, i) => { if (x) extOf.set(closed[i], x); });
-  } catch (e) { /* 최대 이익 · 손실 없이 */ }
+  // 들고 있던 동안 최대 평가이익 · 최대 평가손실 - 서버가 MT5 1분봉으로 그 거래(묶음)만 잼 (api/analysis_router.py excursions)
+  //   개별 거래: 그 거래만 / 묶음: 묶인 거래들 합 (봉마다 그때 들고 있던 것만). 처음엔 봉을 받느라 오래 걸릴 수 있음
+  //   (전체) 코드는 파인이 묶어 보여 주므로 묶음 값도 같이 보냄 (60초 규칙 · 묶음의 첫 거래 줄에)
+  const extOf = new Map(), grpOf = new Map();
+  {
+    const leg = (t) => [t.symbol, String(t.position || '').toLowerCase().startsWith('b') ? 'b' : 's', Number(t.price_open),
+                        sec(t.open_time), sec(t.close_time), Number(t.volume)];
+    const req = [], dest = [];
+    for (const t of closed) { req.push(merged ? (t.members || [t]).map(leg) : [leg(t)]); dest.push([extOf, t]); }
+    if (!merged) for (const g of pineMerge(closed)) if (g.n > 1) { req.push(g.members.map(leg)); dest.push([grpOf, g.members[0]]); }
+    try {
+      const t0 = Date.now();
+      let r;
+      while (true) {
+        r = await api(`/analysis/${encodeURIComponent(acc.account_number)}/excursions`, { method: 'POST', body: JSON.stringify({ rows: req }) });
+        if (!r.pending) break;
+        $('pineMeta').textContent = `최대 이익 · 손실 계산 중 - ${r.progress || ''} (처음엔 1분봉을 받느라 몇 분 걸릴 수 있어요)`;
+        if (Date.now() - t0 > 600000) throw new Error('timeout');
+        await new Promise((ok) => setTimeout(ok, 3000));
+      }
+      (r.rows || []).forEach((x, i) => { if (x && dest[i]) dest[i][0].set(dest[i][1], x); });
+      pine.exNotes = r.notes || [];
+      pine.exSlow = Date.now() - t0 > 3000;              // 오래 걸리면 클립보드 복사가 막혀서 버튼으로
+    } catch (e) { pine.exNotes = ['최대 이익 · 손실을 계산하지 못해 빼고 만들었어요']; pine.exSlow = false; }
+  }
   // 트레이딩뷰 컴파일 토큰 한도(약 10만) - 코드 몫을 빼고 코드 하나에 데이터는 이 글자 수까지
   const BUDGET = 50000;
   // 압축 형식 (trade_history.pine 의 f_parseCompact 와 짝): 진입시각차,보유초,진입가차(틱),청산-진입(틱),b|s,랏×100,손익×100,종목번호[,묶인 건수]
@@ -2490,13 +2510,14 @@ async function pineCodeParts(merged = false) {
         String(t.position || '').toLowerCase().startsWith('b') ? 'b' : 's',
         Math.round(Number(t.volume) * 100), Math.round(Number(t.profit) * 100), si];
       // 덧붙임 (없으면 빈칸, 끝의 빈칸은 뺌): SL-진입(틱), TP-진입(틱), 청산 이유 한 글자, 묶인 건수, 청산 직전 잔고(달러, 앞 줄과 차이),
-      //   최대 평가이익×100, 최대 평가손실×100 (들고 있던 동안, 1분 평가금 기록)
+      //   최대 평가이익×100, 최대 평가손실×100 (들고 있던 동안, MT5 1분봉), 묶음 최대 평가이익×100, 묶음 최대 평가손실×100 (묶음 첫 거래 줄)
       const bal = t.balance_before > 0 ? Math.round(Number(t.balance_before)) : null;
       const ext = [t.sl ? Math.round(Number(t.sl) * m) - tk : '', t.tp ? Math.round(Number(t.tp) * m) - tk : '',
         { sl: 's', tp: 't', manual: 'm', auto: 'a', stopout: 'o', lock: 'l', loss_limit: 'x' }[t.close_reason] || '', merged ? (t.n || 1) : '',
         bal != null ? bal - prevBal : ''];
-      const ex = extOf.get(t);
-      if (ex) ext.push(Math.round(ex[0] * 100), Math.round(ex[1] * 100));
+      const ex = extOf.get(t), gx = grpOf.get(t);
+      ext.push(ex ? Math.round(ex[0] * 100) : '', ex ? Math.round(ex[1] * 100) : '',
+               gx ? Math.round(gx[0] * 100) : '', gx ? Math.round(gx[1] * 100) : '');
       if (bal != null) prevBal = bal;
       while (ext.length && ext[ext.length - 1] === '') ext.pop();
       const r2 = r.concat(ext).join(',');
@@ -2595,12 +2616,13 @@ async function pineCodeCopy(merged) {
     const parts = await pineCodeParts(merged);
     if (!parts.length) return toast('이 기간에 청산된 거래가 없습니다', true);
     const kind = merged ? '묶음' : '전체';
-    if (parts.length === 1) {
+    $('pineMeta').textContent = (pine.exNotes || []).join(' · ');
+    if (parts.length === 1 && !pine.exSlow) {
       await copyText(parts[0].code);
       return toast(`TV 코드(${kind})를 복사했습니다 · ${parts[0].symLabel} ${parts[0].cntTxt}`);
     }
     // 한도를 넘음 → 기간 순으로 나눈 코드마다 복사 버튼
-    $('pineParts').innerHTML = `<div class="muted">트레이딩뷰 코드 한도 때문에 <b>${parts.length}개</b>로 나눴습니다 (복사 1 = 가장 최근, 마지막이 가장 오래되고 적음). 하나씩 복사해서 각각 다른 스크립트로 저장하거나, 같은 스크립트에 바꿔 붙여넣어 기간별로 보세요.</div>`
+    $('pineParts').innerHTML = parts.length === 1 ? `<div class="muted">최대 이익 · 손실 계산이 끝났습니다. 눌러서 복사하세요.</div>` : `<div class="muted">트레이딩뷰 코드 한도 때문에 <b>${parts.length}개</b>로 나눴습니다 (복사 1 = 가장 최근, 마지막이 가장 오래되고 적음). 하나씩 복사해서 각각 다른 스크립트로 저장하거나, 같은 스크립트에 바꿔 붙여넣어 기간별로 보세요.</div>`
       + parts.map((p, i) => `<button class="btn small" data-part="${i}">복사 ${p.part} <small class="muted">${esc(p.span)} · ${esc(p.cntTxt)}</small></button>`).join('');
     $('pineParts').hidden = false;
     $('pineParts').querySelectorAll('[data-part]').forEach((b) => b.onclick = async () => {
@@ -2609,7 +2631,7 @@ async function pineCodeCopy(merged) {
       catch { toast('복사하지 못했습니다', true); }
     });
     $('pineParts').scrollIntoView({ block: 'nearest' });
-    toast(`${parts.length}개로 나눴습니다 - 아래 [복사 1]부터 하나씩`);
+    toast(parts.length === 1 ? '계산 끝 - 아래 [복사 1]을 누르세요' : `${parts.length}개로 나눴습니다 - 아래 [복사 1]부터 하나씩`);
   } catch (e) { toast(e.message === 'copy' ? '복사하지 못했습니다' : e.message, true); }
 }
 $('pineCode').onclick = () => pineCodeCopy(false);

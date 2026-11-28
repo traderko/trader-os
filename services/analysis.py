@@ -540,3 +540,97 @@ async def analyze(account_id: int, trades: list, tf: str = "5m", progress=None) 
     return {"tf": tf, "timings": timings, "mt5_ok": mt5_ok and all(v is not None for v in info_of.values()), "summary": summary, "trades": out_trades, "episodes": eps,
             "usage_table": usage_table(eps), "notes": notes,
             "has_usage": any(e["max_usage"] is not None for e in eps)}
+
+
+# ── TV 코드용: 거래(묶음)마다 들고 있던 동안 최대 평가이익 · 최대 평가손실 (MT5 1분봉 · 이 거래만) ──
+async def leg_excursions(account_id: int, rows: list[list[list]], progress=None) -> dict:
+    """rows: [[다리, …], …] 다리 = [종목, 'b'|'s', 진입가, 진입 초, 청산 초, 랏]. 한 줄 = 개별 거래(다리 1개) 또는 묶음(여러 개)
+    봉마다 그때 들고 있던 다리들의 평가손익 합을 고가 · 저가로 재서 가장 좋았던 값(≥0) · 나빴던 값(≤0)
+    → {"rows": [[최대 이익, 최대 손실] | None], "notes": [...]}  (봉 · 1랏 1포인트 손익을 못 구한 줄은 None)"""
+    import bisect
+    progress = progress or (lambda _m: None)
+    legs_all = [lg for r in rows for lg in r]
+    notes: list[str] = []
+    days_of: dict[str, set[str]] = {}
+    for sym, _sd, _po, o, c, _v in legs_all:
+        d = datetime.fromtimestamp(int(o), timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        while d.timestamp() <= int(c):
+            days_of.setdefault(sym, set()).add(_day_key(d))
+            d += timedelta(days=1)
+    prec: dict[tuple[str, str], str] = {}
+    mt5_ok = True
+    for sym, days in days_of.items():
+        try:
+            got = await _ensure_days(account_id, sym, sorted(days), progress)
+            for d, tfu in got.items():
+                prec[(sym, d)] = tfu
+            if len(days) > MAX_DAYS:
+                notes.append(f"{sym}: 날짜가 많아 {MAX_DAYS}일만 먼저 받았어요. 한 번 더 만들면 이어서 받아요.")
+        except Exception as e:
+            mt5_ok = False
+            notes.append(f"{sym}: MT5 에서 봉을 받지 못해 저장된 봉으로만 계산했어요 ({getattr(e, 'detail', e) or type(e).__name__})")
+    with _lock:
+        for sym in days_of:                                   # 받지 않은(이미 있던) 날의 봉 종류
+            for d, tfu in _db().execute("SELECT day, tf FROM days WHERE symbol=?", (sym,)).fetchall():
+                prec.setdefault((sym, d), tfu)
+    pv: dict[str, float] = {}
+    for sym in days_of:
+        ref = next((float(lg[2]) for lg in reversed(legs_all) if lg[0] == sym), None)
+        inf = await _sym_info(account_id, sym, ref) if (ref and mt5_ok) else None
+        if inf is None:
+            with _lock:
+                row = _db().execute("SELECT pv FROM syminfo WHERE account_id=? AND symbol=?", (account_id, sym)).fetchone()
+            inf = {"pv": row[0]} if row else None
+        if inf and inf.get("pv"):
+            pv[sym] = float(inf["pv"])
+        else:
+            notes.append(f"{sym}: 1랏 1포인트 손익을 MT5 에서 받지 못해 최대 이익 · 손실을 빼고 만들었어요.")
+    progress("거래마다 최대 이익 · 손실 재는 중")
+
+    def measure() -> list:
+        arr: dict[str, tuple[list, list, list, list]] = {}
+        for sym in days_of:
+            ls = [lg for lg in legs_all if lg[0] == sym]
+            b = _bars(sym, min(int(lg[3]) for lg in ls) // 60 * 60 - 300, max(int(lg[4]) for lg in ls))
+            arr[sym] = ([x[0] for x in b], [x[1] for x in b], [x[2] for x in b],
+                        [300 if prec.get((sym, _day_key(datetime.fromtimestamp(x[0], timezone.utc)))) == "M5" else 60 for x in b])
+        out = []
+        for legs in rows:
+            syms = {lg[0] for lg in legs}
+            if len(syms) != 1 or not legs:
+                out.append(None)
+                continue
+            sym = legs[0][0]
+            if sym not in pv or sym not in arr:
+                out.append(None)
+                continue
+            T, H, L, S = arr[sym]
+            w0, w1 = min(int(lg[3]) for lg in legs), max(int(lg[4]) for lg in legs)
+            i, j = bisect.bisect_right(T, w0 - 300), bisect.bisect_right(T, w1)
+            best = worst = None
+            for k in range(i, j):
+                t0, t1 = T[k], T[k] + S[k]
+                if t1 <= w0:
+                    continue
+                b = w = 0.0
+                held = False
+                for _s, sd, po, o, c, v in legs:
+                    if int(o) < t1 and int(c) >= t0:          # 이 봉 동안 들고 있었음
+                        held = True
+                        po, v = float(po), float(v) * pv[sym]
+                        if sd == "b":
+                            b += (H[k] - po) * v
+                            w += (L[k] - po) * v
+                        else:
+                            b += (po - L[k]) * v
+                            w += (po - H[k]) * v
+                if held:
+                    best = b if best is None else max(best, b)
+                    worst = w if worst is None else min(worst, w)
+            out.append([round(max(best, 0.0), 2), round(min(worst, 0.0), 2)] if best is not None else None)
+        return out
+
+    res = await asyncio.to_thread(measure)
+    if any(r is None for r in res) and not notes:
+        notes.append("일부 거래는 그 시간 1분봉이 없어 최대 이익 · 손실을 빼고 만들었어요.")
+    return {"rows": res, "notes": notes, "mt5_ok": mt5_ok}

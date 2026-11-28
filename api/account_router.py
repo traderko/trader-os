@@ -230,20 +230,6 @@ async def get_equity_drawdown(account_number: int, from_ts: int, to_ts: int, db:
     return equity_log.drawdown(account.id, datetime.fromtimestamp(from_ts, timezone.utc), datetime.fromtimestamp(to_ts, timezone.utc))
 
 
-@router.post("/{account_number}/equity-extremes")
-async def post_equity_extremes(account_number: int, body: dict, db: AsyncSession = Depends(get_db)):
-    """거래마다 들고 있던 동안 최대 평가이익 · 최대 평가손실 (1분 평가금 기록). body {"windows": [[진입 초, 청산 초], …]}
-    → {"rows": [[최대 이익, 최대 손실] | null, …]} (TV 코드용)"""
-    import asyncio
-    from services import equity_log
-    account = await get_account_or_default(db, account_number)
-    if account is None:
-        raise HTTPException(404, f"account not found: {account_number}")
-    wins = [(int(w[0]), int(w[1])) for w in (body.get("windows") or [])[:20000] if isinstance(w, (list, tuple)) and len(w) == 2]
-    rows = await asyncio.to_thread(equity_log.trade_extremes, account.id, wins)
-    return {"rows": [[round(r[0], 2), round(r[1], 2)] if r else None for r in rows]}
-
-
 @router.get("/{account_number}/withdraw-rule")
 async def get_withdraw_rule(account_number: int, db: AsyncSession = Depends(get_db)):
     """일일 출금 규칙: 오늘(거래일, 한국 시간 06:00 시작) 순수익의 pct% 까지 뺄 수 있고, 오늘 이미 뺀 출금은 차감.

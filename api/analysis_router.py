@@ -67,3 +67,52 @@ async def get_analysis(account_number: int, from_ts: int, to_ts: int, tf: str = 
         return await asyncio.wait_for(asyncio.shield(job["task"]), WAIT_SEC)
     except asyncio.TimeoutError:
         return {"pending": True, "progress": job.get("progress")}
+
+
+# TV 코드용 최대 평가이익 · 최대 평가손실 (웹 거래내역 → 📋 TV). 봉을 받느라 오래 걸릴 수 있어 위와 같이 뒤에서 계산
+#   POST /analysis/{account_number}/excursions  body {"rows": [[[종목, 'b'|'s', 진입가, 진입 초, 청산 초, 랏], …], …]}
+#   → {"pending": true, "progress"} 이면 같은 body 로 다시 물어봄 / 끝나면 {"rows": [[이익, 손실] | null], "notes"}
+_ex_jobs: dict[tuple, dict] = {}
+
+
+@router.post("/{account_number}/excursions")
+async def post_excursions(account_number: int, body: dict, db: AsyncSession = Depends(get_db)):
+    import hashlib
+    import json
+    from services import analysis
+    account = await get_account_or_default(db, account_number)
+    if account is None:
+        raise HTTPException(404, f"account not found: {account_number}")
+    rows = []
+    for r in (body.get("rows") or [])[:20000]:
+        legs = []
+        for lg in (r or [])[:200]:
+            try:
+                legs.append([str(lg[0]), "b" if str(lg[1]).lower().startswith("b") else "s", float(lg[2]),
+                             int(lg[3]), int(lg[4]), float(lg[5])])
+            except (TypeError, ValueError, IndexError):
+                pass
+        rows.append(legs)
+    now = time.time()
+    for k in [k for k, j in _ex_jobs.items() if j.get("done_at") and now - j["done_at"] > KEEP_SEC]:
+        _ex_jobs.pop(k, None)
+    aid = account.id
+    key = (aid, hashlib.sha1(json.dumps(rows).encode()).hexdigest())
+    job = _ex_jobs.get(key)
+    if job is not None and job["task"].done() and (job["task"].exception() is not None
+                                                   or not (job["task"].result() or {}).get("mt5_ok", True)):
+        job = None
+    if job is None:
+        job = {"progress": "시작", "done_at": None}
+
+        async def run():
+            try:
+                return await analysis.leg_excursions(aid, rows, lambda m: job.__setitem__("progress", m))
+            finally:
+                job["done_at"] = time.time()
+        job["task"] = asyncio.create_task(run())
+        _ex_jobs[key] = job
+    try:
+        return await asyncio.wait_for(asyncio.shield(job["task"]), WAIT_SEC)
+    except asyncio.TimeoutError:
+        return {"pending": True, "progress": job.get("progress")}

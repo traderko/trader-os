@@ -13,7 +13,8 @@ f_data() =>
 // 데이터는 f_data() 함수(들) 안에 - 전역에 두면 '본문이 너무 길다'(CE10295)로 거부됨
 // 컴파일 토큰 한도(약 10만)가 있어서 압축 형식: 청산 시각 순, 한 줄 = 거래 하나
 //   진입시각차(초, 앞 줄 진입 기준),보유(초),진입가차(틱, 같은 종목 앞 줄 기준),청산-진입(틱),b|s,랏×100,손익×100,종목번호
-//   [,SL-진입(틱),TP-진입(틱),청산 이유,묶인 건수,청산 직전 잔고 차이(달러, 앞 줄 기준),최대 평가이익×100,최대 평가손실×100]
+//   [,SL-진입(틱),TP-진입(틱),청산 이유,묶인 건수,청산 직전 잔고 차이(달러, 앞 줄 기준),
+//    최대 평가이익×100,최대 평가손실×100 (이 거래만, MT5 1분봉),묶음 최대 평가이익×100,묶음 최대 평가손실×100 (묶음 첫 거래 줄에만)]
 //   DATA_MERGED = true 면 웹에서 이미 묶은 데이터 (평균 진입·청산가, 합계 랏·손익) - 묶음만 표시
 //   DATA_SYMS = "종목:소수자리[:증거금계수]|…" (종목번호 순) - 증거금 = 계수 × 랏 × 진입가 (MT5 가 계산한 1랏 증거금 ÷ 가격)
 // 웹 TraderOS → 거래내역 → TV → [TV 코드 복사] 로 이 파일 전체를 새로 만들어 붙여넣으면 됨
@@ -161,8 +162,11 @@ type TradeRecord
     string why = ""          // 청산 이유 한 글자: s=SL t=TP m=직접 a=자동 o=증거금 강제 l=잠금 x=손실 한도
     float  bal = 0.0         // 청산 직전 잔고 (모르면 0) - 손익 % · 증거금율 기준
     float  margin = 0.0      // 이 거래(묶음) 증거금 (모르면 0)
-    float  runUp = na        // 들고 있던 동안 최대 평가이익 (계좌 전체 평가손익 · 1분 기록, 모르면 na)
+    float  runUp = na        // 들고 있던 동안 최대 평가이익 (이 거래 · 묶음만, MT5 1분봉. 모르면 na)
     float  runDn = na        // 들고 있던 동안 최대 평가손실 (≤ 0)
+    float  gUp = na          // 웹이 잰 묶음 값 (묶음 첫 거래 줄에만) - 파인이 묶을 때 이 값을 씀
+    float  gDn = na
+    bool   hasG = false
 
 f_parseRows(string src, int baseMs, string defaultSym, bool isOffset, array<TradeRecord> out) =>
     for row in str.split(src, "\n")
@@ -225,7 +229,9 @@ f_parseCompact(string src, array<string> syms, array<float> scales, array<float>
                      f_ext(f, 8, ticks, sc), f_ext(f, 9, ticks, sc), array.size(f) >= 11 ? array.get(f, 10) : "",
                      bal, array.get(mfs, si) * lot * ticks / sc,
                      array.size(f) >= 15 ? str.tonumber(array.get(f, 13)) / 100 : na,
-                     array.size(f) >= 15 ? str.tonumber(array.get(f, 14)) / 100 : na))
+                     array.size(f) >= 15 ? str.tonumber(array.get(f, 14)) / 100 : na,
+                     array.size(f) >= 17 ? str.tonumber(array.get(f, 15)) / 100 : na,
+                     array.size(f) >= 17 ? str.tonumber(array.get(f, 16)) / 100 : na))
     true
 
 f_load(array<TradeRecord> raw, array<TradeRecord> groups) =>
@@ -281,12 +287,13 @@ f_load(array<TradeRecord> raw, array<TradeRecord> groups) =>
                 g.margin     := g.margin + r.margin       // 묶음 증거금 = 합계 · 잔고는 첫 청산 직전 것
                 if g.bal <= 0
                     g.bal := r.bal
-                if not na(r.runUp)                    // 묶음: 개별 거래 중 가장 큰 값 (계좌 전체 평가손익이라 겹친 시간은 같은 값)
-                    g.runUp := na(g.runUp) ? r.runUp : math.max(g.runUp, r.runUp)
-                    g.runDn := na(g.runDn) ? r.runDn : math.min(g.runDn, r.runDn)
+                if not g.hasG and not na(r.runUp)     // 웹이 잰 묶음 값이 없으면 (묶기 간격을 바꾼 경우 등) 개별 값 합으로 어림
+                    g.runUp := na(g.runUp) ? r.runUp : g.runUp + r.runUp
+                    g.runDn := na(g.runDn) ? r.runDn : g.runDn + r.runDn
                 array.push(g.members, i)
             else
-                ng = TradeRecord.new(r.openTime, r.openPrice, r.closeTime, r.closePrice, r.dir, r.lot, r.profit, r.sym, 1, r.closeTime, array.from(i), r.sl, r.tp, r.why, r.bal, r.margin, r.runUp, r.runDn)
+                ng = TradeRecord.new(r.openTime, r.openPrice, r.closeTime, r.closePrice, r.dir, r.lot, r.profit, r.sym, 1, r.closeTime, array.from(i), r.sl, r.tp, r.why, r.bal, r.margin,
+                     na(r.gUp) ? r.runUp : r.gUp, na(r.gUp) ? r.runDn : r.gDn, na, na, not na(r.gUp))
                 array.push(groups, ng)
                 map.put(lastOf, k, array.size(groups) - 1)
     true
