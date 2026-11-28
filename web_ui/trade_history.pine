@@ -65,6 +65,22 @@ maxAggRows   = input.int(10, "최대 표시 행수 (최근 N개)", minval=3, max
 aggTablePos  = input.string("Bottom Right", "집계표 위치", options=["Bottom Right", "Bottom Left", "Bottom Center"], group="Summary Table")
 aggTz        = input.string("Asia/Seoul", "집계 기준 시간대", group="Summary Table")
 
+// 스크린샷용: 마우스를 올리지 않아도 보이게 - 청산 라벨에 번호(#1, #2 …), 구석 표에 그 번호의 자세한 내용
+infoOn     = input.bool(false, "거래 정보 표 (스크린샷용)", group="거래 정보 표",
+     tooltip="화면에 보이는 최근 거래 몇 개를 구석 표로. 청산 라벨에 #번호가 붙어 표와 맞춰 볼 수 있음. 캔들을 가리지 않게 위치를 고르세요")
+infoCount  = input.int(5, "표시할 거래 수 (화면 안 최근)", minval=1, maxval=20, group="거래 정보 표")
+infoSel    = input.string("", "고른 번호만 (예: 3 · 2,5 · 2-4)", group="거래 정보 표",
+     tooltip="비워 두면 최근 N개. 번호를 넣으면 화면 안 모든 거래에 #번호가 붙고, 고른 번호만 표에 나옴 (여러 개: 쉼표 · 범위)")
+infoOnly   = input.bool(false, "고른 거래만 그리기", group="거래 정보 표", tooltip="고른 번호가 있을 때 나머지 거래는 차트에서 숨김 (번호는 그대로)")
+infoPos    = input.string("Bottom Left", "표 위치", options=["Top Left", "Top Center", "Top Right", "Bottom Left", "Bottom Center", "Bottom Right", "Middle Left", "Middle Right"], group="거래 정보 표")
+infoSize   = input.string("small", "글자 크기", options=["tiny", "small", "normal", "large"], group="거래 정보 표")
+infoRun    = input.bool(true, "최대 평가이익 · 손실 칸", group="거래 정보 표")
+infoMargin = input.bool(true, "증거금율 칸", group="거래 정보 표")
+infoSLTP   = input.bool(false, "SL · TP 칸", group="거래 정보 표")
+infoBg     = input.int(70, "표 배경 투명도", minval=0, maxval=100, group="거래 정보 표")
+grpInfo    = input.bool(true, "개별 거래 보기에서도 묶음 정보 표시", group="거래 정보 표",
+     tooltip="보기 방식이 '개별 거래'일 때, 분할 진입 묶음에 속한 거래면 툴팁에 묶음 전체 손익 · 최대 이익 · 손실을 덧붙이고 거래 정보 표에 묶음 칸을 추가")
+
 // ============================================================
 // 전역
 // ============================================================
@@ -97,6 +113,38 @@ f_aggTablePos() =>
         "Bottom Left"   => position.bottom_left
         "Bottom Center" => position.bottom_center
         => position.bottom_right
+
+f_infoPos() =>
+    switch infoPos
+        "Top Left"      => position.top_left
+        "Top Center"    => position.top_center
+        "Top Right"     => position.top_right
+        "Bottom Left"   => position.bottom_left
+        "Bottom Center" => position.bottom_center
+        "Bottom Right"  => position.bottom_right
+        "Middle Left"   => position.middle_left
+        "Middle Right"  => position.middle_right
+        => position.bottom_left
+
+// "2,5,7-9" → [2, 5, 7, 8, 9]
+f_selSet(string src) =>
+    out = array.new<int>()
+    for tok in str.split(str.replace_all(src, " ", ""), ",")
+        if str.length(tok) > 0
+            ab = str.split(tok, "-")
+            a  = str.tonumber(array.get(ab, 0))
+            b  = array.size(ab) > 1 ? str.tonumber(array.get(ab, 1)) : a
+            if not na(a) and not na(b) and b >= a and b - a < 500
+                for k = int(a) to int(b)
+                    array.push(out, k)
+    out
+
+f_infoSize() =>
+    switch infoSize
+        "tiny"   => size.tiny
+        "normal" => size.normal
+        "large"  => size.large
+        => size.small
 
 f_snapToBar(ms) =>
     int(math.floor(ms / TF_MS) * TF_MS)
@@ -169,6 +217,7 @@ type TradeRecord
     float  gDn = na
     bool   hasG = false
     float  pv = 0.0          // 1랏 1포인트 손익 (pt 환산, 모르면 0)
+    int    gi = -1           // 개별 거래가 속한 묶음 번호 (개별 거래 보기에서도 묶음 정보를 보여 줄 때)
 
 f_parseRows(string src, int baseMs, string defaultSym, bool isOffset, array<TradeRecord> out) =>
     for row in str.split(src, "\n")
@@ -202,6 +251,20 @@ f_ext(array<string> f, int i, float ticks, float sc) =>
 // 가격 차이(pt) 글자: +12.5pt
 f_pt(float x) =>
     (x >= 0 ? "+" : "") + str.tostring(x, "#.##") + "pt"
+
+// 묶음 요약 (개별 거래 툴팁에 덧붙임)
+f_grpTip(TradeRecord g) =>
+    sg = g.dir == "buy" ? 1.0 : -1.0
+    pk = g.pv * g.lot
+    "\n── 묶음 " + str.tostring(g.cnt) + "건 · " + str.tostring(g.lot) + "랏 (평균가) ──" +
+         "\n진입 " + str.tostring(g.openPrice, format.mintick) + " → 청산 " + str.tostring(g.closePrice, format.mintick) +
+         "\n손익: " + str.tostring(g.profit, "#.##") +
+         (g.bal > 0 ? "  (" + (g.profit >= 0 ? "+" : "") + str.tostring(g.profit / g.bal * 100, "#.##") + "%)" : "") +
+         "  " + f_pt((g.closePrice - g.openPrice) * sg) +
+         (not na(g.runUp) ? "\n최대 평가이익: +" + str.tostring(g.runUp, "#,###.##") + (pk > 0 ? "  " + f_pt(g.runUp / pk) : "") +
+             "\n최대 평가손실: " + str.tostring(g.runDn, "#,###.##") + (g.bal > 0 ? " (" + str.tostring(g.runDn / g.bal * 100, "#.##") + "%)" : "") +
+             (pk > 0 ? "  " + f_pt(g.runDn / pk) : "") : "") +
+         (g.margin > 0 and g.bal > 0 ? "\n증거금율: " + str.tostring(g.margin / g.bal * 100, "#.#") + "%" : "")
 
 f_whyKr(string w) =>
     w == "s" ? "SL에 걸림" : w == "t" ? "TP에 걸림" : w == "m" ? "직접 청산" : w == "a" ? "자동 청산" :
@@ -267,7 +330,8 @@ f_load(array<TradeRecord> raw, array<TradeRecord> groups) =>
         else
             f_parseRows(cleanInput, 0, "", false, raw)
     // 묶기: 청산 시각 순으로 보면서 같은 종목·방향의 직전 묶음과 청산이 mergeSec 안이면 합침
-    if useGroups and array.size(raw) > 0
+    // 개별 거래 보기에서도 툴팁 · 거래 정보 표에 묶음 정보를 보여 주려고 늘 묶어 둠 (그리기는 useGroups 일 때만)
+    if not DATA_MERGED and array.size(raw) > 0
         lastOf = map.new<string, int>()
         for i = 0 to array.size(raw) - 1
             r  = array.get(raw, i)
@@ -300,10 +364,12 @@ f_load(array<TradeRecord> raw, array<TradeRecord> groups) =>
                     g.runUp := na(g.runUp) ? r.runUp : g.runUp + r.runUp
                     g.runDn := na(g.runDn) ? r.runDn : g.runDn + r.runDn
                 array.push(g.members, i)
+                r.gi := gi
             else
                 ng = TradeRecord.new(r.openTime, r.openPrice, r.closeTime, r.closePrice, r.dir, r.lot, r.profit, r.sym, 1, r.closeTime, array.from(i), r.sl, r.tp, r.why, r.bal, r.margin,
                      na(r.gUp) ? r.runUp : r.gUp, na(r.gUp) ? r.runDn : r.gDn, na, na, not na(r.gUp), r.pv)
                 array.push(groups, ng)
+                r.gi := array.size(groups) - 1
                 map.put(lastOf, k, array.size(groups) - 1)
     true
 
@@ -341,6 +407,19 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
     pctN = 0
     maxMarginPct = 0.0
     worstRunDn = 0.0                           // 거래 중 가장 깊었던 평가손실 % (잔고 대비)
+    infoList = array.new<TradeRecord>()        // 거래 정보 표에 넣을 거래 (최근 → 예전)
+    infoNums = array.new<int>()                // 그 거래 번호
+    sel = f_selSet(infoSel)                    // 고른 번호 (비면 최근 N개)
+    selMode = infoOn and array.size(sel) > 0
+    infoN = 0                                  // 번호를 매길 거래 수 = 화면 안 거래 수 (고른 번호가 없으면 최대 N개)
+    vk = 0                                     // 화면 안 거래 순번 (최근부터 1)
+    if infoOn and n > 0
+        for i = n - 1 to 0
+            if not selMode and infoN >= infoCount
+                break
+            t = array.get(list, i)
+            if not autoPage or (t.closeTime >= visL and t.openTime <= visR)
+                infoN += 1
 
     if n > 0
         // 청산 시각 순으로 들어 있음 → 뒤(최근)부터 보면서 한도까지 그림
@@ -380,7 +459,12 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
             picks    = showPicks and useGroups ? array.size(t.members) : 0
             needLab  = 1 + (picks > 0 ? picks : (showEntry ? 1 : 0))
             needLine = (showLines ? 1 : 0) + (showSLTP ? (t.sl > 0 ? 1 : 0) + (t.tp > 0 ? 1 : 0) : 0)
-            if visible and not full
+            num = 0                                     // 이 거래 번호 (왼쪽 · 예전부터 #1, 없으면 0)
+            if visible
+                vk += 1
+                num := infoOn and vk <= infoN ? infoN - vk + 1 : 0
+            isSel = selMode ? array.includes(sel, num) : num > 0
+            if visible and not full and not (selMode and infoOnly and not isSel)
                 if usedLabels + needLab > MAX_LABELS or usedLines + needLine > MAX_LINES
                     full := true
                 else
@@ -412,7 +496,8 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
                          (t.bal > 0 ? "\n청산 직전 잔고: " + str.tostring(t.bal, "#,###.##") : "") +
                          (t.sl > 0 or t.tp > 0 ? "\nSL " + (t.sl > 0 ? str.tostring(t.sl, format.mintick) + " (" + f_pt((t.sl - t.openPrice) * dirSign) + ")" : "없음") +
                              " · TP " + (t.tp > 0 ? str.tostring(t.tp, format.mintick) + " (" + f_pt((t.tp - t.openPrice) * dirSign) + ")" : "없음") : "") +
-                         (t.why != "" ? "\n" + f_whyKr(t.why) : "")
+                         (t.why != "" ? "\n" + f_whyKr(t.why) : "") +
+                         (grpInfo and not useGroups and t.gi >= 0 and t.gi < array.size(groups) ? (array.get(groups, t.gi).cnt > 1 ? f_grpTip(array.get(groups, t.gi)) : "") : "")
                     snappedOpen  = f_snapToBar(t.openTime)
                     snappedClose = f_snapToBar(t.closeTime)
                     if showLines
@@ -444,7 +529,12 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
                     profitText0 = (compactMode and not mobileMode) ? "" : str.tostring(t.profit, "#.##")
                     profitText = profitText0 != "" and pctText != "" ? profitText0 + " (" + pctText + ")" : profitText0 + pctText
                     exitTimeText = showTimeLabel ? closeTimeStr : ""
-                    exitText = profitText != "" and exitTimeText != "" ? exitTimeText + "\n" + profitText : profitText + exitTimeText
+                    exitText0 = profitText != "" and exitTimeText != "" ? exitTimeText + "\n" + profitText : profitText + exitTimeText
+                    numText = num > 0 ? "#" + str.tostring(num) : ""
+                    if isSel
+                        array.push(infoList, t)
+                        array.push(infoNums, num)
+                    exitText = numText != "" ? (exitText0 != "" ? numText + " " + exitText0 : numText) : exitText0
                     label.new(x=snappedClose, y=labelY, xloc=xloc.bar_time,
                          text=exitText, color=resultCol, textcolor=color.white, style=label.style_square,
                          size=f_labelSize(), tooltip="CLOSE\n" + tipBase)
@@ -459,7 +549,7 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
         table.cell(st, 1, 0, viewMode + (useGroups ? " · 거래 " + str.tostring(array.size(raw)) + "건" : ""), text_color=color.white)
         table.cell(st, 0, 1, autoPage ? "표시 / 화면 / 전체" : "표시 / 전체", text_color=color.white)
         table.cell(st, 1, 1, (autoPage ? str.tostring(drawn) + " / " + str.tostring(inView) + " / " + str.tostring(n) : str.tostring(drawn) + " / " + str.tostring(n)) + " " + unit,
-             text_color=drawn < inView ? color.orange : color.white)
+             text_color=full ? color.orange : color.white)
         table.cell(st, 0, 2, "Win Rate (" + statsScope + ")", text_color=color.white)
         table.cell(st, 1, 2, str.tostring(winRate, "#.#") + "%", text_color=color.white)
         table.cell(st, 0, 3, "Total P/L", text_color=color.white)
@@ -469,7 +559,7 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
         table.cell(st, 0, 5, "Profit Factor", text_color=color.white)
         table.cell(st, 1, 5, na(pf) ? "N/A" : str.tostring(pf, "#.##"), text_color=color.white)
         table.cell(st, 0, 6, "안내", text_color=color.white)
-        table.cell(st, 1, 6, drawn < inView ? "그림 한도(500) - 확대하면 다 보임" : "전부 표시", text_color=drawn < inView ? color.orange : color.white)
+        table.cell(st, 1, 6, full ? "그림 한도(500) - 확대하면 다 보임" : selMode and infoOnly ? "고른 거래만 그림" : "전부 표시", text_color=full ? color.orange : color.white)
         table.cell(st, 0, 7, "수익률 (복리)", text_color=color.white)
         table.cell(st, 1, 7, pctN > 0 ? (grow >= 1 ? "+" : "") + str.tostring((grow - 1) * 100, "#.##") + "%" + (pctN < winCount + lossCount ? " (잔고 기록 " + str.tostring(pctN) + "건)" : "") : "잔고 기록 없음",
              text_color=grow >= 1 ? winColor : lossColor)
@@ -479,6 +569,72 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
         table.cell(st, 1, 9, worstRunDn < 0 ? str.tostring(worstRunDn, "#.##") + "% (잔고 대비)" : "-", text_color=worstRunDn <= -20 ? color.orange : color.white)
         table.cell(st, 0, 10, "Data", text_color=color.white)
         table.cell(st, 1, 10, DATA_GENERATED, text_color=color.white)
+
+    if infoOn and array.size(infoList) > 0
+        k    = array.size(infoList)
+        gcol = grpInfo and not useGroups and array.size(groups) > 0
+        cols = 6 + (infoRun ? 2 : 0) + (infoMargin ? 1 : 0) + (infoSLTP ? 2 : 0) + (gcol ? 3 : 0)
+        it   = table.new(f_infoPos(), cols, k + 1, bgcolor=color.new(color.black, infoBg), border_width=1, border_color=color.gray)
+        hb   = color.new(color.gray, 50)
+        sz   = f_infoSize()
+        hdr  = array.from("#", "청산", "방향 · 랏", "손익", "%", "pt")
+        if infoRun
+            array.push(hdr, "최대 이익")
+            array.push(hdr, "최대 손실")
+        if infoMargin
+            array.push(hdr, "증거금율")
+        if infoSLTP
+            array.push(hdr, "SL")
+            array.push(hdr, "TP")
+        if gcol
+            array.push(hdr, "묶음")
+            array.push(hdr, "묶음 손익")
+            array.push(hdr, "묶음 최대 손실")
+        for c = 0 to cols - 1
+            table.cell(it, c, 0, array.get(hdr, c), text_color=color.white, bgcolor=hb, text_size=sz)
+        for r = 0 to k - 1
+            t   = array.get(infoList, k - 1 - r)   // 위에서부터 예전 → 최근 (#1 부터)
+            row = r + 1
+            sg  = t.dir == "buy" ? 1.0 : -1.0
+            pk  = t.pv * t.lot
+            pc  = t.profit >= 0 ? winColor : lossColor
+            table.cell(it, 0, row, "#" + str.tostring(array.get(infoNums, k - 1 - r)), text_color=color.white, text_size=sz)
+            table.cell(it, 1, row, str.format_time(t.closeTime, timeFormat, labelTz), text_color=color.white, text_size=sz)
+            table.cell(it, 2, row, (t.dir == "buy" ? "BUY " : "SELL ") + str.tostring(t.lot) + (t.cnt > 1 ? " (" + str.tostring(t.cnt) + "건)" : ""),
+                 text_color=t.dir == "buy" ? winColor : lossColor, text_size=sz)
+            table.cell(it, 3, row, (t.profit >= 0 ? "+" : "") + str.tostring(t.profit, "#,###.##"), text_color=pc, text_size=sz)
+            table.cell(it, 4, row, t.bal > 0 ? (t.profit >= 0 ? "+" : "") + str.tostring(t.profit / t.bal * 100, "#.##") + "%" : "-", text_color=pc, text_size=sz)
+            table.cell(it, 5, row, f_pt((t.closePrice - t.openPrice) * sg), text_color=pc, text_size=sz)
+            c = 6
+            if infoRun
+                table.cell(it, c, row, na(t.runUp) ? "-" : (pk > 0 ? f_pt(t.runUp / pk) : "+" + str.tostring(t.runUp, "#,###.##")) +
+                     (t.bal > 0 ? " (+" + str.tostring(t.runUp / t.bal * 100, "#.#") + "%)" : ""), text_color=winColor, text_size=sz)
+                table.cell(it, c + 1, row, na(t.runDn) ? "-" : (pk > 0 ? f_pt(t.runDn / pk) : str.tostring(t.runDn, "#,###.##")) +
+                     (t.bal > 0 ? " (" + str.tostring(t.runDn / t.bal * 100, "#.#") + "%)" : ""), text_color=lossColor, text_size=sz)
+                c += 2
+            if infoMargin
+                mp = t.bal > 0 and t.margin > 0 ? t.margin / t.bal * 100 : na
+                table.cell(it, c, row, na(mp) ? "-" : str.tostring(mp, "#.#") + "%", text_color=not na(mp) and mp >= 20 ? color.orange : color.white, text_size=sz)
+                c += 1
+            if infoSLTP
+                table.cell(it, c, row, t.sl > 0 ? f_pt((t.sl - t.openPrice) * sg) : "없음", text_color=color.white, text_size=sz)
+                table.cell(it, c + 1, row, t.tp > 0 ? f_pt((t.tp - t.openPrice) * sg) : "없음", text_color=color.white, text_size=sz)
+                c += 2
+            if gcol
+                hasGrp = t.gi >= 0 and t.gi < array.size(groups) ? array.get(groups, t.gi).cnt > 1 : false
+                if hasGrp
+                    g  = array.get(groups, t.gi)
+                    gk = g.pv * g.lot
+                    table.cell(it, c, row, str.tostring(g.cnt) + "건 " + str.tostring(g.lot) + "랏", text_color=color.white, text_size=sz)
+                    table.cell(it, c + 1, row, (g.profit >= 0 ? "+" : "") + str.tostring(g.profit, "#,###.##") +
+                         (g.bal > 0 ? " (" + (g.profit >= 0 ? "+" : "") + str.tostring(g.profit / g.bal * 100, "#.##") + "%)" : ""),
+                         text_color=g.profit >= 0 ? winColor : lossColor, text_size=sz)
+                    table.cell(it, c + 2, row, na(g.runDn) ? "-" : (gk > 0 ? f_pt(g.runDn / gk) : str.tostring(g.runDn, "#,###.##")) +
+                         (g.bal > 0 ? " (" + str.tostring(g.runDn / g.bal * 100, "#.#") + "%)" : ""), text_color=lossColor, text_size=sz)
+                else
+                    table.cell(it, c, row, "-", text_color=color.white, text_size=sz)
+                    table.cell(it, c + 1, row, "-", text_color=color.white, text_size=sz)
+                    table.cell(it, c + 2, row, "-", text_color=color.white, text_size=sz)
 
     if showAggTable and array.size(periodKeys) > 0
         sortedIdx = array.sort_indices(periodKeys, order.ascending)
