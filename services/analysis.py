@@ -673,4 +673,5 @@ async def leg_excursions(account_id: int, rows: list[list[list]], progress=None)
     res = await asyncio.to_thread(measure)
     if any(r is None for r in res) and not notes:
         notes.append("일부 거래는 그 시간 1분봉이 없어 최대 이익 · 손실을 빼고 만들었어요.")
-    return {"rows": res, "notes": notes, "mt5_ok": mt5_ok, "mf": {k: float(f"{v:.6g}") for k, v in mf.items()}}
+    return {"rows": res, "notes": notes, "mt5_ok": mt5_ok, "mf": {k: float(f"{v:.6g}") for k, v in mf.items()},
+            "pv": {k: float(f"{v:.6g}") for k, v in pv.items()}}

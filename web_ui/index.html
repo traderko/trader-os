@@ -2473,7 +2473,7 @@ async function pineCodeParts(merged = false) {
   // 들고 있던 동안 최대 평가이익 · 최대 평가손실 - 서버가 MT5 1분봉으로 그 거래(묶음)만 잼 (api/analysis_router.py excursions)
   //   개별 거래: 그 거래만 / 묶음: 묶인 거래들 합 (봉마다 그때 들고 있던 것만). 처음엔 봉을 받느라 오래 걸릴 수 있음
   //   (전체) 코드는 파인이 묶어 보여 주므로 묶음 값도 같이 보냄 (60초 규칙 · 묶음의 첫 거래 줄에)
-  const extOf = new Map(), grpOf = new Map();
+  const extOf = new Map(), grpOf = new Map(), pvOf = {};
   {
     const leg = (t) => [t.symbol, String(t.position || '').toLowerCase().startsWith('b') ? 'b' : 's', Number(t.price_open),
                         sec(t.open_time), sec(t.close_time), Number(t.volume)];
@@ -2491,7 +2491,8 @@ async function pineCodeParts(merged = false) {
         await new Promise((ok) => setTimeout(ok, 3000));
       }
       (r.rows || []).forEach((x, i) => { if (x && dest[i]) dest[i][0].set(dest[i][1], x); });
-      for (const [sy, v] of Object.entries(r.mf || {})) if (!mfOf[sy] && v > 0) mfOf[sy] = v;   // MT5 가 꺼졌을 때 예전에 받아 둔 1랏 증거금
+      for (const [sy, v] of Object.entries(r.mf || {})) if (!mfOf[sy] && v > 0) mfOf[sy] = v;
+      for (const [sy, v] of Object.entries(r.pv || {})) if (v > 0) pvOf[sy] = v;              // 1랏 1포인트 손익 (pt 환산)   // MT5 가 꺼졌을 때 예전에 받아 둔 1랏 증거금
       pine.exNotes = r.notes || [];
       pine.exSlow = Date.now() - t0 > 3000;              // 오래 걸리면 클립보드 복사가 막혀서 버튼으로
     } catch (e) { pine.exNotes = ['최대 이익 · 손실을 계산하지 못해 빼고 만들었어요']; pine.exSlow = false; }
@@ -2527,7 +2528,8 @@ async function pineCodeParts(merged = false) {
       prevO = o; last[si] = tk; return r2;
     });
     return { rows, base, len: rows.reduce((n, r) => n + r.length + 1, 0),
-      syms: syms.map((sy, i) => `${String(sy).replace(/[|:,]/g, '')}:${dig[i]}${mfOf[sy] ? ':' + mfOf[sy] : ''}`).join('|') };
+      syms: syms.map((sy, i) => `${String(sy).replace(/[|:,]/g, '')}:${dig[i]}` + (mfOf[sy] || pvOf[sy] ? `:${mfOf[sy] || ''}` : '')
+        + (pvOf[sy] ? `:${pvOf[sy]}` : '')).join('|') };
   };
   // 나누기: 최근 것부터 한도의 90% 까지 크게 담고, 남은 오래된 거래가 마지막(가장 작은) 덩어리
   //   1분 안에 같이 청산된 거래(같은 묶음이 될 것) 사이에서는 자르지 않음. 복사 1 = 가장 최근

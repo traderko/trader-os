@@ -16,7 +16,8 @@ f_data() =>
 //   [,SL-진입(틱),TP-진입(틱),청산 이유,묶인 건수,청산 직전 잔고 차이(달러, 앞 줄 기준),
 //    최대 평가이익×100,최대 평가손실×100 (이 거래만, MT5 1분봉),묶음 최대 평가이익×100,묶음 최대 평가손실×100 (묶음 첫 거래 줄에만)]
 //   DATA_MERGED = true 면 웹에서 이미 묶은 데이터 (평균 진입·청산가, 합계 랏·손익) - 묶음만 표시
-//   DATA_SYMS = "종목:소수자리[:증거금계수]|…" (종목번호 순) - 증거금 = 계수 × 랏 × 진입가 (MT5 가 계산한 1랏 증거금 ÷ 가격)
+//   DATA_SYMS = "종목:소수자리[:증거금계수[:1랏 1포인트 손익]]|…" (종목번호 순) - 증거금 = 계수 × 랏 × 진입가 (MT5 가 계산한 1랏 증거금 ÷ 가격)
+//   1랏 1포인트 손익 = 가격이 1 움직일 때 1랏 손익 (최대 평가이익 · 손실을 pt 로 바꿀 때)
 // 웹 TraderOS → 거래내역 → TV → [TV 코드 복사] 로 이 파일 전체를 새로 만들어 붙여넣으면 됨
 // ============================================================
 
@@ -167,6 +168,7 @@ type TradeRecord
     float  gUp = na          // 웹이 잰 묶음 값 (묶음 첫 거래 줄에만) - 파인이 묶을 때 이 값을 씀
     float  gDn = na
     bool   hasG = false
+    float  pv = 0.0          // 1랏 1포인트 손익 (pt 환산, 모르면 0)
 
 f_parseRows(string src, int baseMs, string defaultSym, bool isOffset, array<TradeRecord> out) =>
     for row in str.split(src, "\n")
@@ -197,12 +199,16 @@ f_ext(array<string> f, int i, float ticks, float sc) =>
             v := (ticks + d) / sc
     v
 
+// 가격 차이(pt) 글자: +12.5pt
+f_pt(float x) =>
+    (x >= 0 ? "+" : "") + str.tostring(x, "#.##") + "pt"
+
 f_whyKr(string w) =>
     w == "s" ? "SL에 걸림" : w == "t" ? "TP에 걸림" : w == "m" ? "직접 청산" : w == "a" ? "자동 청산" :
      w == "o" ? "증거금 강제청산" : w == "l" ? "잠금 강제청산" : w == "x" ? "일일 손실 한도" : ""
 
 // 압축 데이터 한 덩어리 읽기 (st: [앞 줄 진입 ms], lastTicks: 종목별 앞 줄 진입가 틱)
-f_parseCompact(string src, array<string> syms, array<float> scales, array<float> mfs, array<int> st, array<float> lastTicks, array<float> balSt, array<TradeRecord> out) =>
+f_parseCompact(string src, array<string> syms, array<float> scales, array<float> mfs, array<float> pvs, array<int> st, array<float> lastTicks, array<float> balSt, array<TradeRecord> out) =>
     for row in str.split(src, "\n")
         f = str.split(row, ",")
         if array.size(f) >= 8
@@ -231,13 +237,14 @@ f_parseCompact(string src, array<string> syms, array<float> scales, array<float>
                      array.size(f) >= 15 ? str.tonumber(array.get(f, 13)) / 100 : na,
                      array.size(f) >= 15 ? str.tonumber(array.get(f, 14)) / 100 : na,
                      array.size(f) >= 17 ? str.tonumber(array.get(f, 15)) / 100 : na,
-                     array.size(f) >= 17 ? str.tonumber(array.get(f, 16)) / 100 : na))
+                     array.size(f) >= 17 ? str.tonumber(array.get(f, 16)) / 100 : na, false, array.get(pvs, si)))
     true
 
 f_load(array<TradeRecord> raw, array<TradeRecord> groups) =>
     syms   = array.new<string>()
     scales = array.new<float>()
     mfs    = array.new<float>()                 // 종목별 증거금 계수 (없으면 0 → 증거금 표시 안 함)
+    pvs    = array.new<float>()                 // 종목별 1랏 1포인트 손익 (없으면 0 → 최대 이익 · 손실 pt 표시 안 함)
     if str.length(DATA_SYMS) > 0
         for it in str.split(DATA_SYMS, "|")
             kv = str.split(it, ":")
@@ -245,11 +252,13 @@ f_load(array<TradeRecord> raw, array<TradeRecord> groups) =>
             array.push(scales, math.pow(10, array.size(kv) > 1 ? str.tonumber(array.get(kv, 1)) : 2))
             mf = array.size(kv) > 2 ? str.tonumber(array.get(kv, 2)) : na
             array.push(mfs, na(mf) ? 0.0 : mf)
+            pv = array.size(kv) > 3 ? str.tonumber(array.get(kv, 3)) : na
+            array.push(pvs, na(pv) ? 0.0 : pv)
     st = array.from(DATA_BASE_MS)
     lastTicks = array.new<float>(array.size(syms), 0.0)
     balSt = array.from(0.0)
     for chunk in f_data()
-        f_parseCompact(chunk, syms, scales, mfs, st, lastTicks, balSt, raw)
+        f_parseCompact(chunk, syms, scales, mfs, pvs, st, lastTicks, balSt, raw)
     if str.length(tradeDataInput) > 0
         cleanInput = str.replace_all(str.replace_all(tradeDataInput, "\r\n", "\n"), "\r", "\n")
         hdr = str.split(array.get(str.split(cleanInput, "\n"), 0), ",")
@@ -293,7 +302,7 @@ f_load(array<TradeRecord> raw, array<TradeRecord> groups) =>
                 array.push(g.members, i)
             else
                 ng = TradeRecord.new(r.openTime, r.openPrice, r.closeTime, r.closePrice, r.dir, r.lot, r.profit, r.sym, 1, r.closeTime, array.from(i), r.sl, r.tp, r.why, r.bal, r.margin,
-                     na(r.gUp) ? r.runUp : r.gUp, na(r.gUp) ? r.runDn : r.gDn, na, na, not na(r.gUp))
+                     na(r.gUp) ? r.runUp : r.gUp, na(r.gUp) ? r.runDn : r.gDn, na, na, not na(r.gUp), r.pv)
                 array.push(groups, ng)
                 map.put(lastOf, k, array.size(groups) - 1)
     true
@@ -383,20 +392,26 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
                     resultCol = isWin ? winColor : lossColor
                     openTimeStr  = str.format_time(t.openTime,  timeFormat, labelTz)
                     closeTimeStr = str.format_time(t.closeTime, timeFormat, labelTz)
+                    dirSign = isBuy ? 1.0 : -1.0
+                    ptK     = t.pv * t.lot                 // 1pt 움직일 때 이 거래(묶음) 손익
                     tipBase = t.sym + " " + (isBuy ? "BUY" : "SELL") + (t.cnt > 1 ? "  (" + str.tostring(t.cnt) + "건 묶음, 평균가)" : "") + "\n" +
                          "Open:   " + openTimeStr  + "  @" + str.tostring(t.openPrice, format.mintick) + "\n" +
                          "Close:  " + closeTimeStr + "  @" + str.tostring(t.closePrice, format.mintick) + "\n" +
                          "Lot:    " + str.tostring(t.lot) + "\n" +
                          "Profit: " + str.tostring(t.profit, "#.##") +
                          (t.bal > 0 ? "  (" + (t.profit >= 0 ? "+" : "") + str.tostring(t.profit / t.bal * 100, "#.##") + "%)" : "") +
+                         "  " + f_pt((t.closePrice - t.openPrice) * dirSign) +
                          (t.margin > 0 ? "\n증거금: " + str.tostring(t.margin, "#,###.##") +
                              (t.bal > 0 ? "  (잔고의 " + str.tostring(t.margin / t.bal * 100, "#.#") + "%)" : "") : "") +
                          (not na(t.runUp) ? "\n최대 평가이익: +" + str.tostring(t.runUp, "#,###.##") +
                              (t.bal > 0 ? " (+" + str.tostring(t.runUp / t.bal * 100, "#.##") + "%)" : "") +
+                             (ptK > 0 ? "  " + f_pt(t.runUp / ptK) : "") +
                              "\n최대 평가손실: " + str.tostring(t.runDn, "#,###.##") +
-                             (t.bal > 0 ? " (" + str.tostring(t.runDn / t.bal * 100, "#.##") + "%)" : "") : "") +
+                             (t.bal > 0 ? " (" + str.tostring(t.runDn / t.bal * 100, "#.##") + "%)" : "") +
+                             (ptK > 0 ? "  " + f_pt(t.runDn / ptK) : "") : "") +
                          (t.bal > 0 ? "\n청산 직전 잔고: " + str.tostring(t.bal, "#,###.##") : "") +
-                         (t.sl > 0 or t.tp > 0 ? "\nSL " + (t.sl > 0 ? str.tostring(t.sl, format.mintick) : "없음") + " · TP " + (t.tp > 0 ? str.tostring(t.tp, format.mintick) : "없음") : "") +
+                         (t.sl > 0 or t.tp > 0 ? "\nSL " + (t.sl > 0 ? str.tostring(t.sl, format.mintick) + " (" + f_pt((t.sl - t.openPrice) * dirSign) + ")" : "없음") +
+                             " · TP " + (t.tp > 0 ? str.tostring(t.tp, format.mintick) + " (" + f_pt((t.tp - t.openPrice) * dirSign) + ")" : "없음") : "") +
                          (t.why != "" ? "\n" + f_whyKr(t.why) : "")
                     snappedOpen  = f_snapToBar(t.openTime)
                     snappedClose = f_snapToBar(t.closeTime)
