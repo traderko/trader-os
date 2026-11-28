@@ -144,6 +144,43 @@ async def _sym_info(account_id: int, symbol: str, price: float) -> dict | None:
     return info
 
 
+SYMINFO_SEC = 6 * 3600
+
+
+async def syminfo_loop() -> None:
+    """MT5 가 켜진 계좌마다 최근 60일 거래한 종목의 1랏 증거금 · 1포인트 손익을 받아 저장 (6시간마다, 하루 지난 것만 다시)
+    → 나중에 MT5 를 꺼도 TV 코드 증거금 · 분석 증거금 사용률에 마지막 값을 씀 (leg_excursions 의 syminfo 대신 쓰기)"""
+    from sqlalchemy import func, select
+    from db.models.account import Account
+    from db.models.trade import Trade
+    from db.session import AsyncSessionLocal
+    await asyncio.sleep(90)
+    while True:
+        try:
+            since = datetime.now(timezone.utc) - timedelta(days=60)
+            async with AsyncSessionLocal() as db:
+                accs = [a.id for a in (await db.execute(select(Account))).scalars().all() if a.lock_enabled is not False]
+                todo = []
+                for aid in accs:
+                    rows = (await db.execute(
+                        select(Trade.symbol, func.max(Trade.close_time))
+                        .where(Trade.account_id == aid, Trade.close_time != None, Trade.close_time >= since)
+                        .group_by(Trade.symbol))).all()
+                    for sym, last in rows:
+                        px = (await db.execute(select(Trade.price_close).where(
+                            Trade.account_id == aid, Trade.symbol == sym, Trade.close_time == last).limit(1))).scalar()
+                        if sym and px:
+                            todo.append((aid, sym, float(px)))
+            for aid, sym, px in todo:
+                try:
+                    await _sym_info(aid, sym, px)
+                except Exception as e:
+                    print(f"[analysis] 1랏 증거금 저장 실패 account={aid} {sym}: {e}")
+        except Exception as e:
+            print(f"[analysis] 1랏 증거금 저장 실패: {e}")
+        await asyncio.sleep(SYMINFO_SEC)
+
+
 # ── KTR ──
 async def _ktr(account_id: int, symbol: str, tf: str, at: datetime) -> float | None:
     from services import grid
@@ -574,13 +611,16 @@ async def leg_excursions(account_id: int, rows: list[list[list]], progress=None)
             for d, tfu in _db().execute("SELECT day, tf FROM days WHERE symbol=?", (sym,)).fetchall():
                 prec.setdefault((sym, d), tfu)
     pv: dict[str, float] = {}
+    mf: dict[str, float] = {}                                  # 증거금 계수 = 1랏 증거금 ÷ 가격 (TV 코드 증거금 %)
     for sym in days_of:
         ref = next((float(lg[2]) for lg in reversed(legs_all) if lg[0] == sym), None)
         inf = await _sym_info(account_id, sym, ref) if (ref and mt5_ok) else None
-        if inf is None:
+        if inf is None:                                   # MT5 가 꺼져 있으면 예전에 받아 둔 값
             with _lock:
-                row = _db().execute("SELECT pv FROM syminfo WHERE account_id=? AND symbol=?", (account_id, sym)).fetchone()
-            inf = {"pv": row[0]} if row else None
+                row = _db().execute("SELECT pv, margin, ref FROM syminfo WHERE account_id=? AND symbol=?", (account_id, sym)).fetchone()
+            inf = {"pv": row[0], "margin": row[1], "ref": row[2]} if row else None
+        if inf and inf.get("margin") and inf.get("ref"):
+            mf[sym] = float(inf["margin"]) / float(inf["ref"])
         if inf and inf.get("pv"):
             pv[sym] = float(inf["pv"])
         else:
@@ -633,4 +673,4 @@ async def leg_excursions(account_id: int, rows: list[list[list]], progress=None)
     res = await asyncio.to_thread(measure)
     if any(r is None for r in res) and not notes:
         notes.append("일부 거래는 그 시간 1분봉이 없어 최대 이익 · 손실을 빼고 만들었어요.")
-    return {"rows": res, "notes": notes, "mt5_ok": mt5_ok}
+    return {"rows": res, "notes": notes, "mt5_ok": mt5_ok, "mf": {k: float(f"{v:.6g}") for k, v in mf.items()}}

@@ -2468,7 +2468,7 @@ async function pineCodeParts(merged = false) {
         api(`/accounts/${encodeURIComponent(acc.account_number)}/simulate?symbol=${encodeURIComponent(sy)}&side=buy&volume=1&price_open=${px}&price_close=${px}`),
         new Promise((_, no) => setTimeout(() => no(new Error('timeout')), 6000))]);
       if (r && r.margin > 0) mfOf[sy] = Number((r.margin / px).toPrecision(6));
-    } catch (e) { /* 증거금 없이 */ }
+    } catch (e) { /* 아래 최대 이익 · 손실 계산 때 서버가 받아 둔 값으로 다시 */ }
   }));
   // 들고 있던 동안 최대 평가이익 · 최대 평가손실 - 서버가 MT5 1분봉으로 그 거래(묶음)만 잼 (api/analysis_router.py excursions)
   //   개별 거래: 그 거래만 / 묶음: 묶인 거래들 합 (봉마다 그때 들고 있던 것만). 처음엔 봉을 받느라 오래 걸릴 수 있음
@@ -2491,9 +2491,12 @@ async function pineCodeParts(merged = false) {
         await new Promise((ok) => setTimeout(ok, 3000));
       }
       (r.rows || []).forEach((x, i) => { if (x && dest[i]) dest[i][0].set(dest[i][1], x); });
+      for (const [sy, v] of Object.entries(r.mf || {})) if (!mfOf[sy] && v > 0) mfOf[sy] = v;   // MT5 가 꺼졌을 때 예전에 받아 둔 1랏 증거금
       pine.exNotes = r.notes || [];
       pine.exSlow = Date.now() - t0 > 3000;              // 오래 걸리면 클립보드 복사가 막혀서 버튼으로
     } catch (e) { pine.exNotes = ['최대 이익 · 손실을 계산하지 못해 빼고 만들었어요']; pine.exSlow = false; }
+    const noMf = [...new Set(closed.map((t) => t.symbol))].filter((sy) => !mfOf[sy]);
+    if (noMf.length) pine.exNotes.push(`${noMf.join(', ')}: 1랏 증거금을 MT5 에서 받지 못해 증거금 · 증거금율은 빼고 만들었어요 (MT5 가 켜진 상태에서 다시 만들어 보세요)`);
   }
   // 트레이딩뷰 컴파일 토큰 한도(약 10만) - 코드 몫을 빼고 코드 하나에 데이터는 이 글자 수까지
   const BUDGET = 50000;
