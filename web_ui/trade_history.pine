@@ -252,6 +252,11 @@ f_ext(array<string> f, int i, float ticks, float sc) =>
 f_pt(float x) =>
     (x >= 0 ? "+" : "") + str.tostring(x, "#.##") + "pt"
 
+// 최대 평가이익 · 손실 칸: "+180 · +36pt (+8.8%)" (금액 · pt · 잔고 대비)
+f_runTxt(float v, float pk, float bal) =>
+    na(v) ? "-" : (v >= 0 ? "+" : "") + str.tostring(v, "#,###.##") + (pk > 0 ? " · " + f_pt(v / pk) : "") +
+         (bal > 0 ? " (" + (v >= 0 ? "+" : "") + str.tostring(v / bal * 100, "#.#") + "%)" : "")
+
 // 묶음 요약 (개별 거래 툴팁에 덧붙임)
 f_grpTip(TradeRecord g) =>
     sg = g.dir == "buy" ? 1.0 : -1.0
@@ -605,10 +610,8 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
             table.cell(it, 5, row, f_pt((t.closePrice - t.openPrice) * sg), text_color=pc, text_size=sz)
             c = 6
             if infoRun
-                table.cell(it, c, row, na(t.runUp) ? "-" : (pk > 0 ? f_pt(t.runUp / pk) : "+" + str.tostring(t.runUp, "#,###.##")) +
-                     (t.bal > 0 ? " (+" + str.tostring(t.runUp / t.bal * 100, "#.#") + "%)" : ""), text_color=winColor, text_size=sz)
-                table.cell(it, c + 1, row, na(t.runDn) ? "-" : (pk > 0 ? f_pt(t.runDn / pk) : str.tostring(t.runDn, "#,###.##")) +
-                     (t.bal > 0 ? " (" + str.tostring(t.runDn / t.bal * 100, "#.#") + "%)" : ""), text_color=lossColor, text_size=sz)
+                table.cell(it, c, row, f_runTxt(t.runUp, pk, t.bal), text_color=winColor, text_size=sz)
+                table.cell(it, c + 1, row, f_runTxt(t.runDn, pk, t.bal), text_color=lossColor, text_size=sz)
                 c += 2
             if infoMargin
                 mp = t.bal > 0 and t.margin > 0 ? t.margin / t.bal * 100 : na
@@ -627,8 +630,7 @@ f_draw(array<TradeRecord> raw, array<TradeRecord> groups) =>
                     table.cell(it, c + 1, row, (g.profit >= 0 ? "+" : "") + str.tostring(g.profit, "#,###.##") +
                          (g.bal > 0 ? " (" + (g.profit >= 0 ? "+" : "") + str.tostring(g.profit / g.bal * 100, "#.##") + "%)" : ""),
                          text_color=g.profit >= 0 ? winColor : lossColor, text_size=sz)
-                    table.cell(it, c + 2, row, na(g.runDn) ? "-" : (gk > 0 ? f_pt(g.runDn / gk) : str.tostring(g.runDn, "#,###.##")) +
-                         (g.bal > 0 ? " (" + str.tostring(g.runDn / g.bal * 100, "#.#") + "%)" : ""), text_color=lossColor, text_size=sz)
+                    table.cell(it, c + 2, row, f_runTxt(g.runDn, gk, g.bal), text_color=lossColor, text_size=sz)
                 else
                     table.cell(it, c, row, "-", text_color=color.white, text_size=sz)
                     table.cell(it, c + 1, row, "-", text_color=color.white, text_size=sz)
